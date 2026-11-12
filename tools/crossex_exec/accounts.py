@@ -32,6 +32,31 @@ def bitget_settings(data,mode):
         raise ValueError('bitget_account_mode_mismatch')
 
 
+def account_liabilities(cross,bitget):
+    """Both official asset debts, in native coin units, never netted by equity."""
+    result=[]
+    for route,data,field in (('crossex',cross,'liability'),('bitget',bitget,'debt')):
+        rows=data['assets']
+        if not isinstance(rows,list):
+            raise ValueError('account_liability_unknown')
+        seen=set()
+        for row in rows:
+            coin=row['coin']
+            exchange=row['exchange_type'] if route=='crossex' else 'BITGET'
+            key=(exchange,coin)
+            if (not isinstance(coin,str) or not coin or not isinstance(exchange,str) or not exchange
+                    or key in seen):
+                raise ValueError('account_liability_unknown')
+            seen.add(key)
+            amount=dec(row[field])
+            if amount<0:
+                raise ValueError('account_liability_unknown')
+            if amount:
+                result.append(dict(route=route,coin=coin,exchange_type=exchange,
+                                   liability=str(amount),source_field=field))
+    return result
+
+
 def remote_positions(gate_rows,bitget_rows):
     result={}
     for venue,rows in (('crossex',gate_rows),('bitget',bitget_rows)):
@@ -196,7 +221,7 @@ class Accounts:
                     notionals[key]=str(qty*price)
                     upnl_by_position[key]=str(dec(row['upnl' if venue=='crossex' else 'unrealisedPnl']))
         equities=dict(crossex=str(dec(a['margin_balance'])),bitget=str(dec(b['usdtEquity'])))
-        liabilities=[{k:r[k] for k in ('coin','exchange_type','liability')} for r in a['assets'] if dec(r['liability'])>0]
+        liabilities=account_liabilities(a,b)
         return dict(margins=[str(m) if m is not None else None for m in margins],positions=positions,upnl=str(upnl),
                     equity=str(sum(map(dec,equities.values()))),equity_by_venue=equities,
                     notionals=notionals,liabilities=liabilities,upnl_by_position=upnl_by_position,

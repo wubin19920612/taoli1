@@ -4,13 +4,15 @@ import time
 
 from tools.fill_sim.core import dec, day
 from .external import ExternalRegistry, plain
-from .external_accounting import anchor_value, read_snapshot, program_activity
+from .external_accounting import anchor_value, read_snapshot, program_activity, verified_history
 
 
 POSITION_LOCKS = frozenset(('position_mismatch','unhedged_position','repair_stopped',
     'unknown_order','unknown_close','fills_pending','accounting_pending','entry_accounting_unknown',
     'negative_local_position','flatten_retry_pending','flatten_snapshot_unavailable'))
-BASELINE_KEYS = ('account_equity_baseline','equity_baseline','daily_equity','daily_upnl','risk_pnl_baseline')
+BASELINE_KEYS = ('account_equity_baseline','equity_baseline','daily_equity','daily_upnl','risk_pnl_baseline',
+    'external_equity_anchor','program_daily_upnl','program_last_upnl','external_verified_history',
+    'last_upnl','account_loss_current','external_income')
 ADMIN_REFUSALS = frozenset(('local_orders_pending','position_or_order_lock','local_positions',
     'not_halted','halt_confirmation','confirmation_required','halted_requires_release',
     'account_read_unavailable','remote_positions','remote_orders_unavailable','remote_orders',
@@ -184,6 +186,16 @@ class EquityAdmin:
                 if not 0<=self.clock()-captured<=10:
                     raise ValueError('account_snapshot_stale')
                 with store.transaction():
+                    if revision!=store.meta('equity_baseline_revision',0):
+                        raise ValueError('equity_revision_changed')
+                    # Capture old values in the same write transaction as the
+                    # replacement and audit, including external attribution.
+                    audit['old']={k:store.meta(k) for k in BASELINE_KEYS}
+                    if external_projection is not None:
+                        try:
+                            new['external_verified_history']=verified_history(store,snapshot['activity'])
+                        except (ValueError,KeyError,TypeError,ArithmeticError):
+                            raise ValueError('external_income_unverifiable') from None
                     for key,value in new.items():
                         store.set_meta(key,value)
                     store.set_meta('account_equity_current',equities)

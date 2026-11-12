@@ -135,6 +135,37 @@ def history_index(activity):
             for name,key in HISTORY_KEYS.items()}
 
 
+def verified_history(store,activity):
+    """Monotonic ID/content evidence, independent of the accounting epoch.
+
+    Entries outside the requested window remain durable but need not be returned.
+    An ID seen again must ALWAYS have the same contents. Migration includes the
+    last verified pre-round-13 activity, not just the original anchor index.
+    """
+    previous=store.meta('external_verified_history')
+    if previous is None:
+        previous={name:{} for name in HISTORY_KEYS}
+        anchor=store.meta('external_equity_anchor') or {}
+        seeds=[anchor.get('history_index',{})]
+        legacy=store.meta('external_activity')
+        if legacy:
+            seeds.append(history_index(legacy))
+        for seed in seeds:
+            for name,rows in seed.items():
+                for key,row in rows.items():
+                    if key in previous[name] and previous[name][key]!=row:
+                        raise ValueError('history_revised_or_missing')
+                    previous[name][key]=row
+    current=history_index(activity)
+    for name in HISTORY_KEYS:
+        for key,row in previous[name].items():
+            if key in current[name] or row['at']>=activity['from_ms']:
+                if current[name].get(key)!=row:
+                    raise ValueError('history_revised_or_missing')
+        current[name]={**previous[name],**current[name]}
+    return current
+
+
 def cash_continuity(anchor,snapshot):
     """Empty/short pages alone cannot prove that no funding cash was missed."""
     activity=snapshot['activity']
@@ -214,6 +245,9 @@ class ExternalAccounting:
 
     def _evaluate(self,snapshot,projection):
         anchor=self.store.meta('external_equity_anchor')
+        original_anchor=anchor
+        equity_revision=self.store.meta('equity_baseline_revision',0)
+        prior_history=self.store.meta('external_verified_history')
         captured=snapshot['captured_at']
         cutoff=snapshot.get('accounting_at',captured)
         today=day(cutoff)
@@ -227,6 +261,7 @@ class ExternalAccounting:
             raise ValueError('history_coverage')
         records=self.registry.records()
         cash_continuity(anchor,snapshot)
+        history=verified_history(self.store,activity)
         external={r['identity']['symbol']:r['identity'] for r in records.values()}
         # Keep native units through every ledger/quantity check. Never net
         # distinct settlement currencies before converting their contribution.
@@ -323,6 +358,7 @@ class ExternalAccounting:
         if anchor['day']==today:
             funding-=dec(anchor.get('program_funding_offset',0))
         result=dict(verified=True,day=today,captured_at=captured,from_ms=epoch,revision=anchor['revision'],
+            snapshot_version=snapshot.get('snapshot_version'),equity_revision=equity_revision,
             external_cash=str(cash),external_contribution=str(contribution),program_funding=str(funding),
             equity_daily=str(dec(snapshot['equity'])-dec(anchor['equity'])-contribution),
             external_cash_by_currency={k:str(v) for k,v in cash_by_currency.items()},
@@ -343,7 +379,17 @@ class ExternalAccounting:
         # Durable evidence and baselines change together; failure cannot publish
         # a verified projection or let a previously cached result admit a send.
         with self.store.transaction():
+            if (type(snapshot.get('snapshot_version')) is not int
+                    or snapshot['snapshot_version']!=self.store.meta('account_snapshot_version')
+                    or self.store.meta('account_snapshot_error')
+                    or anchor['revision']!=self.store.meta('external_attribution_revision',0)
+                    or equity_revision!=self.store.meta('equity_baseline_revision',0)
+                    or original_anchor!=self.store.meta('external_equity_anchor')
+                    or prior_history!=self.store.meta('external_verified_history')
+                    or not 0<=self.clock()-captured<=10):
+                raise ValueError('external_snapshot_superseded')
             self.store.set_meta('external_equity_anchor',anchor)
             self.store.set_meta('external_income',result)
             self.store.set_meta('external_activity',plain(activity))
+            self.store.set_meta('external_verified_history',history)
         return result

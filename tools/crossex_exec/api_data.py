@@ -440,6 +440,9 @@ class JournalView:
         rows, active, closed, sim_pairs = [], [], [], []
         with readonly(self.path, budget) as conn:
             conn.execute('BEGIN')
+            if endpoint=='remote-positions':
+                from .remote_view import remote_view
+                return remote_view(conn,budget,now)
             # Stream one selected pair and its orders at a time. Keep only the
             # public projection, never a second full historical journal in RAM.
             for (raw,) in conn.execute('SELECT value FROM pairs WHERE '+where+suffix, params):

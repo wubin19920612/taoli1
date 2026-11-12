@@ -1,8 +1,10 @@
 """Non-overridable ceilings and a single admission check for every opening send."""
 from itertools import chain
+import time
 from tools.fill_sim.core import dec
 from .stops import StopLocks
 from .settings import risk_settings
+from .position_values import notional_values, key_currency, usd_value
 
 
 MAX_LEG_USD = dec('150')
@@ -13,8 +15,9 @@ DEFAULT_ENV = '/home/ubuntu/wubin/crossex-exec/crossex-exec.env'
 
 
 class HardLimits:
-    def __init__(self,store,snapshot,config=None,alert=None):
+    def __init__(self,store,snapshot,config=None,alert=None,clock=time.time):
         self.store,self.snapshot=store,snapshot
+        self.clock=clock
         self.alert=alert
         self.stops=None if alert else StopLocks(store)
         self.lock=store.lock
@@ -82,6 +85,9 @@ class HardLimits:
         if intent is not None and self.store.order(intent['cid']) is None:
             orders=chain(orders,[dict(intent,state='INTENT',filled='0')])
         positions,pending={},dec(0)
+        now=self.clock()
+        def converted(key,amount):
+            return usd_value(amount,key_currency(key),snapshot.get('external_fx',{}),now,upper=True)
         for o in orders:
             if o['state'] in ('SHADOW','UNSENT'):
                 continue
@@ -93,13 +99,13 @@ class HardLimits:
             if not o['reduce_only']:
                 price=max(price,dec(o['price']),dec(o.get('vwap') or 0))
                 if o['state'] in ('INTENT','SENT','ACK','UNKNOWN'):
-                    pending+=max(dec(0),dec(o['quantity'])-filled)*dec(o['price'])
+                    pending+=converted(key,max(dec(0),dec(o['quantity'])-filled)*dec(o['price']))
             positions[key]=(qty,price)
-        notionals={k:dec(v) for k,v in snapshot['notionals'].items()}
+        notionals={k:dec(v) for k,v in notional_values(snapshot,now).items()}
         if any(v<0 for v in notionals.values()):
             raise ValueError('negative_notional')
         for key,(qty,price) in positions.items():
-            notionals[key]=max(notionals.get(key,dec(0)),max(qty,dec(0))*price)
+            notionals[key]=max(notionals.get(key,dec(0)),converted(key,max(qty,dec(0))*price))
         return sum(notionals.values(),dec(0))+pending
 
     def check_order(self,intent):
@@ -109,7 +115,10 @@ class HardLimits:
         with self.lock:
             snapshot=self.snapshot()  # Engine supplies a <=10s cache; never private I/O here.
             breached=self.check_equity(snapshot)
-            notional=dec(intent['quantity'])*dec(intent['price'])
+            venue='bitget' if intent['instrument']['market']['exchange']=='bitget' else 'crossex'
+            key='|'.join((venue,intent['instrument']['symbol'],intent['position_side']))
+            notional=usd_value(dec(intent['quantity'])*dec(intent['price']),key_currency(key),
+                               snapshot.get('external_fx',{}),self.clock(),upper=True)
             total=self.exposure(snapshot,intent)
             pair=self.store.get_pair(intent['pair_id']) or {}
             values=pair.get('config_at_open',{}).get('values',{})

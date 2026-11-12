@@ -138,6 +138,20 @@ def running_external(config,args):
         conn.close()
 
 
+def finish_shutdown(engine):
+    """Only this invocation's explicit verification can authorize exit 0."""
+    try:
+        status=engine.flatten_all('shutdown')
+    except Exception:
+        status=None
+    if (not isinstance(status,dict) or status.get('verified') is not True
+            or status.get('program_flat') is not True or engine.store.pairs(active=True)):
+        emit('alert',reason='shutdown_residual_exposure')
+        return 1
+    emit('shutdown_positions',**status)
+    return 0
+
+
 def main(argv=None):
     parser=argparse.ArgumentParser(description='CrossEx/Bitget execution; no keys in CLI or process environment')
     sub=parser.add_subparsers(dest='command',required=True)
@@ -245,12 +259,7 @@ def main(argv=None):
                         engine.alert('cycle_failed_closed')
                     time.sleep(.2)
                 if shutdown:
-                    engine.flatten_all('shutdown')
-                    if store.pairs(active=True) or (engine.external.records() and not (store.meta('flatten_status') or {}).get('program_flat')):
-                        emit('alert',reason='shutdown_residual_exposure')
-                        return 1
-                    if engine.external.records():
-                        emit('shutdown_positions',**store.meta('flatten_status'))
+                    return finish_shutdown(engine)
                 return 0
             finally:
                 if api_service is not None:

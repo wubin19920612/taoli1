@@ -20,21 +20,51 @@ def exception_location(error):
 
 
 class SnapshotCache:
-    def __init__(self, clock=time.time):
+    def __init__(self, clock=time.time, store=None):
         self.clock=clock
-        self.lock=threading.Lock()
+        self.store=store
+        self.lock=store.lock if store else threading.RLock()
         self.value=None
         self.at=None
+        self.version=0
 
     def publish(self, value, at=None):
         with self.lock:
-            self.value=copy.deepcopy(value)
-            self.at=self.clock() if at is None else at
+            candidate=copy.deepcopy(value)
+            at=self.clock() if at is None else at
+            if self.store:
+                from .external import plain
+                # Publication, version allocation and revocation share the same
+                # Store lock/SQLite transaction as income certificate CAS.
+                with self.store.transaction():
+                    version=self.store.meta('account_snapshot_version',0)+1
+                    candidate.update(captured_at=at,snapshot_version=version)
+                    self.store.set_meta('account_snapshot_version',version)
+                    self.store.set_meta('account_snapshot',plain(candidate))
+                    self.store.set_meta('account_snapshot_error',None)
+                    if self.store.meta('external_contracts',{}):
+                        self.store.set_meta('external_income',dict(verified=False,
+                            reason='external_refresh_pending',snapshot_version=version,at=at))
+            else:
+                version=self.version+1
+                candidate.update(captured_at=at,snapshot_version=version)
+            # Never make a failed durable publication visible to senders.
+            self.value,self.at,self.version=candidate,at,version
+
+    def invalidate(self):
+        with self.lock:
+            self.value=None
+            if self.store:
+                with self.store.transaction():
+                    self.store.set_meta('account_snapshot_error',dict(at=self.clock(),reason='account_snapshot_unavailable'))
+                    self.store.set_meta('external_income',dict(verified=False,reason='account_snapshot_unavailable',at=self.clock()))
 
     def read(self):
         with self.lock:
             if self.value is None or not 0<=self.clock()-self.at<=10:
                 raise ValueError('account_snapshot_stale')
+            if self.store and self.version!=self.store.meta('account_snapshot_version'):
+                raise ValueError('account_snapshot_superseded')
             return dict(copy.deepcopy(self.value),captured_at=self.at)
 
 

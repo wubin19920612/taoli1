@@ -14,7 +14,7 @@ from .management import Management, READS, WriteConflict, write_route
 
 PORT = 8795
 HOSTS = ('127.0.0.1', '172.18.0.1')
-ENDPOINTS = {f'/api/v1/{name}': name for name in ('summary', 'positions', 'trades', 'stats')}
+ENDPOINTS = {f'/api/v1/{name}': name for name in ('summary', 'positions', 'trades', 'stats', 'remote-positions')}
 ENDPOINTS.update({f'/api/v1/{name}': name for name in READS})
 
 

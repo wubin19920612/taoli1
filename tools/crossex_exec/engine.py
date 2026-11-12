@@ -22,6 +22,7 @@ from .universe import Universe, check_mapping_ratio
 from .external import ExternalRegistry, ExternalAdmin, ExternalUnverifiable, plain
 from .external_accounting import ExternalAccounting, read_snapshot
 from .external_fx import NATIVE_USD, require_fresh_fx
+from .position_values import key_currency, notional_values, value_snapshot
 
 
 ACCOUNT_RECOVERY_SNAPSHOTS = 3
@@ -65,9 +66,9 @@ class Engine:
         self.next_halt=0
         self.halt_attempts=0
         self._repairing=set()
-        self.account_cache=SnapshotCache(clock)
+        self.account_cache=SnapshotCache(clock,store)
         self.stops=StopLocks(store)
-        self.limits=HardLimits(store,self.account_cache.read,config,alert=self.alert)
+        self.limits=HardLimits(store,self.account_cache.read,config,alert=self.alert,clock=clock)
         self.executor=Executor(store,{'crossex':accounts.cross,'bitget':accounts.bitget},live=live,
                                can_open=self.can_open,check_order=self.check_order,check_pair=self.check_pair,
                                check_release=self.check_release,alert=self.alert,clock=clock)
@@ -108,11 +109,12 @@ class Engine:
         return rates
 
     def check_order(self,intent):
-        self.external.check_order(intent)
-        if not intent['reduce_only'] and self.external.records():
-            self.require_external_income()
-            self.external.split(self.account_cache.read())
-        self.limits.check_order(intent)
+        with self.store.lock:
+            self.external.check_order(intent)
+            if not intent['reduce_only'] and self.external.records():
+                self.require_external_income()
+                self.external.split(self.account_cache.read())
+            self.limits.check_order(intent)
 
     def check_pair(self,intents):
         # The API writer shares this path-scoped lock. One version/decision set
@@ -190,6 +192,8 @@ class Engine:
                 config=pair.get('config_at_open')
                 if config:
                     self.check_cached_volumes(instruments,config['values'])
+                for intent in intents:
+                    self.check_order(intent)
                 limits=self.opening_limits.restricted(config['values']) if config else self.opening_limits
                 # Last check: all preceding reads/commits consume this budget.
                 # Success performs no further I/O before releasing BOTH senders.
@@ -302,6 +306,9 @@ class Engine:
             with self._lifecycle_lock:
                 if not self._closed:
                     self._account_fresh_streak=self._liability_clear_streak=0
+                    self.risk='STOP'
+                    self.last_reconcile=0
+                    self.account_cache.invalidate()
                     self.preserve_account_failure(error)
                     self.store.event('ACCOUNT_REFRESH_FAILED')
 
@@ -372,10 +379,13 @@ class Engine:
             self.store.set_meta('external_income',dict(verified=False,reason=reason,at=self.clock()))
 
     def read_account_snapshot(self):
-        if not self.external.records():
-            return self.accounts.snapshot()
-        snapshot=read_snapshot(self.accounts,self.store,self.clock)
+        snapshot=(read_snapshot(self.accounts,self.store,self.clock) if self.external.records()
+                  else self.accounts.snapshot())
         currencies={r['identity']['quote'] for r in self.external.records().values()}-NATIVE_USD
+        try:
+            currencies|={key_currency(k) for k in snapshot['notionals']}-NATIVE_USD
+        except (KeyError,ValueError,TypeError):
+            pass  # value_snapshot and final risk checks will refuse unknown units.
         snapshot['external_fx']={}
         if currencies:
             try:
@@ -383,15 +393,23 @@ class Engine:
             except Exception:
                 # Missing public prices must not hide accounts or hard exits.
                 snapshot['external_fx_error']='external_fx_unavailable'
-        return snapshot
+        return value_snapshot(snapshot,self.clock())
 
     def require_external_income(self):
+        with self.store.lock:
+            return self._require_external_income()
+
+    def _require_external_income(self):
         value=self.store.meta('external_income',{})
+        snapshot=self.account_cache.read()
         if (value.get('verified') is not True or value.get('revision')!=self.store.meta('external_attribution_revision',0)
+                or value.get('snapshot_version')!=snapshot['snapshot_version']
+                or value.get('equity_revision')!=self.store.meta('equity_baseline_revision',0)
                 or value.get('day')!=day(self.clock()) or not 0<=self.clock()-value.get('captured_at',0)<=10):
             raise ExternalUnverifiable('external_income_unverifiable')
         try:
             require_fresh_fx(value.get('external_fx',{}),self.clock())
+            notional_values(snapshot,self.clock())
         except (ValueError,KeyError,TypeError,ArithmeticError):
             raise ExternalUnverifiable('external_income_unverifiable') from None
 
@@ -468,6 +486,8 @@ class Engine:
         try:
             if self.external.records():
                 self.require_external_income()
+            elif self.account_cache.value is not None:
+                notional_values(self.account_cache.read(),self.clock())
         except (ValueError,TypeError,KeyError):
             return False
         exposed=any(p.get('remote_pending') or len(set(map(dec,p.get(field,['0','0']))))>1
@@ -681,7 +701,9 @@ class Engine:
                 self.account_cache.publish(self.snapshot,started)
                 self.snapshot=self.account_cache.read()
             if self.external.records():
-                self.store.set_meta('account_risk_snapshot',plain(self.snapshot))
+                with self.store.lock:
+                    if self.snapshot['snapshot_version']==self.store.meta('account_snapshot_version'):
+                        self.store.set_meta('account_risk_snapshot',plain(self.snapshot))
             equity_halt=self.limits.check_equity(self.snapshot)
             self.roll_daily_upnl(self.snapshot,self.snapshot['captured_at'])
             self.observe_account_snapshot(self.snapshot,self.snapshot['captured_at'])
@@ -1320,8 +1342,11 @@ class Engine:
 
     def flatten_all(self,reason):
         halting=self.store.meta('state')=='HALTING'
-        if halting and self.clock()<self.next_halt:
-            return
+        status=dict(attempt_id=uuid.uuid4().hex,verified=False,program_flat=False,account_flat=False,
+                    external_positions={},started_at=self.clock(),captured_at=None,reason=reason)
+        self.store.set_meta('flatten_status',status)
+        if halting and self.clock()<self.next_halt and reason!='shutdown':
+            return status
         if halting:
             self.halt_attempts+=1
         try:
@@ -1331,25 +1356,33 @@ class Engine:
                     self.close_pair(p,reason)
                 except Exception:
                     self.alert('flatten_retry_pending')
-            if self.store.meta('state')=='HALTING' or self.external.records():
+            if reason=='shutdown' or self.store.meta('state')=='HALTING' or self.external.records():
                 # A process must not exit successfully with residual or unknown program exposure.
                 try:
+                    captured=self.clock()
                     raw=self.accounts.position_snapshot()
+                    captured=raw.get('captured_at',captured)
+                    if not 0<=self.clock()-captured<=10:
+                        raise ValueError('flatten_snapshot_stale')
                     projection=self.external.split(raw,pnl=False)
                     remote=projection['positions']
                     program_flat=(not self.store.pairs(active=True) and not remote and not self.executor.pending_writes
                         and next(self.executor.iter_orders(states=(*NONTERMINAL,'INTENT')),None) is None
                         and next(self.executor.iter_orders(accounting_pending=True),None) is None)
-                    status=dict(program_flat=program_flat,account_flat=program_flat and not bool(raw['positions']),
-                        external_positions=plain(projection['external_positions']),captured_at=self.clock())
+                    status=dict(status,verified=True,program_flat=program_flat,
+                        account_flat=program_flat and not bool(raw['positions']),
+                        external_positions=plain(projection['external_positions']),captured_at=captured)
                     self.store.set_meta('flatten_status',status)
                     if program_flat and projection['external_positions']:
                         self.store.event('PROGRAM_FLATTENED_EXTERNAL_REMAINS',status)
                 except Exception:
+                    status=dict(status,verified=False,program_flat=False,account_flat=False)
+                    self.store.set_meta('flatten_status',status)
                     self.alert('flatten_snapshot_unavailable')
-                    return
+                    return status
                 if program_flat and self.store.meta('state')=='HALTING':
                     self.store.set_meta('state','HALTED')
+            return status
         finally:
             if halting:
                 self.next_halt=self.clock()+min(60,2**min(self.halt_attempts,6))
