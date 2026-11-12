@@ -79,6 +79,11 @@ class EvidenceTests(ExternalFixture,unittest.TestCase):
         self.change(); self.rows=[position()]
         snapshot=self.snapshot(); key=next(iter(snapshot['positions']))
         snapshot['notionals'][key]='601'
+        # Explicit two-source FX whose conservative upper bound is exactly 1:
+        # retain the original 601-USD boundary assertion without assuming a peg.
+        from test_round12_fx import quotes
+        rate=str(dec(1)/dec('1.002'))
+        snapshot['external_fx']={'USDC':quotes(self.now,(rate,rate))}
         self.assertEqual(self.engine.limits.exposure(snapshot),dec(601))
         self.engine.account_cache.publish(snapshot,self.now)
         with self.assertRaisesRegex(ValueError,'total_notional_limit'):

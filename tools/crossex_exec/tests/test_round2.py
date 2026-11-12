@@ -92,7 +92,8 @@ class UTAContracts(unittest.TestCase):
         cross.positions.return_value=[]
         cross.leverage.return_value={instrument().symbol:'3'}
         bg.settings.return_value=settings()
-        bg.account.return_value=dict(usdtEquity='30000',accountEquity='31000',effEquity='1200',mmr='300')
+        bg.account.return_value=dict(usdtEquity='30000',accountEquity='31000',effEquity='1200',mmr='300',
+            assets=[dict(coin='USDT',balance='30000',debt='0')])
         bg.positions.return_value=[]
         bg.open_orders.return_value=[]
         return Accounts(cross,bg)
@@ -156,11 +157,11 @@ class HardLimitTests(unittest.TestCase):
         self.assert_blocked(intent(quantity='1.50001'))
 
     def test_total_limit_includes_remote_positions(self):
-        self.snapshot['notionals']={'external': '500.01'}
+        self.snapshot['notionals']={'crossex|BINANCE_FUTURE_ETH_USDT|long': '500.01'}
         self.assert_blocked(intent())
 
     def test_pending_pair_and_unknown_reserve_capacity(self):
-        self.snapshot['notionals']={'external':'450'}
+        self.snapshot['notionals']={'crossex|BINANCE_FUTURE_ETH_USDT|long':'450'}
         results=self.executor.execute_pair([intent('first'),intent('second',ex='bitget')])
         self.assertTrue(all(r['state']=='UNSENT' for r in results))
         self.adapter.place.assert_not_called()
@@ -182,9 +183,9 @@ class HardLimitTests(unittest.TestCase):
                 self.store.set_meta('state','RUNNING')
 
     def test_boundary_and_reduce_exemption(self):
-        self.snapshot['notionals']={'external':'450'}
+        self.snapshot['notionals']={'crossex|BINANCE_FUTURE_ETH_USDT|long':'450'}
         self.assertEqual(self.executor.execute(intent(quantity='1.5'))['state'],'TERMINAL')
-        self.snapshot['notionals']={'external':'9000'}
+        self.snapshot['notionals']={'crossex|BINANCE_FUTURE_ETH_USDT|long':'9000'}
         self.assertEqual(self.executor.execute(intent('close',reduce=True,side='sell',quantity='99'))['state'],'TERMINAL')
 
     def test_config_can_only_lower_and_missing_equity_blocks(self):
@@ -248,7 +249,8 @@ class Round2HTTPTests(unittest.TestCase):
             '/api/v4/crossex/fee':[dict(exchange_type='BINANCE',future_taker_fee='.00048',special_fee_list=[])]}
         bg.responses={
             '/api/v3/account/settings':settings(),
-            '/api/v3/account/assets':dict(usdtEquity='30000',effEquity='1200',mmr='300'),
+            '/api/v3/account/assets':dict(usdtEquity='30000',effEquity='1200',mmr='300',
+                assets=[dict(coin='USDT',balance='30000',debt='0')]),
             '/api/v3/account/fee-rate':dict(takerFeeRate='.0006'),
             '/api/v3/position/current-position':{'list':None},
             '/api/v3/trade/unfilled-orders':{'list':[],'cursor':''}}

@@ -159,6 +159,22 @@ class HistoryTests(ExternalFixture,unittest.TestCase):
         self.assertEqual(current['crossex_book']['external'],first['crossex_book']['external'])
         self.assertEqual(self.store.meta('external_equity_anchor'),anchor)
 
+    def test_rebaseline_cannot_erase_missing_verified_history(self):
+        self.funding_pair()
+        anchor=self.store.meta('external_equity_anchor')
+        self.book=[]
+        with self.assertRaisesRegex(ValueError,'external_income_unverifiable'):
+            self.anchor()
+        self.assertEqual(self.store.meta('external_equity_anchor'),anchor)
+
+    def test_upgrade_seeds_post_anchor_ids_from_last_verified_legacy_activity(self):
+        self.funding_pair()
+        self.store.db.execute("DELETE FROM meta WHERE key='external_verified_history'")
+        self.book=[]
+        self.reconcile()
+        self.assertFalse(self.store.meta('external_income')['verified'])
+        self.assertFalse(self.engine.can_open())
+
 
 class NotionalTests(FXFixture,unittest.TestCase):
     def test_external_500_usdc_plus_two_50_usd_legs_exceeds_hard_600(self):
@@ -272,6 +288,18 @@ class LiabilityTests(ExternalFixture,unittest.TestCase):
 
 
 class ShutdownAuditTests(FXFixture,unittest.TestCase):
+    def test_failed_flatten_audit_does_not_leave_verified_success_in_meta(self):
+        emit=self.store.event
+        def fail(kind,*args,**kwargs):
+            if kind=='PROGRAM_FLATTENED_EXTERNAL_REMAINS':
+                raise sqlite3.OperationalError('injected_audit_failure')
+            return emit(kind,*args,**kwargs)
+        with patch.object(self.store,'event',side_effect=fail):
+            result=self.engine.flatten_all('shutdown')
+        self.assertFalse(result['verified'])
+        self.assertFalse(self.store.meta('flatten_status')['verified'])
+        self.assertFalse(self.store.meta('flatten_status')['program_flat'])
+
     def test_failed_shutdown_revokes_historical_flat_and_returns_current_failure(self):
         self.store.set_meta('flatten_status',dict(program_flat=True,account_flat=True,captured_at=self.now-3600))
         self.accounts.position_snapshot=Mock(side_effect=ValueError('offline'))

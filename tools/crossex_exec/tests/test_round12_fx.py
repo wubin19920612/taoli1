@@ -301,6 +301,8 @@ class FXAccountingTests(ExternalFixture,unittest.TestCase):
         with Store(self.path) as reopened:
             accounting=ExternalAccounting(reopened,self.registry(),lambda:self.now)
             snapshot=self.engine.read_account_snapshot()
+            self.engine.account_cache.publish(snapshot,self.now)
+            snapshot=self.engine.account_cache.read()
             value=accounting.evaluate(snapshot,self.registry().split(snapshot))
             self.assertTrue(value['verified'])
             self.assertEqual(dec(value['equity_daily']),0)

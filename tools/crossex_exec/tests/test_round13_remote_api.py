@@ -116,6 +116,18 @@ class RemoteViewTests(ExternalFixture,unittest.TestCase):
         self.assertGreater(result['snapshot_version'],first['snapshot_version'])
         self.assertTrue(result['available']); self.assertEqual(result['positions'],[])
 
+    def test_failed_refresh_retains_last_rows_but_marks_them_unusable(self):
+        self.rows=[position('BINANCE_FUTURE_BTC_USDT')]
+        self.engine.refresh_accounts()
+        before=self.view()
+        with patch.object(self.accounts,'snapshot',side_effect=ValueError('offline')):
+            self.engine.refresh_accounts()
+        result=self.view()
+        self.assertEqual(result['snapshot_version'],before['snapshot_version'])
+        self.assertEqual(len(result['positions']),1)
+        self.assertTrue(result['stale'])
+        self.assertTrue(result['positions'][0]['stale'])
+
 
 class RemoteHTTPTests(previous.APIFixture,unittest.TestCase):
     start=previous.HTTPTests.start
