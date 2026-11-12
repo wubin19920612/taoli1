@@ -11,7 +11,7 @@ let requests: URL[];
 let fetchMock: ReturnType<typeof vi.fn>;
 const flush = async () => { await act(async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); }); };
 const count = (path: string) => requests.filter(url => url.pathname.endsWith(`/${path}`)).length;
-const adminCounts = () => ["config", "universe", "mappings", "config/audit"].map(count);
+const adminCounts = () => ["config", "universe", "mappings", "config/audit", "external-positions"].map(count);
 function visibility(value: "hidden" | "visible") {
   Object.defineProperty(document, "visibilityState", { configurable: true, value });
   fireEvent(document, new Event("visibilitychange"));
@@ -173,21 +173,21 @@ describe("实盘契约页面", () => {
 
   it("polls at 5/30 seconds, pauses when hidden and cleans up on unmount", async () => {
     const { unmount } = render(<LiveExecPage />); await flush();
-    expect(requests).toHaveLength(8);
-    expect(adminCounts()).toEqual([1, 1, 1, 1]);
+    expect(requests).toHaveLength(9);
+    expect(adminCounts()).toEqual([1, 1, 1, 1, 1]);
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     expect([count("summary"), count("positions"), count("trades"), count("stats")]).toEqual([2, 2, 1, 1]);
-    expect(adminCounts()).toEqual([1, 1, 1, 1]);
-    expect(requests).toHaveLength(10);
+    expect(adminCounts()).toEqual([1, 1, 1, 1, 1]);
+    expect(requests).toHaveLength(11);
     await act(async () => { await vi.advanceTimersByTimeAsync(25000); });
     expect([count("summary"), count("positions"), count("trades"), count("stats")]).toEqual([7, 7, 2, 2]);
-    expect(adminCounts()).toEqual([2, 2, 2, 2]);
-    expect(requests).toHaveLength(26);
+    expect(adminCounts()).toEqual([2, 2, 2, 2, 2]);
+    expect(requests).toHaveLength(28);
     visibility("hidden"); const hiddenCount = requests.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
     expect(requests).toHaveLength(hiddenCount);
-    visibility("visible"); await flush(); expect(requests.length).toBe(hiddenCount + 8);
-    expect(adminCounts()).toEqual([3, 3, 3, 3]);
+    visibility("visible"); await flush(); expect(requests.length).toBe(hiddenCount + 9);
+    expect(adminCounts()).toEqual([3, 3, 3, 3, 3]);
     unmount(); const endCount = requests.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
     expect(requests).toHaveLength(endCount);
@@ -196,8 +196,8 @@ describe("实盘契约页面", () => {
   it("does not fetch on a hidden initial mount", async () => {
     visibility("hidden"); render(<LiveExecPage />); await flush();
     expect(requests).toHaveLength(0);
-    visibility("visible"); await flush(); expect(requests).toHaveLength(8);
-    expect(adminCounts()).toEqual([1, 1, 1, 1]);
+    visibility("visible"); await flush(); expect(requests).toHaveLength(9);
+    expect(adminCounts()).toEqual([1, 1, 1, 1, 1]);
   });
 
   it("shows a disconnected empty state and clears previously displayed data", async () => {
