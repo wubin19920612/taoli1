@@ -77,19 +77,25 @@ class ExternalFixture:
         rows=copy.deepcopy(self.rows)
         positions=remote_positions(rows,[])
         floating={k:str(dec(r['upnl'])) for r in rows for k in remote_positions([r],[])}
-        return dict(positions=positions,upnl=str(sum(map(dec,floating.values()),dec(0))),upnl_by_position=floating,
+        result=dict(positions=positions,upnl=str(sum(map(dec,floating.values()),dec(0))),upnl_by_position=floating,
             margins=[self.margin,'4'],equity_by_venue=dict(crossex=self.equity,bitget=self.bitget_equity),
             equity=str(dec(self.equity)+dec(self.bitget_equity)),notionals={k:'100' for k in positions},
             liabilities=copy.deepcopy(self.liabilities),raw_positions=dict(crossex=rows,bitget=[]),
             raw_accounts=dict(crossex={'assets':[dict(exchange_type='BINANCE',coin='USDT',
                 balance=str(dec(self.equity)-sum(map(dec,floating.values()),dec(0))))]},
                 bitget={'assets':[dict(coin='USDT',balance=self.bitget_equity)]}))
+        if not getattr(self,'independent_funding',False):
+            from funding_fixtures import enrich
+            enrich(self,result,self.book,self.bg_book,self.trades)
+        return result
 
     def activity(self, start_ms, end_ms):
         def window(rows):
             return copy.deepcopy([r for r in rows if start_ms<=int(r.get('create_time',r.get('ts',0)))<=end_ms])
+        from funding_fixtures import histories
         return dict(from_ms=start_ms,to_ms=end_ms,complete=self.activity_complete,
-            crossex_book=window(self.book),crossex_trades=window(self.trades),bitget_book=window(self.bg_book))
+            crossex_book=window(self.book),crossex_trades=window(self.trades),bitget_book=window(self.bg_book),
+            **histories(self,start_ms,end_ms))
 
     def registry(self):
         from tools.crossex_exec.external import ExternalRegistry

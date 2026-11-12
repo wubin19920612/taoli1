@@ -290,7 +290,9 @@ class World:
         self.engine.reconcile()
 
     def make_engine(self):
-        engine = Engine(self.store, self.market, self.accounts, config={'CROSSEX_RISK_SCOPE':'dedicated_account'}, live=self.live, clock=lambda:self.now)
+        engine = Engine(self.store, self.market, self.accounts,
+                        config=getattr(self,'engine_config',{'CROSSEX_RISK_SCOPE':'dedicated_account'}),
+                        live=self.live, clock=lambda:self.now)
         engine.executor.confirm_timeout = .001
         engine.executor.poll_interval = .0002
         # No background jobs, DNS, account transports or real wall-clock inputs.

@@ -37,7 +37,8 @@ def enable(world,scenario):
             raw['crossex'].append(position(SYMBOL,str(world.external_qty),str(world.external_pnl)))
         result['upnl']=str(dec(result['upnl'])+world.external_pnl)
         result['raw_positions']=raw
-        return result
+        from funding_fixtures import enrich
+        return enrich(world,result,world.external_book,(),world.external_trades)
 
     world.positions=positions
 
@@ -75,8 +76,9 @@ def enable(world,scenario):
             else:
                 bg.append(dict(id=order['cid'],symbol=order['instrument']['symbol'],category='USDT-FUTURES',
                     coin='USDT',type='CLOSE_SHORT',amount=str(value),fee='0',ts=str(at)))
+        from funding_fixtures import histories
         return dict(from_ms=start,to_ms=end,complete=True,crossex_book=book,
-            crossex_trades=window(world.external_trades),bitget_book=bg)
+            crossex_trades=window(world.external_trades),bitget_book=bg,**histories(world,start,end))
 
     world.snapshot=snapshot
     world.accounts.snapshot=snapshot

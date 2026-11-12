@@ -246,7 +246,7 @@ def real_accounts(now, debt='0', gate_debt='0'):
         positions=lambda:[],open_orders=lambda:[])
     accounts=Accounts(cross,bg,clock=now)
     accounts.activity=lambda start,end:dict(from_ms=start,to_ms=end,complete=True,
-        crossex_book=[],crossex_trades=[],bitget_book=[])
+        crossex_book=[],crossex_trades=[],bitget_book=[],crossex_position_history=[],bitget_position_history=[])
     return accounts
 
 

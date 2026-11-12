@@ -1,6 +1,7 @@
 """Round 15 regressions: synthetic evidence, real journal, no private network."""
 import copy
 import json
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -83,10 +84,50 @@ class RiskIdentityTests(IsolationFixture, unittest.TestCase):
                 attribution = debt_attribution(self.store, snapshot, self.now)
                 self.assertEqual(attribution['external'], [])
                 self.assertEqual(attribution['blocking'], self.liabilities)
+                from tools.crossex_exec.api_data import JournalView
+                self.engine.account_cache.publish(snapshot,self.now)
+                shown=JournalView(self.path,{},clock=lambda:self.now).get('remote-positions',{})['positions'][0]
+                self.assertFalse(shown['identity_verified'])
+                self.assertEqual(shown['ownership'],'unregistered')
                 self.rows = old
 
 
 class HaltingTests(ExternalFixture, unittest.TestCase):
+    def test_halting_foreign_orders_do_not_abort_refresh_or_reduction(self):
+        self.store.set_meta('state', 'HALTING')
+        self.store.set_meta('halt_reason', 'total_loss')
+        self.accounts.validate_startup = lambda:dict(self.snapshot(),open_orders=[dict(clientOid='foreign')])
+        with patch.object(self.engine,'start_background') as start, patch.object(self.engine,'flatten_all') as flatten:
+            self.engine.startup(())
+        start.assert_called_once()
+        flatten.assert_called_once()
+        self.assertEqual(self.store.meta('halt_reason'),'total_loss')
+        self.assertFalse(self.engine.can_open())
+
+    def test_real_halting_workers_cannot_block_coordinator_retry(self):
+        self.store.set_meta('state', 'HALTING')
+        self.store.set_meta('halt_reason', 'total_loss')
+        self.accounts.validate_startup = Mock(side_effect=ValueError('offline'))
+        release = threading.Event()
+        entered = [threading.Event() for _ in range(3)]
+        def blocked(n):
+            entered[n].set()
+            if not release.wait(5): raise AssertionError('refresh_never_released')
+        try:
+            with patch.object(self.engine,'refresh_accounts',side_effect=lambda:blocked(0)), \
+                 patch.object(self.engine,'refresh_reference',side_effect=lambda:blocked(1)), \
+                 patch.object(self.engine,'refresh_baselines',side_effect=lambda:blocked(2)), \
+                 patch.object(self.engine,'flatten_all') as flatten:
+                self.engine.startup(())
+                self.assertTrue(all(e.wait(1) for e in entered))
+                self.assertTrue(all(w.thread.is_alive() for w in self.engine.workers))
+                self.engine.tick()
+                self.assertEqual(flatten.call_count,2)
+                self.assertFalse(self.engine.can_open())
+        finally:
+            release.set()
+            self.engine.close()
+
     def test_restart_starts_all_refreshers_even_when_startup_accounts_fail(self):
         for failed in (False, True):
             with self.subTest(failed=failed):
@@ -211,6 +252,30 @@ class RejectionTests(ExternalFixture, unittest.TestCase):
         self.assertEqual(after['state'], 'UNKNOWN')
         self.assertNotIn('fee', after)
         self.assertTrue(after['accounting_pending'])
+
+    def test_legacy_repair_audit_failure_rolls_back_and_retry_is_idempotent(self):
+        import sqlite3
+        row=self.legacy()
+        executor,_=self.rejector()
+        event=self.store.event
+        def fail(kind,*args,**kwargs):
+            if kind=='REJECTION_ACCOUNTING_RECOVERED': raise sqlite3.OperationalError('injected')
+            return event(kind,*args,**kwargs)
+        with patch.object(self.store,'event',side_effect=fail), self.assertRaises(sqlite3.OperationalError):
+            executor.recover()
+        self.assertEqual(self.store.order(row['cid']),row)
+        with self.assertRaises(ValueError): journal_pnl(self.store,self.now)
+        executor.recover()
+        self.assertEqual(journal_pnl(self.store,self.now),(dec(0),dec(0)))
+
+    def test_prior_unknown_or_ack_event_forbids_legacy_zero_upgrade(self):
+        executor,_=self.rejector()
+        for n,state in enumerate(('ACK','UNKNOWN','TERMINAL')):
+            with self.subTest(state=state):
+                row=self.legacy('suspicious-'+str(n))
+                self.store.event(state,dict(row,state=state),cid=row['cid'])
+                executor.recover()
+                self.assertEqual(self.store.order(row['cid']),row)
 
 
 if __name__ == '__main__':

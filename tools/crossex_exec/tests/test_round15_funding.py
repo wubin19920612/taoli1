@@ -16,6 +16,7 @@ OWN = 'BINANCE_FUTURE_BTC_USDT'
 
 class FundingTests(ExternalFixture, unittest.TestCase):
     def setUp(self):
+        self.independent_funding = True
         super().setUp()
         self.closed = dict(crossex=[], bitget=[])
         self.catalog((EXT, OWN))
