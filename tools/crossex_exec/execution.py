@@ -114,7 +114,8 @@ class Executor:
             def authorize():
                 # One configuration decision spans review, durable SENT and release.
                 # Management writers cannot split this batch between versions.
-                with self.store.lock:
+                # Match save/flush/recover: executor lock precedes journal lock.
+                with self.lock, self.store.lock:
                     if self.check_order:
                         for i in intents:
                             self.check_order(i)
