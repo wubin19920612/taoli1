@@ -1127,3 +1127,82 @@ fill-sim 双版本在本轮已完整运行，此后只改执行器专项/证明�
 默认无外仓也增加了完整流水核实，因此旧分页上限、十秒账户采样预算和全窗口读取成本仍需真实影子环境测量。窗口过长/数据过多会保守停开，未扩大预算或用部分数据放行。Windows 双版本结果不替代 Linux/systemd、实际网络/资金费和持续影子验收。
 
 本模块本地验收结束。页面展示/按钮、线上只读核对与发布请分别在新任务继续，先读本节及第十四轮契约；共享账户不要沿用旧“整户跌 150 即程序停机”文案，也不要把外仓只告警扩展为未知负债豁免。后续发布必须另获授权，本次测试通过不是实盘开仓授权。
+
+## 第十五轮
+
+### 范围、基线和本地提交
+
+从终审报告提交 `65747b2` 开始，工作树 `C:/Users/wubin/Desktop/code/codex/taoli1/.worktrees/crossex-exec-r8`、分支 `codex/crossex-exec-r8`，起始工作区干净。先读第十三、十四轮交接、接口契约及 [r14 终审](crossex-exec-r14-final-review-2026-11-12.md)，修复全部 4P1/1P2，并定位和修复 HL DEX 外仓登记 409。范围仅执行器及其离线测试，不包含页面或部署。
+
+| 类型 | 提交 | 内容 |
+|---|---|---|
+| test | `075b03a` | 首批身份、HL DUAL、HALTING、明确拒单反例 |
+| test | `6f4fddf` | 首次资金费缺失、生命周期、独立历史接口反例 |
+| test | `c81fd32` | 默认 program 开平仓/拒单/流水延迟/重启模拟器，旧夹具补独立证据及并发边界 |
+| test | `42d339f` | 本机小数秒与整数毫秒窗口边界反例 |
+| feat | `e8c77ba` | 本轮完整实现，完整 SHA `e8c77ba8cf2ed851db6d62d198da86490a268186` |
+| docs | 本节后续独立提交 | 契约追加、第十五轮交接、下一任务入口、README、验收 JSON；用 git log 查询自身 SHA |
+
+只显式暂存本任务文件；Git hooks/GPG 在本地提交命令中关闭。普通 git add 因父仓库 worktree 索引不在可写根内失败，随后仅为已授权本地提交使用自动审批扩展权限，没有自动审批拒绝。没有 push、SSH、WSL、amend、真实鉴权/订单、线上备份或部署；没有调用子代理，实施后按锁序、证据和恢复路径自审。
+
+### 五项修复和代码入口
+
+1. **首次资金费缺失。** 新 `funding.py` 在原现金连续性之外，按精确合约/计价币核对当前与完整关闭仓位的累计资金费变化。CrossEx 使用 funding_fee、position_id、create_time；UTA 使用 totalFunding、createdTime。`adapters.py` / `accounts.activity` 增加两个只读历史仓位请求，固定窗口、有界页数、重复响应拒绝。`external_accounting` 保存 funding_positions 起点和 funding_verified 证明；`program_risk.require_program_proof` 要求此证明。已平仓位缺历史、原生命周期消失/冲突、本程序期间已成交但无生命周期证据、缺累计值或账本不符都停开。`+25/-25` 首次同时漏报不再被现金净变化零掩盖，补齐后计入程序 -25。UTC 滚日和重启保留累计证据；真正的小数秒时钟使用固定整数毫秒窗口边界。
+2. **严格身份共享。** `position_values.position_identity/verify_external_rows` 共用于登记和风险投影，展示使用同一解析器。任何显式 exchange_type/business_type/tag/dex/quote/route 冲突均不能排除仓位或豁免负债；对应 UI 行为 identity_verified=false、unregistered。身份字段在官方响应中省略时仍由精确原始 symbol 和唯一有效目录相互核对。负债金额、同域混合仓位、保证金和 Bitget debt 原门槛未变。
+3. **HALTING 后台。** `Engine.startup` 在 HALTING 正常读取、读取失败及非本程序 Bitget 活动订单分支都保留后台线程，原账户、目录和采样周期继续运行；主协调器独立执行原有减仓重试。实际线程阻塞测试确认 tick 仍进入 flatten；目录过期恢复后可核实程序已平，外仓保留。HALTING/HALTED 和 halt_reason 不因刷新被释放，正常启动仍拒绝非本程序订单。
+4. **明确拒单记账与旧记录恢复。** `execution.py/rejection.py` 在明确 placement rejection 的 REJECTED 事件中一次保存完整零成交字段和摘要。旧缺 fee 的同类记录由 recover 校验完整 SENT→REJECTED 审计后事务修复，保留原事件、追加 REJECTION_ACCOUNTING_RECOVERED。UNKNOWN、ACK/终态证据冲突、正成交、订单身份改变或缺审计均不能套用。测试覆盖文件库重开、拒单率独立限制、事务失败回滚和幂等，不通过 rebaseline 猜 fee=0。
+5. **默认模式覆盖。** 新 `round15_simulator.py/test_round15_program.py` 通过真实 Engine/Executor、合成 venue 和独立累计资金费状态实际发送/成交/减仓；包含文件 SQLite 重启、单腿明确拒单后的另一腿收尾、资金流水/关闭仓位历史延迟、UTA 缺字段/身份冲突。默认 engine_config={}，明确断言 program_scope，未禁用证据门禁。旧 dedicated_account 模拟器的原种子、调度及断言全部保留。
+
+单腿 150、程序总额 600、日亏 20、累计亏损 100、程序回撤 150，以及更严配置均未改；保证金 <3 停开/<2 减程序、UNKNOWN 不重发、外仓永久禁单、旧损失锁、三份新鲜观测恢复和最终发送检查仍在。
+
+### 线上副本诊断：HL DEX 登记 409
+
+用户报告影子运行 `679791a`。仅复制所给 `crossex-exec-20261112-1725.db` 到本机 Temp，并以 `mode=ro&immutable=1` 读取；`PRAGMA quick_check=ok`，原件和复制件 SHA-256 均为 `945421b8a2881e0c8b0e4a2ab65baa4b3fbd5c317e773bab9f25f3dd2e708c2c`。没有直接写该库，也没有把整库、账户标识、余额或密钥带入仓库。
+
+- external_catalog 有 12,863 条规则，目标 `HYPERLIQUID_FUTURE_io:OAI_USDC` 恰好一条；HYPERLIQUID / FUTURE / tag=io / live / support_cross=true / delist_time=0 均匹配。
+- 目标规则 lot_size/min_size/tick_size 均为 0.001，**max_limit_size 与 max_market_size 为 null**。原 `ExternalRegistry.rule` 对 max_limit_size 强制 dec()>0，故目录存在仍返回 external_identity_unverifiable。
+- raw_positions 与归一化 positions 一致：同合约 **long 8.107、short 13.196**，两个方向独立。没有发现目录缺失或双向净额合并；BINANCE_FUTURE_OPENAI_USDT 的 max_limit_size=4000，因此该错误条件不触发。
+- 修复只允许外仓身份目录保留显式 null 的订单上限；缺字段、非法非空数值及其他原严格规则继续拒绝。没有给未知上限填默认无限值，没有改变交易目录或下单定量规则。
+- 最小夹具仅使用该精确 symbol、身份/规则字段和两方向数量，回归通过登记、双方向排除、双方向/减仓永久禁单及有仓不能取消。其他 DEX、错误 exchange/business/tag、重复目录、未知规则和程序所有权原回归继续通过。
+
+这证明本次已找到并修复该副本历史状态中的登记校验原因；没有调用当前线上 ADMIN 接口，不能表述为已替用户完成线上登记、已解除停机或已恢复交易。
+
+### TDD、原断言和最终双版本验证
+
+首批 10 项在旧实现实际得到 19 failures / 2 errors（含 subTest）；资金费首批 9 项在资金费实现之前实际得到 10 failures / 2 errors。后续非本程序活动订单 HALTING 分支和小数秒边界也各先红再修。默认 program 5 项回归另在 Temp 的隔离 `65747b2` 源码中回放，实际 4 failures / 1 error；这是基线回放证据，不冒称它发生在首批实现之前。最终新增 29 项定义。
+
+旧测试只有证据夹具和模拟器配置注入调整，原断言不删改、不放宽：
+
+- `test_round11_external.py` / 新 `funding_fixtures.py`：由旧用例的完整合成场景事实生成当前/关闭仓位累计值，再选择可见账本窗口；生产代码没有补零回退。第十五轮缺失/延迟用例使用另外独立维护的累计值，不从返回的账本生成证明。
+- `round11_simulator.py`：给原场景补当前/已关闭生命周期和空资金费证据。
+- `test_round13_review.py`：给原真实 Accounts 的空仓夹具补两份明确空历史响应。
+- `test_invariants.py`：增加可选 engine_config 注入，原默认仍是 dedicated_account；新增 ProgramWorld 才使用空配置触发真实默认 program。
+
+相对 `65747b2` 按 AST owner、内容及次数核对执行器/fill-sim 共 46 个原 Python 测试/夹具文件：**2,491 个原断言内容和次数未删改，1,212 个原类/函数入口均保留**；上述夹具函数体有补充证据的改动。fill-sim 源码和测试未改。没有把文件库换成内存库，没有过滤或跳过原 discover 测试。
+
+在 feat `e8c77ba` 上最终结果：
+
+| 解释器 | 执行器 unittest discover | fill-sim unittest discover | 退出码 |
+|---|---|---|---|
+| Windows Python 3.12.10 / SQLite 3.49.1 | **565 项 / 134.794s / OK** | **158 项 / 29.289s / OK** | 全部 0 |
+| 指定 Windows Python 3.10.20 / SQLite 3.50.4 | **565 项 / 148.218s / OK** | **158 项 / 31.540s / OK** | 全部 0 |
+
+```powershell
+python -m unittest discover -s tools/crossex_exec/tests -v
+python -m unittest discover -s tools/fill_sim/tests -v
+$py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe'
+& $py310 -m unittest discover -s tools/crossex_exec/tests -v
+& $py310 -m unittest discover -s tools/fill_sim/tests -v
+```
+
+每个解释器都完整执行原 **5 项跨进程 SQLite 测试**。旧模拟器种子 20261111/20261112/20261113 各 **2,712 回合**、N=1；原十项不变量 checks 各 2,712、exercised 均非零，外仓原 96 次和第十四轮 48 次检查均保留。新增默认 program 模拟器每种子 **12 个场景**，包括 8 次实际开平仓、4 次明确拒单、8 次资金费延迟、20 次重启和 40 次发送不变量检查；两版三个种子均通过。两版各 100 个 Python 文件语法解析通过，git diff --check 通过。
+
+完整计数、两个模拟器共 12 份种子记录、跨进程测试名、日志路径及 SHA-256 见 [第十五轮验收 JSON](crossex-exec-r15-validation-2026-11-12.json)。3.12 fill-sim 在本轮较早已完整通过，之后只改执行器及其测试，未重复运行未变化的 fill-sim；其日志和指纹仍为本轮实际结果。契约对基线规范化 startswith 检查，只有追加。
+
+### 交付边界与下一步
+
+本轮只完成本地分组提交，未推送；未核实当前线上 HEAD，未做线上备份、部署或真实 API 验收。用户报告的影子版本仍只作为所给事实记录，未被本轮修改。Temp 保存副本、隔离基线、红绿灯日志和测试产物；保留原缓存和其他产物，不清理无法确认归属的文件。本轮最终仓库应只包含上述提交，不带未跟踪整库。
+
+旧 external_equity_anchor 缺 funding_positions 时不会直接恢复开仓；需要按原人工管理路径在程序空仓、无恢复义务且新证据齐全后建立明确新起点，不能自动填旧资金费零。新历史接口没有实测鉴权权限、交易所累计值在部分/完整平仓时的真实语义、响应时延、分页量和十秒采样预算；这些未验证条件会继续停开，不能通过缩小请求窗口、忽略缺页或删库绕过。Windows 双版本离线结果不替代 Linux/systemd 或真钱验收。
+
+本模块本地交付结束。后续请在新任务继续线上只读/持续影子验收与独立终审，先读本节及[第十五轮追加契约](live-exec-contract-2026-11-11.md#第十五轮增补2026-11-12)。页面登记按钮仍使用原 ADMIN 请求和 x1 expected_status，不需要新权限或自动重试。本次未授权推送、部署、解除旧 halt_reason 或开真钱交易。

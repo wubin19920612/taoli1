@@ -598,3 +598,37 @@ rebaseline 与 release-halt 的审计 `old` 在同一写事务中保存全部原
 内部 `liability_attribution` 保存 `external/blocking/snapshot_version/at`；外仓告警事件为 `EXTERNAL_LIABILITY` 和 `ALERT(reason=external_liability)`，不添加 stop lock。归属状态/资产身份变化时告警，同一状态每小时最多一次；解除后再次出现是新事件。该状态和告警审计同事务提交。程序模式下其他阻断告警按 reason/owner 独立持久化去重，数值/时间刷新或交替原因不再刷屏，恢复后再次发生可告警，重启保留去重记录。sink 失败保留 `ALERT_SINK_FAILED`，不宣称外部通知必达。
 
 公开字段依据仅用于解析和合成测试：[CrossEx 账户、持仓及账本](https://www.gate.com/docs/developers/crossex/en/)、[Bitget UTA 枚举](https://www.bitget.com/docs/uta/enum)。没有真实鉴权、借还款、划转、订单或线上验收。
+
+## 第十五轮增补（2026-11-12）
+
+本节只追加。沿用第十四轮程序风险口径、全部额度/亏损/保证金阈值、ADMIN 权限、乐观并发、永久禁单和人工解除停机前提；不新增交易开关或管理写端点。本轮仅本地实现与离线验证，未推送、部署或调用真实鉴权接口。
+
+### 首次资金费完整性
+
+资金费证明同时使用账本和独立仓位累计值。CrossEx 读取当前 `funding_fee/position_id/create_time` 与 `/crossex/history_positions` 的完整关闭记录；Bitget UTA 读取当前 `totalFunding/createdTime` 与 `/api/v3/position/history-position` 的完整历史记录。历史读取沿用固定毫秒窗口和有界分页；缺字段、重复页/游标、超过窗口/页数预算或读取失败不能作为空历史。
+
+内部 `external_equity_anchor` 追加 `funding_positions`：以精确 route、原始 symbol、方向、生命周期标识保存原生累计值和创建/关闭毫秒时间。CrossEx 用 position_id 区分生命周期；UTA 当前接口没有 positionId，使用精确合约、方向和 createdTime，历史响应必须匹配。双方向保持独立，不按 ticker 或净数量合并。部分平仓历史不重复加总，需当前累计值或完整关闭的最终累计值支持。
+
+对每个 `route|原始symbol|quote`，独立累计值相对起点的变化必须等于该合约新增资金费流水总和；不能用同所同币种的现金净变化为零替代。已结束仓位缺最终累计值、生命周期无法接续、创建时间在起点前但起点没有记录、或本程序已成交订单在该区间没有对应生命周期证据时，均 `external_income_unverifiable` 停开。起点已记录的终结生命周期不得改写。原已见账本 ID/摘要、现金与成交核对、十秒新鲜度和发送前版本检查继续独立生效。
+
+双账户采样一致性检查追加 UTA totalFunding/createdTime 和 CrossEx funding_time/create_time。本地采样时间保留秒的小数精度，与账本比较时采用同一向下取整的整数毫秒边界，不要求本机时钟恰好落在整数毫秒上。
+
+`GET /api/v1/external-positions` 的成功 `income` 追加 `funding_verified: true`。它表示本次已完成独立累计资金费核对；旧证明缺少该字段不允许开仓。其他成功/失败字段和错误码不变，失败不可解释为资金费零。旧库缺 `funding_positions` 不自动补零或滚动起点，须保持停开，按原程序空仓、完整新证据及审计要求执行显式 rebaseline/release-halt。已有新起点的重基线必须先核对原区间，不能绕过尚未补齐的资金费证据；旧日亏锁和停机原因仍保留。
+
+### 外仓身份与 HL 空订单上限
+
+登记、风险投影、负债归属和 `remote-positions` 展示共用 `position_identity` 解析。原始仓位中的 exchange_type、business_type/business、tag/dex、quote、route 若存在，必须与原始 symbol 解析出的完整身份及登记一致；冲突时登记拒绝、不得排除名义额或豁免负债，展示为 identity_verified=false、unregistered。官方仓位行未提供 exchange/tag 等字段时，由精确原始 symbol 和当前唯一目录记录共同核对，不臆造 ticker 别名。
+
+外仓目录仍要求唯一原始合约、exchange/business/tag 一致、live、support_cross=true、delist_time=0，以及正的 lot_size/min_size/tick_size。`max_limit_size` 必须有字段；显式 null 保留为未知订单上限，可用于外仓身份登记。提供非空值时仍要求有限正数。没有把 null 改成无限大，没有修改交易目录、定量或发送校验。
+
+该行为覆盖目录内 `HYPERLIQUID_FUTURE_io:OAI_USDC` 的订单上限为 null、CrossEx DUAL 同时存在 long/short 的情况。登记仍按完整合约施加双方向永久禁单，任一方向尚有持仓不能取消登记。目录缺失、重复、过期、错误 DEX、身份矛盾、程序历史所有权或远端活动订单仍按原 409 拒绝。
+
+### HALTING 后台与明确零成交拒单
+
+HALTING 重启仍启动账户刷新、目录/参考数据刷新和基线采样线程；启动账户读取失败也保留这些线程。协调器继续执行有界减仓重试，刷新线程阻塞不阻止协调器尝试收尾。开仓继续被状态及停机原因锁禁止；成功刷新不清 halt_reason，核实程序已平后进入 HALTED，释放仍需原人工流程。正常启动对非本程序 Bitget 活动订单的拒绝规则保留；HALTING 分支记录该阻断原因并保留后台及程序减仓机会，不接管这些订单。
+
+已持久化发送后收到明确 placement rejection、没有订单接受或成交证据的记录，原 REJECTED 事件直接保存完整零成交记账：filled="0"、fee="0"、vwap=null、fill_ms=null、trade_ids=[]、accounting_pending=false，并追加内部 `zero_fill_evidence={source,identity}`。identity 为订单身份/发送记录摘要，非授权凭据。拒单率统计继续包含该记录。
+
+原有缺 fee 的 REJECTED 在 executor recover 时仅可通过匹配的持久化 SENT → REJECTED 审计修复；需原始事件和当前记录完全一致、明确拒绝、零成交、无 oid/成交价/成交时间/交易 ID 等冲突。存在 ACK、UNKNOWN、其他终态、身份改变、缺失审计或正成交时不适用。恢复与 `REJECTION_ACCOUNTING_RECOVERED` 审计同事务提交，失败回滚，重复执行不重复记账；不提交或重发订单，不清其他锁。
+
+公开字段核实：[CrossEx 当前/历史持仓与合约目录](https://www.gate.com/docs/developers/crossex/en/)、[Bitget UTA 当前/历史持仓](https://www.bitget.com/docs/catalog/trading/position-management)。公开文档定义 max_limit_size 为限价下单数量上限；本次 null 的存在来自用户提供的只读数据库证据，不宣称文档承诺所有交易所均返回 null。真实账户的新历史接口权限、生命周期语义、延迟、分页量和十秒预算仍待后续只读/影子验证，证据不足持续停开。
