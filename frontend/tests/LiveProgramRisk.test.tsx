@@ -68,6 +68,13 @@ describe("第十四轮程序风险与整户观测分开显示", () => {
     expect(risk().getByText("已达程序损益停机阈值")).toBeTruthy();
   });
 
+  it.each(["-50\n", "1e10000", "-Infinity", "-" + "5".repeat(512)])("rejects a non-contract decimal %j", async total => {
+    income!.program_total = total;
+    render(<LiveExecPage />); await flush();
+    expect(value("程序累计损益")).toBe("— USD");
+    expect(risk().queryByText("已达程序损益停机阈值")).toBeNull();
+  });
+
   it.each(["missing", "unverified", "old_scope", "version", "stale", "future", "missing_time", "snapshot_missing",
     "snapshot_old", "revision", "wrong_day", "invalid_decimal", "read_failure", "missing_journal", "missing_revision"])(
     "does not present %s proof as a current program stop basis", async state => {

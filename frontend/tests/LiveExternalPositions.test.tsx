@@ -68,6 +68,22 @@ describe("外部持仓确认与显示", () => {
     expect(within(screen.getByRole("dialog")).getByText(/快照.*重新确认/)).toBeTruthy();
   });
 
+  it("rechecks changed confirmation fields inside submit before a rerender", async () => {
+    const observed = { ...baseRow };
+    render(<LiveExternalPositions snapshot={remoteSnapshot} registry={registry} rows={[observed]} refresh={refresh} />);
+    await open(); fireEvent.change(screen.getByLabelText("操作说明"), { target: { value: "核实登记" } });
+    observed.quantity = "3";
+    await confirm(); expect(fetch).not.toHaveBeenCalled();
+    expect(within(screen.getByRole("dialog")).getByText(/持仓.*变化.*重新确认/)).toBeTruthy();
+  });
+
+  it("replaces an old reason error with the reconfirmation notice when quantity changes", async () => {
+    const view = render(<LiveExternalPositions snapshot={remoteSnapshot} registry={registry} rows={[baseRow]} refresh={refresh} />);
+    await open(); await confirm();
+    view.rerender(<LiveExternalPositions snapshot={remoteSnapshot} registry={registry} rows={[{ ...baseRow, quantity: "3" }]} refresh={refresh} />);
+    expect(within(screen.getByRole("dialog")).getByText(/持仓.*变化.*重新确认/)).toBeTruthy();
+  });
+
   it("requires snapshot evidence even if an outdated caller supplies actionable rows", () => {
     // @ts-expect-error Simulate an outdated caller that omits the required snapshot proof.
     render(<LiveExternalPositions registry={registry} rows={[baseRow]} refresh={refresh} />);
