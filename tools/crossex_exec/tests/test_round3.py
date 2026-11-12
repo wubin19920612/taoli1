@@ -87,6 +87,8 @@ class Round3Tests(unittest.TestCase):
         self.engine.last_reconcile = self.now[0]
         self.store.set_meta('daily_upnl', dict(day=day(self.now[0]), upnl='0', positions={}))
         seed_baseline(self.store,self.now[0])
+        self.store.set_meta('baseline_quotes',dict(at=self.now[0],mids={
+            'binance':{'BTC':'100'},'bitget':{'BTC':'102'},'bybit':{'BTC':'100'}}))
         # Cleanup remains usable on the original implementation during the red run.
         self.addCleanup(lambda: getattr(self.engine, 'close', lambda:None)())
 
@@ -319,6 +321,9 @@ class Round3Tests(unittest.TestCase):
 
     def test_r7_twelve_second_books_send_neither_leg(self):
         orders = self.open_intents(age=12)
+        # The venue remains stale on the newly required one-time refresh.
+        stale = copy.deepcopy(self.store.pairs()[0]['last_books'])
+        self.market.books = lambda instruments:[Book(**b) for b in stale]
         result = self.engine.executor.execute_pair(orders)
         self.assertEqual([r['state'] for r in result], ['UNSENT', 'UNSENT'])
         self.assertFalse([r for r in self.trace if r[0] == 'place'])
@@ -348,6 +353,8 @@ class Round3Tests(unittest.TestCase):
 
     def test_r7_after_limiter_wait_rechecks_book_age(self):
         orders = self.open_intents()
+        stale = copy.deepcopy(self.store.pairs()[0]['last_books'])
+        self.market.books = lambda instruments:[Book(**b) for b in stale]
         barrier = threading.Barrier(2, action=lambda:self.now.__setitem__(0, self.now[0]+3))
         originals = [v.place for v in self.venues]
         def send(n, order, before_send):

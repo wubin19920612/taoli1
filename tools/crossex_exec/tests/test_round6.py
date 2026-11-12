@@ -350,7 +350,11 @@ class EngineBaselineTests(unittest.TestCase):
     def test_open_snapshots_persist_and_track_uses_frozen_half_excess(self):
         self.store.db.execute('DELETE FROM baseline_samples')
         seed_baseline(self.store,self.now[0],'40')
-        p = self.engine.ingest(self.trigger())
+        # A position opened under round six remains closable after upgrading.
+        # Round seven forbids NEW entries at 40bp; retain every frozen-exit assertion.
+        p = self.pair()
+        p.update(baseline_at_open='40',excess_at_open='160')
+        self.store.pair(p)
         self.assertIsNotNone(p)
         self.assertEqual(dec(p['baseline_at_open']),40)
         self.assertEqual(dec(p['excess_at_open']),160)

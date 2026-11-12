@@ -100,6 +100,19 @@ class FakeDatabase:
         self.data['triggers'][identity] = copy.deepcopy(value)
         return True
 
+    def skip(self, identity, reason, **details):
+        from tools.crossex_exec.admission import SKIP_REASONS
+        with self.lock:
+            trigger = self.data['triggers'].setdefault(identity, {})
+            if trigger.get('skip_reason'):
+                return
+            trigger['skip_reason'] = reason
+            if reason in SKIP_REASONS:
+                counts = self.meta('opening_skip_counts', {})
+                counts[reason] = counts.get(reason, 0)+1
+                self.set_meta('opening_skip_counts', counts)
+            self.event('SKIP', dict(id=identity, reason=reason, **details))
+
     def assert_startable(self):
         if self.meta('state') == 'HALTED':
             raise ValueError('HALTED_manual_clear_required')

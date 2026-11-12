@@ -26,14 +26,15 @@ NOW = 1794384000.0
 TOKEN = 'fictional-api-token-7bfaf9'
 SUMMARY = {'generated_at', 'mode', 'halted', 'halt_reason', 'stop_file',
            'opening_paused_reason', 'caps', 'accounts', 'today', 'total', 'fees', 'last_error',
-           'baseline_ready_pairs', 'structural_spread_pairs', 'cooldown_pairs'}
+           'baseline_ready_pairs', 'structural_spread_pairs', 'cooldown_pairs', 'opening_skip_counts'}
 POSITION = {'id', 'symbol', 'opened_at', 'held_seconds', 'legs', 'entry_spread_bps',
             'current_spread_bps', 'unrealized_usd', 'unrealized_bps', 'next_funding_at',
-            'stop_distance_bps', 'max_hold_at', 'status', 'baseline_bps', 'excess_bps', 'funding_cost_bps'}
+            'stop_distance_bps', 'max_hold_at', 'status', 'baseline_bps', 'excess_bps', 'funding_cost_bps',
+            'open_book_skew_ms', 'close_book_skew_ms'}
 TRADE = {'id', 'symbol', 'pair', 'opened_at', 'closed_at', 'held_seconds', 'legs',
          'entry_spread_bps', 'fees_usd', 'funding_usd', 'net_usd', 'net_bps', 'exit_reason',
          'sim', 'slippage_bps', 'leg_send_gap_ms', 'leg_fill_gap_ms', 'one_leg_incident',
-         'baseline_bps', 'excess_bps', 'funding_cost_bps'}
+         'baseline_bps', 'excess_bps', 'funding_cost_bps', 'open_book_skew_ms', 'close_book_skew_ms'}
 STATS = {'days', 'n', 'histogram', 'by_symbol', 'by_pair', 'by_exit_reason',
          'by_spread_tier', 'vs_sim'}
 

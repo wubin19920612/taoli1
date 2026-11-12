@@ -90,12 +90,15 @@ class Round4Tests(unittest.TestCase):
         for book, age in zip(pair['last_books'], (1.9, 2.1)):
             book['received_at'] = self.now[0]-age
         self.store.pair(pair)
+        self.market.books = lambda instruments:[Book(**b) for b in pair['last_books']]
         result = self.engine.executor.execute_pair(orders)
         self.assertEqual([r['state'] for r in result], ['UNSENT', 'UNSENT'])
         self.assertFalse(self.placed())
 
     def test_r2_late_second_worker_rejects_entire_pair(self):
         orders = self.open_intents(age=1.9)
+        stale = self.store.pairs()[0]['last_books']
+        self.market.books = lambda instruments:[Book(**b) for b in stale]
         first_sent = threading.Event()
         original = self.venues[0].place
         def first(order, before_send):

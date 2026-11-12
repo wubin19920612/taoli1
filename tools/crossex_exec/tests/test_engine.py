@@ -25,7 +25,8 @@ class FakeMarket:
         return self.mapping
 
     def baseline_quotes(self,bases):
-        return {}
+        return {ex:{base:mid for base in bases} for ex,mid in
+                (('binance','99.5'),('bitget','102.5'),('bybit','99.5'))}
 
     def books(self,instruments):
         if self.missing:
@@ -102,6 +103,7 @@ class EngineTests(unittest.TestCase):
         self.store.set_meta('actual_fees',{'at':time.time()})
         self.store.set_meta('daily_upnl',dict(day=day(time.time()),upnl='0',positions={}))
         seed_baseline(self.store,time.time())
+        self.engine.baseline.record(self.market.baseline_quotes(('BTC',)),('BTC',))
 
     def tearDown(self):
         self.engine.close()

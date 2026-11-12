@@ -266,6 +266,22 @@ class EngineAdmissionTests(unittest.TestCase):
         self.assertEqual(self.skips()[-1]['reason'],'book_stale')
         self.assertFalse(any(r[0]=='place' for r in self.trace))
 
+    def test_three_hundred_ms_live_boundary_no_unnecessary_refresh(self):
+        with patch.object(self.market,'books',return_value=books(skew=300)) as fetch:
+            pair=self.engine.ingest(self.trigger())
+        self.assertEqual(pair['state'],'OPEN')
+        self.assertEqual(pair['open_book_skew_ms'],300)
+        self.assertEqual(fetch.call_count,1)
+
+    def test_nonzero_flat_baseline_and_final_excess_are_saved(self):
+        self.store.db.execute('DELETE FROM baseline_samples')
+        seed_baseline(self.store,self.now[0],'5')
+        pair=self.engine.ingest(self.trigger())
+        self.assertEqual(pair['state'],'OPEN')
+        self.assertEqual(dec(pair['baseline_at_open']),5)
+        self.assertEqual(dec(pair['excess_at_open']),195)
+        self.assertEqual(dec(self.store.pairs()[0]['excess_at_open']),195)
+
     def change_before_gate(self, callback):
         original = self.venues[0].place
         def place(order, before_send):
@@ -300,6 +316,74 @@ class EngineAdmissionTests(unittest.TestCase):
             self.engine.ingest(self.trigger())
         self.assertFalse(any(r[0]=='place' for r in self.trace))
         self.assertTrue(all(o['state']=='UNSENT' for o in self.store.all_orders()))
+
+    def test_shared_gate_skew_retries_both_and_counts_once_without_sending(self):
+        def skew_cache():
+            pair=self.store.pairs(active=True)[0]
+            pair['last_books'][1]['exchange_at']=self.now[0]-.301
+            self.store.pair(pair)
+        self.change_before_gate(skew_cache)
+        with patch.object(self.market,'books',side_effect=[books(),books(skew=301)]) as fetch:
+            self.engine.ingest(self.trigger())
+        self.assertEqual(fetch.call_count,2)
+        self.assertEqual([s['reason'] for s in self.skips()],['book_skew'])
+        self.assertEqual([o['state'] for o in self.store.all_orders()],['UNSENT','UNSENT'])
+        self.assertFalse(any(r[0]=='place' for r in self.trace))
+
+    def test_all_v1_shared_gate_rejections_are_real_zero_send_batches(self):
+        original=self.venues[0].place
+        for reason in REASONS[2:]:
+            self.venues[0].place=original
+            self.store.db.execute('DELETE FROM baseline_samples')
+            seed_baseline(self.store,self.now[0])
+            self.engine.baseline.record({'binance':{'BTC':'100'},'bitget':{'BTC':'102'},'bybit':{'BTC':'100'}},('BTC',))
+            def change(reason=reason):
+                if reason=='funding_diff':
+                    pair=self.store.pairs(active=True)[0]
+                    pair['funding'][0]['rate']='.000401'
+                    self.store.pair(pair)
+                elif reason=='baseline_not_flat':
+                    self.store.db.execute('DELETE FROM baseline_samples')
+                    seed_baseline(self.store,self.now[0],'10.01')
+                else:
+                    mids={'binance':{'BTC':'100'},'bitget':{'BTC':'102'}}
+                    if reason=='not_single_venue_outlier':
+                        mids['bybit']={'BTC':'101'}
+                    self.engine.baseline.record(mids,('BTC',))
+            self.change_before_gate(change)
+            with self.subTest(reason=reason):
+                self.engine.ingest(self.trigger(reason))
+                self.assertEqual(self.skips()[-1]['reason'],reason)
+                self.assertFalse(any(r[0]=='place' for r in self.trace))
+                self.assertTrue(all(o['state']=='UNSENT' for o in self.store.all_orders()))
+
+    def test_retry_rechecks_equity_and_never_bypasses_original_hard_limit(self):
+        self.change_before_gate(lambda:self.now.__setitem__(0,self.now[0]+1.01))
+        calls=[]
+        def fetch(instruments):
+            calls.append(1)
+            if len(calls)==2:
+                self.data['equity_by_venue']['bitget']='29800'
+                self.engine.account_cache.publish(self.snapshot())
+            return books(self.now[0])
+        with patch.object(self.market,'books',side_effect=fetch):
+            self.engine.ingest(self.trigger())
+        self.assertEqual(len(calls),2)
+        self.assertFalse(any(r[0]=='place' for r in self.trace))
+        self.assertIn(self.store.meta('state'),('HALTING','HALTED'))
+
+    def test_initial_pricing_delay_counts_toward_age_and_retry_budget(self):
+        from tools.crossex_exec.policy import review
+        def slow(*args,**kwargs):
+            result=review(*args,**kwargs)
+            self.now[0]+=1.01
+            return result
+        self.engine.live=self.engine.executor.live=False
+        with patch('tools.crossex_exec.engine.review',side_effect=slow), patch.object(
+                self.market,'books',side_effect=lambda instruments:books(self.now[0])) as fetch:
+            self.assertIsNone(self.engine.ingest(self.trigger()))
+        self.assertEqual(fetch.call_count,2)
+        self.assertEqual(self.skips()[-1]['reason'],'book_stale')
 
     def test_ingest_records_each_v1_reason_and_never_sends(self):
         for reason in REASONS[2:]:
@@ -385,6 +469,32 @@ class ReferenceAndAPITests(unittest.TestCase):
                 reopened.skip(reason,reason)
         self.assertEqual(view.get('summary',{})['opening_skip_counts'],dict.fromkeys(REASONS,1))
         self.assertEqual(len([e for e in self.store.events() if e['kind']=='SKIP']),6)
+
+    def test_skip_counter_trigger_marker_and_event_commit_atomically(self):
+        original=self.store.set_meta
+        def fail(key,value):
+            if key=='opening_skip_counts':
+                raise ValueError('injected_skip_commit_failure')
+            return original(key,value)
+        self.store.claim('r7',{'received_at':NOW})
+        with patch.object(self.store,'set_meta',side_effect=fail), self.assertRaises(ValueError):
+            self.store.skip('r7','book_skew')
+        self.assertFalse(self.store.events())
+        self.store.skip('r7','book_skew')
+        self.assertEqual(self.store.meta('opening_skip_counts'),{'book_skew':1})
+
+    def test_background_round_exception_invalidates_reference_set(self):
+        from tools.crossex_exec.engine import Engine
+        from types import SimpleNamespace
+        engine=Engine(self.store,SimpleNamespace(),SimpleNamespace(cross=None,bitget=None),clock=lambda:NOW)
+        self.addCleanup(engine.close)
+        engine.bases=('BTC',)
+        engine.market.baseline_quotes=lambda bases: {'binance':{'BTC':'100'},'bitget':{'BTC':'102'},'bybit':{'BTC':'100'}}
+        engine.refresh_baselines()
+        with patch.object(engine.market,'baseline_quotes',side_effect=ValueError('injected_failure')):
+            with self.assertRaises(ValueError):
+                engine.refresh_baselines()
+        self.assertEqual(engine.baseline.latest('BTC')['mids'],{})
 
     def test_api_skew_fields_keep_null_for_legacy_and_numeric_for_new_records(self):
         for render in (lambda p:position(p,[],NOW),lambda p:trade(p,[])):
