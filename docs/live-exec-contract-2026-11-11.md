@@ -176,3 +176,14 @@ legs 追加 raw_symbol/native_base/quantity_multiplier/mapping_id/native_qty/nat
 写入仅接受独立且不同于只读令牌的 CROSSEX_EXEC_ADMIN_TOKEN。未设置则没有写权限，同令牌配置拒绝启动 API。写 body 必须 Content-Type: application/json、Content-Length 1–8192 字节；拒绝重复长度头、Transfer-Encoding、重复 JSON 键、非法 UTF-8 与非对象。非法输入 400，未认证 401，只读令牌写 403，不支持方法 405，数据库不可用/繁忙 503。
 
 GET 使用独立只读连接，2 秒与 8 MiB 读取预算保留；写操作另开连接并原子提交。旧四个业务路由继续拒绝非 GET。管理请求不调用真实账户或交易接口。taoli1 转发的会话、CSRF 和私有令牌配置由另一任务实现。
+
+### 2026-11-12 管理写入并发条件增补
+
+本节取代上文无条件部分更新及空 `{}` 写请求的约定。依据用户本轮契约和只读核对的上游 `codex/crossex-exec-r8` 提交 `6fe888400a981f07277016a42a41ad08777d1e05`（`management.py`、`universe.py`）；仅同步本任务所需的并发字段，不引入其他轮次的账户管理接口。
+
+- `PUT /api/v1/config` 必须在顶层携带非负 JSON 整数 `expected_version`，不接受 bool、字符串或浮点表示；其余字段仍是非空参数部分更新。例如 `{"expected_version":2,"order_usd_max":30}`。上游在写事务内比较当前版本；不一致返回 HTTP 409、`{"error":"version_conflict","current_version":3}`。
+- `GET /api/v1/config/audit` 同时包含成功和冲突记录。冲突的 version 为当前版本、old/new 为 `{}`，并增加 `error:"version_conflict"`、expected_version、current_version；因此 version 不再是行的唯一标识。页面保留每条记录并明确显示“版本冲突，未更新”。
+- `GET /api/v1/universe` 每项新增 `status`，格式为 `u1:` 加 64 位小写十六进制摘要。它是上游生成的管理状态标识，覆盖人工决策及目录规则，行情轮询本身不改变它。前端只保存和原样回传，不自行根据类别或 excluded 重建。classify/exclude/unexclude 都必填 `expected_status`；排除请求示例 `{"expected_status":"u1:<64位摘要>"}`，分类请求在原 category/markets/underlying_market 旁添加同一字段。不一致返回 409、`{"error":"status_conflict","current_status":"u1:<当前摘要>"}`。
+- `GET /api/v1/mappings` 每项新增 `multiplier` **字符串**，表示按精确 market_key 排序的第一腿数量倍率除以第二腿数量倍率的规范化十进制值；它不是发现时原生价格比 `ratio`，也不是单腿的 quantity_multiplier。confirm/reject 都必填 `expected_status`（pending/confirmed/rejected）和 `expected_multiplier`（直接取该 GET 字符串）。例如 `{"expected_status":"pending","expected_multiplier":"1000"}`。不得转为 JavaScript Number、倒置两腿或本地重算。不一致返回 409、`{"error":"mapping_conflict","current_status":"rejected","current_multiplier":"1000"}`。
+- 缺少或格式不合规的预期字段返回 400。前端保存确认框打开时的值；随后轮询不能覆盖这份快照。409 时提示“数据已被其他人修改，请刷新后重新确认”，关闭旧确认、刷新管理数据，并要求重新打开确认框；不自动重发写请求。旧 GET 缺少必需状态/倍率时，页面仍可查看，相关写按钮禁用。
+- taoli1 后端对白名单新增以上字段，保留原有鉴权、CSRF、8192 字节和参数范围校验；合法 body 原样送到固定上游路径。上游 409 的状态及正文原样返回，不转为 detail/available 信封，也不转发上游响应头。成功及其他错误的原有行为不变。
