@@ -2,11 +2,9 @@
 
 独立的 Python 3.10+ 标准库服务，CrossEx 下单覆盖 Gate / Binance / Bybit / OKX / Aster，Bitget 使用 UTA v3。默认影子模式。此交付仅本地验证，没有部署、账户实测或实盘授权。
 
-第五轮已按 PM 决定完成本地验收：不变量 1 拆为 1a/1b/1c/1d，全部严格断言，2–7 保持原规则。三个固定种子各跑 2448 回合（2400 原随机回合加 48 覆盖回合），执行器 195 项和 fill-sim 158 项 unittest 全部通过。定义、原始汇总、各不变量计数及边界见交接文档“第五轮 PM 决定补充验收”；本地结果不代表实盘或部署验收。
+**当前状态：第七轮本地验收通过。** 已按用户批准使用非零 **5bp** 模拟器基准，执行器 270 项、fill-sim 158 项及三个种子各 2448 回合全部通过；保留 1a–1d、2–7 严格不变量和六类开仓拒绝的非空覆盖。此前 40bp 夹具造成的 8 项失败是已解决的历史记录，0bp 是未采用的历史提案。
 
-第六轮已完成本地验收：增加持久化常态价差基准、超额开平仓、每小时资金费 ×2h、亏损退出冷却及只读观测字段。执行器 229 项、fill-sim 158 项测试通过；三个原种子各 2448 回合保留全部严格不变量，并实际覆盖基准准入和冷却。当前规则与证据见交接文档“第六轮交付”。仅核实官方公开文档，没有请求真实行情或账户接口，没有部署。
-
-第七轮增加两腿盘口同时性与 v1“乌龙指”开仓准入，以及时间差、放弃原因计数。**整体验收尚未完成**：41 项新增测试通过，执行器全套 270 项有 8 项因旧模拟器 40bp 基准夹具被新上限 10bp 拒绝而失败；fill-sim 158 项通过。用户禁止修改旧断言，现保留 `baseline_at_open == 40`，等待允许将该夹具和对应期望改为 0；未绕过新准入条件。原始证据及下一步见交接文档“第七轮交付”。
+2026-11-12 **终审修复本地验收通过：执行器 289 项、fill-sim 158 项、三种子各 2448 回合全过**，新增 19 项专项。修复包含整对发送前持久化、提交后的最终年龄/硬风控复查、原子意图准备、运行期孤立意图恢复和有界历史读取，并同步独立归档部署布局。验收原文、提交及内存实测见 [交接文档“终审修复”](../../docs/task-handoff-2026-11-11-crossex-exec.md#终审修复2026-11-12)。历史各轮结果保留作证据；本地通过不代表 Linux 实机、账户或实盘验收。
 
 ## 入口
 
@@ -35,13 +33,13 @@ python3 -m tools.crossex_exec run --env-file /home/ubuntu/wubin/crossex-exec/cro
 | `baseline.py` | 六所批量买卖报价解析、6h 中位数/MAD、预热/结构性拉黑、无方向组合键和冷却条件 |
 | `policy.py` | Decimal 步长公倍数、100 USDT 复核、15bp 门槛、退出与熔断规则 |
 | `adapters.py` / `transport.py` | 两家签名、IOC、查单、撤单、分页成交、账户只读接口、限频与总超时 |
-| `execution.py` | 意图落库、发送、ACK、终态、未知结果、恢复；两腿并发 |
+| `execution.py` | 两腿 INTENT 原子准备；共享关口原子写 SENT、最终复查后并发发送；未知结果与孤立意图恢复 |
 | `accounts.py` | 持仓模式、3 倍杠杆、真实费率、保证金率及持仓归一化 |
 | `background.py` | 账户快照缓存与有界后台刷新线程；发送路径不读取私有网络接口 |
 | `limits.py` | 150/600/150 USD 硬上限、独立权益基线、每笔开仓发送前校验 |
 | `engine.py` | 触发、持仓管理、最多三次补平、60 秒对账、风险停开/全平 |
 | `stops.py` | 独立停开锁集合与按持仓归属的解除；`stop_reason` 仅为兼容展示 |
-| `storage.py` / `security.py` | SQLite WAL/FULL、事务、文件权限与脱敏 |
+| `storage.py` / `security.py` | SQLite WAL/FULL、整对事务、SQL 状态/订单筛选和 rowid 分页、文件权限与脱敏 |
 | `reporting.py` / `__main__.py` | 模拟与真实成交比较、CLI、300 秒 JSON 状态、即时 JSON 告警 |
 | `api.py` / `api_data.py` | 可选的鉴权只读 HTTP 服务、独立 SQLite 只读连接、契约字段投影和同事件 fill-sim 对照 |
 
@@ -100,7 +98,7 @@ python3 -m tools.crossex_exec run --env-file /home/ubuntu/wubin/crossex-exec/cro
 
 默认启动两个独立 IPv4 监听，直接绑定数字 IP，不执行标准库 HTTPServer 默认的反向 DNS 查询；本机没有 `172.18.0.1` 时记录 `api_bind_unavailable`，保留 `127.0.0.1`。地址配置仅接受上表中的两个地址，禁止 wildcard/公网/主机名和改端口。未配置 token 时记录 `api_disabled_no_token`，不创建监听或数据库读取器。绑定失败、请求异常、监听线程异常和日志异常均隔离，不修改执行状态。
 
-执行库及模拟库均采用 URI `mode=ro`、`query_only=ON` 和 SQLite authorizer：拒绝 DML、DDL、ATTACH 及关闭只读限制。执行库每次请求独立短事务快照，完成读取后立即关闭连接；不创建缺失数据库。每个监听只有一个 daemon 工作线程，全服务只允许一个数据查询，忙时立即返回 503；SQLite 等锁最多 50ms，读查询预算 2 秒、累计 JSON 输入预算 8 MiB。预算超限返回不可用，不截断统计后冒充完整结果；这是资源保护，不是 Linux 80M 内存或交易延迟验收。
+执行库及模拟库均采用 URI `mode=ro`、`query_only=ON` 和 SQLite authorizer：拒绝 DML、DDL、ATTACH 及关闭只读限制。执行库每次请求独立短事务快照，完成读取后立即关闭连接；不创建缺失数据库。每个监听只有一个 daemon 工作线程，全服务只允许一个数据查询，忙时立即返回 503；SQLite 等锁最多 50ms，读查询预算 2 秒、累计 JSON 输入预算 8 MiB。预算超限返回不可用，不截断统计后冒充完整结果；这是资源保护，不是 Linux 内存或交易延迟验收。summary 在 SQL 排除 SHADOW/SKIPPED；各接口逐仓读取相关订单，投影后释放历史订单与盘口，只保留响应/统计所需字段。
 
 字段口径：
 
@@ -131,10 +129,10 @@ python3 -m tools.crossex_exec run --env-file /home/ubuntu/wubin/crossex-exec/cro
 - 开仓冻结 `baseline_at_open/excess_at_open`；止盈阈值为当前可平仓价差 `≤baseline_at_open+excess_at_open/2`，持有中不追随新基准。反向 50bp、浮亏 1%、2h、结算前 5 分钟、陈旧盘口退出规则保留。升级前缺快照的旧持仓保留原来半价差退出规则，API 不伪造历史基准。
 - `stop_loss/max_hold/pre_funding/stale/one_leg` 退出且完整已知净收益 <0 时，按无方向币种/交易所组合冷却至 `closed_at+24h`。关闭记录与冷却在同一个 SQLite 事务落盘；重复刷新、延迟记账和重启不延长截止时间。盈利、零收益、正常止盈及熔断退出不触发；收益未知时继续由既有记账停开锁保护，确认后再写冷却。冷却在复核前及共享发送关口均检查，拒绝原因为 `pair_cooldown`。
 - 不足 24h 资金费历史覆盖、历史有缺口、资料过期或倍率/代码不一致都不交易。OKX 成交额使用基础币成交量 × 24h 最低价的保守下界。
-- 意图及两腿 client ID 先持久化，限频与建连后、实际请求前写 `SENT`。超时/5xx/重复 ID 先查原单；**不会自动重发未知结果**。CrossEx text 查不到已终结订单不是未下单的证据。
+- 两腿意图及 client ID、对应事件在同一事务持久化，任一准备失败全部回滚。开仓两腿完成限频与建连后到达共享关口：原准入复核 → 两腿 `SENT` 及事件原子提交 → 重新检查硬风控、停开状态和最终盘口年龄 → 同时释放发送线程。最后复查后不再写库或重拉；1.01s 慢提交使整对拒发，1.00s 等号仍放行。超时/5xx/重复 ID 先查原单；**不会自动重发未知结果**。CrossEx text 查不到已终结订单不是未下单的证据。
 - 影子模式从协调器和传输层双重禁止下单/撤单。影子意图不伪造成已成交持仓，不产生实盘收益；报告分开展示。
 - 订单确认默认每 200ms 查询，最多 10s（限频可延迟查询）；超时保留 `UNKNOWN` 和敞口。成交记录延迟则保留 `accounting_pending`，60s 再补拉，不用 ACK 价格代替成交价。
-- 恢复先查原单，再撤仍未确认的订单并复查，随后通过独立的 `Accounts.position_snapshot` 读取两腿实仓；此路径不依赖账户余额或 settings 检查。每次 tick 检查 SENT/ACK/UNKNOWN，即使 pair 状态或跟踪时间尚未更新也恢复；启动先将从未发出的 INTENT 转成 UNSENT。未知单不重发，未确认时即使远端暂时为空也不报 HALTED。
+- 恢复先查原单，再撤仍未确认的订单并复查，随后通过独立的 `Accounts.position_snapshot` 读取两腿实仓；此路径不依赖账户余额或 settings 检查。每次 tick 检查 SENT/ACK/UNKNOWN，即使 pair 状态或跟踪时间尚未更新也恢复。启动及运行期只将没有执行线程持有、且仍为 INTENT 的记录转成 UNSENT；正在等待发送关口的意图不被清理。崩溃后留下的 SENT/UNKNOWN 必须查原单，绝不作为未发送意图清理；未确认时即使远端暂时为空也不报 HALTED。
 - `remaining` 始终为成交累计的本地流水，`remote_remaining/remote_captured_at` 单独记录远端数量。减仓每轮读取实仓并按其限量，远端数据不覆盖流水。旧 `position_anchor` 只迁移到远端字段，不再用于重建流水；成交/费用未记齐时不推进对账解锁，迟到成交不会导致重复平仓。已关闭历史不接受新持仓的远端快照。
 - SENT 提交失败则不发送，状态退为 UNSENT；发送之后的 UNKNOWN/ACK/成交状态写失败保留在内存待写集合，下一轮重试持久化，开仓门同时检查待写集合。两腿共享放行后先完成各自发送，再并发确认，避免一腿的确认故障在另一腿发送期间提前触发恢复。
 - 单腿补平一轮最多三笔，额外容差依次为 13/23/33bp，进度持久化。先读两腿真实持仓，每次只发送一笔减仓；确认成交并重读两腿持仓后，重新计算下一笔。优先按本腿步长向下取整；不足一步时，只有单独执行粗步长也能严格缩小裸露量才采用，不能依赖另一腿未来成交。零成交、裸露量未变小、读不到持仓或没有合法减仓量时，记录 `UNHEDGED`、持久化 `repair_stopped` 并停开；停止当前轮次后，后续 tick 按退避进入退出恢复，继续减掉剩余仓位。所有订单仍校验本腿最小数量、名义额、最大量和 tick。
@@ -162,6 +160,28 @@ python3 -m tools.crossex_exec run --env-file /home/ubuntu/wubin/crossex-exec/cro
 
 ## 部署模板（本次未安装）
 
-`deploy/crossex-exec.service` 使用用户 `ubuntu`、代码目录 `/home/ubuntu/wubin/taoli1`、私有配置 `/home/ubuntu/wubin/crossex-exec/crossex-exec.env`、状态目录 `/home/ubuntu/wubin/crossex-exec/var`，设置 `MemoryMax=80M`、`Restart=on-failure`、`RestartSec=10`、`StartLimitIntervalSec=0`、`UMask=0077`。配置目录和文件应仅由服务用户读取，文件模式必须 0600。没有 systemd `EnvironmentFile`，由应用自己打开文件验证权限。安装前需确认实际代码位置、创建 var 目录并核对所有者；`ProtectHome=read-only` 配合只允许 var 写入，本次没有安装或启动模板。
+独立目录为 `/home/ubuntu/wubin/crossex-exec`。模板使用 `User=ubuntu`、`Group=ubuntu`；`WorkingDirectory` 就是此目录，`ExecStart=/usr/bin/python3 -m tools.crossex_exec run --env-file /home/ubuntu/wubin/crossex-exec/crossex-exec.env`。env、SQLite、STOP、锁文件及 `ReadWritePaths` 均使用该目录下的既有布局。保留 `Restart=on-failure`、`RestartSec=10`、`StartLimitIntervalSec=0`、`UMask=0077`。
 
-实际安装、Linux 80M 内存验收、账户核对、24h 影子验收及开实盘开关均留待新任务。详细证据、接口 URL 和未确认事项见 [交接文档](../../docs/task-handoff-2026-11-11-crossex-exec.md)。
+以后单独授权部署时，按固定提交归档，包内必须同时包含两个模块，保留顶层 `tools/`：
+
+```sh
+# 在发布 checkout 中，用已经验收的完整提交号替换 <FULL_SHA>。
+git archive --format=tar --output=crossex-exec.tar <FULL_SHA> tools/crossex_exec tools/fill_sim
+
+# 将归档放到目标机器后，在独立目录解包；不要改变 tools/ 层级。
+sudo install -d -o ubuntu -g ubuntu -m 0750 /home/ubuntu/wubin/crossex-exec
+sudo -u ubuntu tar -xf /path/to/crossex-exec.tar -C /home/ubuntu/wubin/crossex-exec
+sudo install -d -o ubuntu -g ubuntu -m 0700 /home/ubuntu/wubin/crossex-exec/var
+cd /home/ubuntu/wubin/crossex-exec
+sudo -u ubuntu /usr/bin/python3 -m tools.crossex_exec --help
+```
+
+首次配置才从 `tools/crossex_exec/deploy/crossex-exec.env.example` 创建 `crossex-exec.env`；已有配置保留。由 `ubuntu` 持有，文件权限必须 **0600**，目录只向需要的服务用户开放。没有 systemd `EnvironmentFile`，应用自己打开文件验证权限。初始 `CROSSEX_LIVE_ENABLED=0`、空白名单不产生开仓意图；`BITGET_RISK_RATE_CONFIRMED` 和真实费率等仍按原验收要求处理。代码依赖 `tools/fill_sim`，但不要求启动 fill-sim 服务；`FILL_SIM_DB` 只是可选对照库。
+
+确认配置、资源和只读账户访问已获授权后，才安装 `tools/crossex_exec/deploy/crossex-exec.service` 到 `/etc/systemd/system/`，执行 `systemctl daemon-reload` 并启动影子服务。`run` 即使 LIVE=0 也会读取鉴权接口，本次未执行这些步骤。`ProtectHome=read-only` / `ProtectSystem=strict` 仅放行 `var` 写入；`PYTHONDONTWRITEBYTECODE=1` 避免在代码目录写缓存。
+
+内存建议：模板暂设 **`MemoryMax=192M`**，用于后续影子实机验收。Windows 离线探针含 2000 条 SHADOW 历史、4000 订单、每腿每侧 50 档：活动仓位零结果的 Python 分配峰值由 **92.06 MiB 降至 0.0022 MiB**；完整分页遍历仓位/订单分别约 **0.72/0.20 MiB**；增加三条活动仓位后查询约 **0.16 MiB**，探针进程峰值工作集约 **41 MiB**。复现：`python -m tools.crossex_exec.tests.memory_probe`。相对约 500MB 可用余量，192MiB 留出约 300MB 给宿主机与其他服务；它是有余量的起始建议，不是 Linux RSS 上限证明。原 80M 没有完整负载验收依据，不再使用。
+
+运行路径按 SQL 筛选活动仓位、pair ID、非终态/待记账状态和最近发送窗口；历史按仓位 64 条、订单 128 条的 rowid 页读取，聚合保留 Decimal 口径，不丢历史亏损、敞口或未确认订单。`all_orders()` 只保留为显式物化导出兼容入口，运行期不调用。只读 API 仍保留 2 秒/8MiB 预算，过量历史返回不可用，不将部分结果冒充完整统计。
+
+实际安装、Ubuntu/Python 3.10/SQLite 3.37、systemd 权限和 cgroup 内存、实际白名单/API 查询并发下的 24h 影子验收、账户核对及开实盘开关均留待新任务。届时记录 `MemoryCurrent/MemoryPeak`、OOM/重启、主机剩余内存及跟踪延迟；自动重启不代表仓位管理连续性。详细证据见 [交接文档](../../docs/task-handoff-2026-11-11-crossex-exec.md)。
