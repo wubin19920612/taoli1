@@ -150,6 +150,121 @@ except ValueError as e:
             self.assertEqual(body['current_multiplier'], '10000')
         self.assertEqual(self.events('MAPPING_CHANGED'), [])
 
+    def compete(self, requests):
+        script = '''import json,sys
+from tools.crossex_exec.management import Management
+print('ready',flush=True)
+sys.stdin.readline()
+try:
+    route,body=json.loads(sys.argv[2])
+    print(json.dumps({'ok':Management(sys.argv[1]).write(tuple(route),body)}))
+except ValueError as e:
+    print(json.dumps({'error':str(e)}))
+'''
+        processes = [subprocess.Popen([sys.executable, '-c', script, str(self.path), json.dumps(request)],
+                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                     for request in requests]
+        try:
+            for process in processes:
+                self.assertEqual(process.stdout.readline().strip(), 'ready')
+            for process in processes:
+                process.stdin.write('go\n')
+                process.stdin.flush()
+            results = []
+            for process in processes:
+                out, err = process.communicate(timeout=15)
+                self.assertEqual(process.returncode, 0, err)
+                results.append(json.loads(out))
+            return results
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate()
+
+    def test_mapping_competing_processes_have_one_decision_and_one_conflict(self):
+        row = self.manager.get('mappings')[0]
+        results = self.compete([(('mappings', row['id'], action),
+                                 dict(expected_status=row['status'], expected_multiplier=row['multiplier']))
+                                for action in ('confirm', 'reject')])
+        self.assertEqual(sum('ok' in r for r in results), 1)
+        self.assertEqual([r['error'] for r in results if 'error' in r], ['mapping_conflict'])
+        self.assertEqual(len(self.events('MAPPING_CHANGED')), 1)
+        self.assertEqual(len(self.events('MAPPING_CONFLICT')), 1)
+
+    def test_universe_competing_processes_have_one_decision_and_one_conflict(self):
+        row = self.universe_row()
+        results = self.compete([(('universe', 'SHIB', action), dict(expected_status=row['status']))
+                                for action in ('exclude', 'unexclude')])
+        self.assertEqual(sum('ok' in r for r in results), 1)
+        self.assertEqual([r['error'] for r in results if 'error' in r], ['status_conflict'])
+        self.assertEqual(len(self.events('UNIVERSE_CHANGED')), 1)
+        self.assertEqual(len(self.events('UNIVERSE_CONFLICT')), 1)
+
+    def test_discovery_serializes_with_a_cross_process_admin_decision(self):
+        row = self.manager.get('mappings')[0]
+        script = '''import sys
+from tools.crossex_exec.management import Management
+print('ready',flush=True)
+sys.stdin.readline()
+print('writing',flush=True)
+Management(sys.argv[1]).write(('mappings',sys.argv[2],'confirm'),{'expected_status':'pending','expected_multiplier':'1000'})
+print('committed',flush=True)
+'''
+        process = subprocess.Popen([sys.executable, '-c', script, str(self.path), row['id']],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        original = self.store.meta
+        seen = []
+        def observe(key, *args):
+            result = original(key, *args)
+            if key == 'symbol_mappings':
+                seen.append(key)
+                self.assertEqual(process.stdout.readline().strip(), 'ready')
+                process.stdin.write('go\n')
+                process.stdin.flush()
+                self.assertEqual(process.stdout.readline().strip(), 'writing')
+                # Another process has its own Python locks. SQLite must hold it
+                # until discovery has committed its old pending observation.
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    process.wait(timeout=.15)
+            return result
+        try:
+            with patch.object(self.store, 'meta', side_effect=observe):
+                Universe(self.store).discover()
+            out, err = process.communicate(timeout=15)
+            self.assertEqual(process.returncode, 0, err)
+            self.assertIn('committed', out)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+        self.assertEqual(seen, ['symbol_mappings'])
+        self.assertEqual(self.store.meta('symbol_mappings')[row['id']]['status'], 'confirmed')
+
+    def test_mapping_freshness_and_success_audit_rollback_are_preserved(self):
+        service = self.start()
+        row = self.manager.get('mappings')[0]
+        original = Store.event
+        def fail(store, kind, *args, **kwargs):
+            if kind in ('MAPPING_CHANGED', 'UNIVERSE_CHANGED'):
+                raise OSError('private-audit-error')
+            return original(store, kind, *args, **kwargs)
+        universe = self.universe_row()
+        with patch.object(Store, 'event', fail):
+            self.assertEqual(self.write(service, dict(expected_status=row['status'], expected_multiplier=row['multiplier']),
+                                       '/api/v1/mappings/'+row['id']+'/confirm', 'POST')[0], 503)
+            self.assertEqual(self.write(service, {'expected_status': universe['status']},
+                                       '/api/v1/universe/SHIB/exclude', 'POST')[0], 503)
+        self.assertEqual(self.store.meta('symbol_mappings')[row['id']]['status'], 'pending')
+        self.assertEqual(self.universe_row()['status'], universe['status'])
+        self.assertEqual(self.events('MAPPING_CHANGED'), [])
+        self.assertEqual(self.events('UNIVERSE_CHANGED'), [])
+        stored = self.store.meta('symbol_mappings')
+        stored[row['id']]['at'] = time.time()-301
+        self.store.set_meta('symbol_mappings', stored)
+        self.assertEqual(self.write(service, dict(expected_status=row['status'], expected_multiplier=row['multiplier']),
+                                   '/api/v1/mappings/'+row['id']+'/confirm', 'POST')[0], 400)
+
     def test_universe_requires_status_for_every_action_and_rejects_stale_snapshot(self):
         service = self.start()
         old = self.universe_row()
