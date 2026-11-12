@@ -15,6 +15,7 @@ from .adapters import CrossEx, Bitget
 from .accounts import Accounts
 from .market import MarketData
 from .engine import Engine
+from .background import exception_details
 from .limits import DEFAULT_VAR, DEFAULT_ENV
 from .reporting import report
 from .api import start_api
@@ -22,8 +23,24 @@ from .equity import EquityAdmin
 from tools.fill_sim.network import ShadowAPI
 
 
+FATAL_REASON = 'startup_or_runtime_failed_closed'
+
+
 def emit(kind,**fields):
     print(json.dumps(REDACTOR.clean(dict(kind=kind,at=time.time(),**fields)),allow_nan=False),flush=True)
+
+
+@contextmanager
+def fatal_events(store):
+    """Persist before Store closes; journal failure must not replace the cause."""
+    try:
+        yield
+    except Exception as error:
+        try:
+            store.event('FATAL',dict(reason=FATAL_REASON,**exception_details(error)))
+        except Exception:
+            pass
+        raise
 
 
 @contextmanager
@@ -221,7 +238,7 @@ def main(argv=None):
     import fcntl
     with open(str(path)+'.lock','a',encoding='utf-8') as process_lock:
         fcntl.flock(process_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        with Store(path) as store:
+        with Store(path) as store, fatal_events(store):
             store.assert_startable()
             cross=CrossEx(Transport('gate',Credentials(config.get('CROSSEX_API_KEY',''),config.get('CROSSEX_API_SECRET','')),live=live),
                           config.get('CROSSEX_POSITION_MODE','DUAL'))
@@ -277,10 +294,14 @@ def main(argv=None):
                 market.close()
 
 
-if __name__=='__main__':
+def entrypoint(argv=None):
     try:
-        sys.exit(main())
-    except Exception:
+        return main(argv)
+    except Exception as error:
         # No traceback with credentials, exchange text, headers or env content.
-        emit('fatal',reason='startup_or_runtime_failed_closed')
-        sys.exit(1)
+        emit('fatal',reason=FATAL_REASON,**exception_details(error))
+        return 1
+
+
+if __name__=='__main__':
+    sys.exit(entrypoint())

@@ -19,6 +19,14 @@ def exception_location(error):
     return module+':'+str(trace.tb_lineno)
 
 
+def exception_details(error):
+    """Allowlisted metadata only; never stringify an exception or its chain."""
+    kind = type(error).__name__
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,199}', kind):
+        kind = 'unknown'
+    return dict(error_type=kind, location=exception_location(error))
+
+
 class SnapshotCache:
     def __init__(self, clock=time.time, store=None):
         self.clock=clock

@@ -17,8 +17,8 @@ NULL_TERMINAL_ENDPOINTS = frozenset(('/api/v3/account/financial-records',))
 def page_rows(data, endpoint, *, cursor, limit):
     """Parse successful Transport data; do not turn malformed data into zero.
 
-    The financial-records null/null terminal is observed on the shadow account.
-    Other history schemas document arrays and have no verified null exception.
+    UTA empty arrays with explicit null cursors are observed terminal pages.
+    Only financial-records has an observed null LIST/null cursor exception.
     Transport must validate the outer success code BEFORE returning this data.
     """
     if cursor and (not isinstance(data,dict) or 'list' not in data):
@@ -31,6 +31,8 @@ def page_rows(data, endpoint, *, cursor, limit):
         raise ValueError('response_list_invalid')
     if not cursor:
         return batch, None
+    if not batch and 'cursor' in data and data['cursor'] is None:
+        return batch, ''
     if 'cursor' not in data or not isinstance(data['cursor'],str):
         raise ValueError('cursor_missing_or_invalid')
     following=data['cursor']
