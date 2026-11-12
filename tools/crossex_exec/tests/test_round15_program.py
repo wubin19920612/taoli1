@@ -98,6 +98,14 @@ class ProgramLifecycleTests(unittest.TestCase):
         w.advance()
         self.assertTrue(w.store.meta('external_income')['verified'])
 
+    def test_fractional_wall_clock_epoch_uses_the_ledger_millisecond_boundary(self):
+        w=self.world()
+        w.now += .123456
+        w.engine.rebaseline(confirm=True,reason='fractional_clock',source='cli')
+        w.advance()
+        self.assertTrue(w.store.meta('external_income')['verified'])
+        self.assertTrue(w.engine.can_open())
+
 
 class ProgramSimulationTests(unittest.TestCase):
     def test_default_program_three_seeds(self):
