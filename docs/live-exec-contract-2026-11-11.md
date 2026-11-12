@@ -711,3 +711,28 @@ Transport 先验证 HTTP 和 Bitget 外层 `code="00000"`，之后才解析 data
 **网络读取仍完整覆盖原窗口。** 查阅的历史接口没有可用于证明旧页未变化的版本、摘要或删除游标；单纯只拉最新时间段会漏掉旧流水撤回。为满足“不降低风控”，本轮实现计算/写入缓存，未实施纯追加网络拉取或降低旧窗口复核频率。所有历史失败、缓存失效、流水消失/改写与迟到回填仍走原停开条件。若后续要求减少历史网络请求，须先获得可证明历史完整性的独立机制，不能只缩短窗口。
 
 资源数字只作为指定本地合成负载的实测，不能替代线上 f559f95 的 CPU、Linux RSS、systemd 或持续影子验收。现有 service 的 `MemoryMax=192M` 本轮不调整；测量和剩余验收边界见第十七轮交接。
+
+## 第十八轮增补（2026-11-12）
+
+### 分页终止与续读
+
+本节更新第十七轮空页约定。Bitget Transport 必须先验证 HTTP 成功和 `code="00000"`，才能把 data 交给解析器。四个分页接口为 unfilled-orders、trade/fills、history-position、financial-records。
+
+| data 形态 | 处理 |
+|---|---|
+| `list=[],cursor=null`，两个键完整 | 四个接口均正常结束 |
+| `list=[],cursor=""` | 保留正常结束 |
+| 非空数组（满页或短页）+非空字符串 cursor | 继续读取，游标不得重复 |
+| 短非空数组+`cursor=""` | 保留正常结束 |
+| `list=null,cursor=null`，两个键完整 | 仅 financial-records 正常结束，保持已核实的接口范围 |
+| 缺键、null data、非列表、布尔/数字/对象游标、空页带非空游标、满页无游标、非空页+null 游标 | 仍拒绝，不返回部分成功 |
+
+分页数量、总行数、截止时间、完整历史窗口、跨段/跨页唯一 ID、账户新鲜度和资金费证明保持原约束。`Bitget.paged` 的活动订单/单笔成交读取仍最多 20 页；共享 history 的账户历史读取仍受 1024 请求/250000 行/8 秒预算限制。CrossEx account_book、history_trades、history_positions 和单笔 fills 仍使用顶层数组及页码：满页继续，短页/空数组结束；open_orders 仍要求完整顶层数组。正成交必须核对实际数量、费用、币种和原始市场身份，空页不代表正成交费用为零。
+
+公开文档核实：[Bitget 活动订单](https://www.bitget.com/legacy-docs/uta/trade/Get-Order-Pending)、[成交](https://www.bitget.com/legacy-docs/uta/trade/Get-Order-Fills)、[历史仓位](https://www.bitget.com/legacy-docs/uta/trade/Get-Position-History)定义按返回游标续读；[CrossEx](https://www.gate.com/docs/developers/crossex/)定义顶层数组和 page/limit。明确 null 形态依据用户本轮实测报告，不冒称文档提供 null 终止示例，也没有进行真实鉴权复测。
+
+### 致命故障的安全诊断
+
+CLI 保留 `reason=startup_or_runtime_failed_closed` 和退出码 1；标准输出 `kind=fatal` 增加 `error_type`（异常类名）及 `location`（最内层模块:行号）。在数据库已打开且可写时，同一诊断在关闭前落为 `FATAL` 事件，value 仅含 reason/error_type/location。类型/模块名经过字符及长度校验，无 traceback 时 location 为 `unknown:0`。
+
+从不格式化异常正文或异常链，不记录源码、绝对路径、局部变量、响应体、账户数据、请求头或游标。若数据库未能打开或 FATAL 写入失败，仍输出原异常的安全诊断并退出 1；不保证不可写数据库中存在事件。现有可恢复周期告警与后台工作线程的处理语义保持。

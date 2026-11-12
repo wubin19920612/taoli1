@@ -1394,3 +1394,65 @@ $py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d
 用户报告的线上影子仍记为 `f559f95`；本轮未读取或更改实际线上 HEAD，未 push、备份或部署。没有接触线上数据库/密钥。Temp 保留全部离线日志和度量，未清理旧产物；新测试的临时 SQLite 由自身 fixture 清理。最终提交只包含本轮源码、四个新增测试/负载文件及五个文档文件，无整库、秘密或无关未跟踪文件。
 
 本轮本地代码与验证完成，**纯追加网络读取和线上资源验收未完成**，原因及保守选择见 C。后续请在新任务进行独立终审；获准线上只读/持续影子验证后，再确认完整服务的 CPU/RSS、实际空页行为及升级旧库停开状态。无法取得旧日界/来源证据时继续停开，不通过人工改 marker 放行。发布、解除旧停机锁和实盘需另有明确授权。
+
+## 第十八轮
+
+### 范围、基线与本地提交
+
+指定 worktree `C:/Users/wubin/Desktop/code/codex/taoli1/.worktrees/crossex-exec-r8`，分支 `codex/crossex-exec-r8`，起始 HEAD `4e75e5df6ede95c69e3da378d4b71334b1140913`，起始工作区干净。范围仅包括真实分页响应、致命异常安全定位及完整生命周期离线冒烟。用户报告 4e75e5d 影子启动即崩溃、systemd 重启 12 次，已回退 f559f95；本轮没有读取或修改线上状态。
+
+| 类型 | 提交 | 内容 |
+|---|---|---|
+| test | `c2aa306` | 真实形态合成夹具、所有分页入口、真实 Accounts/Engine 生命周期及致命诊断先红测试 |
+| feat | `bb6cbf4` | 空数组+null 游标兼容、FATAL 落库和安全标准输出 |
+| docs | 本节所在独立提交 | 第十八轮交接、追加契约、README、下一任务及验收 JSON；自身 hash 用 git log 获取 |
+
+**当前尚未满足“双版本 unittest 全过”：有且仅有一处旧测试要求与本轮新需求直接冲突，等待用户明确是否允许修正该旧反例。** 旧测试未改，未跳过或过滤 discover；不得把以下 625/626 结果表述为全过。异步确认已发出，未把未回复当作批准。
+
+### 根因与分页修复
+
+用户 traceback 与本地红灯一致：`Engine.startup → Accounts.validate_startup → Bitget.open_orders → paged → page_rows`。第十七轮将 fills/unfilled-orders 统一接入严格分页解析后，原先按空短页直接返回的 `list=[],cursor=null` 被字符串类型检查拒绝；第十六轮 history 读取也有相同的空数组/null 游标缺口。此前 fake 账户的 validate_startup 直接返回快照，或使用 `cursor=""`，没有覆盖这个实际启动路径。
+
+`history.py:page_rows` 只新增“已验证数组为空、cursor 键存在且明确为 null”终止分支，供四个 UTA 分页入口共用；无需改动 `adapters.py` 的业务路径。financial-records 的成功响应 `list=null,cursor=null` 继续保持原接口限定，不外推其他接口的 null 列表。Transport 仍先验证 HTTP 与成功 code。非空页/null 游标、空页/非空游标、缺键、错误类型、满页无游标、重复游标、预算用尽均拒绝。
+
+新增 `round18_fixtures.py` 按用户 2026-11-12 报告提供四个响应形态：unfilled-orders 空数组/null；fills 与 history-position 各 100 条/字符串 cursor；financial-records null/null。只有形态来自报告，所有记录、ID、游标和账户金额均合成，不保存真实账户内容。
+
+- 四个 Bitget 接口分别验证第一页空终止、满页续读、短页非空游标连续两页后终止、短页空字符串终止、请求 category/limit/orderId/时间窗口保留、重复游标及耗尽预算。正成交遇空明细仍拒绝；费用仍精确核对。
+- localhost 真 Transport 验证成功码、缺失 code/data、非成功 code 和 HTTP 403。无真实鉴权；仅测试凭据签名发送到受 DNS/socket 守护的 127.0.0.1。
+- CrossEx account_book/history_trades/history_positions/单笔 fills 验证满 1000 条后按页码续读、短页/空页结束；open_orders 验证完整顶层数组。全部拒绝 null、对象及 Bitget 包装结构。
+- 第十六、十七轮的短页 cursor 逻辑保留并经正反测试覆盖。1024 请求/250000 行/8 秒历史预算、订单读取 20 页上限、30 天分段、账户新鲜度、重复 ID、现金/资金费来源和日界证明均未变。
+
+本轮只读核实官方 [Bitget 活动订单](https://www.bitget.com/legacy-docs/uta/trade/Get-Order-Pending)、[成交](https://www.bitget.com/legacy-docs/uta/trade/Get-Order-Fills)、[历史仓位](https://www.bitget.com/legacy-docs/uta/trade/Get-Position-History)的游标参数，以及 [CrossEx](https://www.gate.com/docs/developers/crossex/) 顶层数组/page/limit。financial-records 旧文档页本轮访问失败，替代旧地址重定向到无关账户设置页，未当作新证据。null 形态依据用户实测，不宣称这些文档明确承诺 null 终止语义。
+
+### 致命诊断与完整生命周期
+
+`background.py:exception_details` 复用已有最内层 `exception_location`，返回校验过的 error_type/location，完全不调用异常 str/repr、不遍历异常链。`__main__.py:entrypoint` 保留失败退出 1 和原 reason，fatal JSON 加两个字段；`fatal_events` 在已打开 Store 关闭前写同字段的 FATAL 事件。数据库未打开或事件写入失败时仍输出原异常定位，不让写事件异常覆盖原故障。可恢复 tick 告警、后台异常及风控语义不改。
+
+`test_round18_lifecycle.py` 两条正向冒烟分别运行真实 Engine 的 startup → tick → finish_shutdown → close，以及真实 CLI 循环的模拟 SIGTERM 停机。真实 Accounts、CrossEx/Bitget 适配器、三个后台线程、文件 SQLite、程序收益核验和停机分类均参与；仅替换远端 I/O、公共行情及 Windows 不具备的 POSIX 锁/信号操作。验证 activity.complete、收益/资金费证明、程序和整户为空、退出 0、实际 tick 执行、线程退出和重开数据库后停机状态仍在。没有 mock validate_startup、跳过 startup 或用内存库代替文件库。
+
+负向测试包括畸形活动订单启动失败、运行循环致命失败、FATAL 写入失败、打开数据库前失败及异常正文不可格式化/携带异常链。验证日志与事件只含白名单字段、异常类型/最内层模块及精确行号，失败退出 1且无订单。此冒烟覆盖离线启动集成；不等同 Linux/systemd、真实账户权限、真实 SIGTERM、API 服务或实盘验收。
+
+### TDD、全量结果与唯一待确认冲突
+
+所有实现修改之前先跑新增测试，第二份独立红灯为 **18 项、22 errors（含 subTest）**；真实 startup 冒烟准确失败于 adapters.py 的 invalid_response。运行期故障用旧已接受的空字符串游标隔离分页问题，确认独立触达 RuntimeError。实现后新增 18 项在 Python 3.12.10 和指定 3.10.20 均通过，耗时 1.987s/2.055s。红灯、专项和全量日志及 SHA-256 见[验收 JSON](crossex-exec-r18-validation-2026-11-12.json)。
+
+| 解释器 | 执行器全量 discover | fill-sim 全量 discover |
+|---|---|---|
+| Windows Python 3.12.10 | 626 项 / 230.772s / 1 failure | 158 项 / 32.817s / OK |
+| 指定 Windows Python 3.10.20 | 626 项 / 244.853s / 1 failure | 158 项 / 33.500s / OK |
+
+两个版本唯一失败均为 `test_round17_history.EmptyHistoryTests.test_financial_null_requires_both_keys_and_exact_terminal_shape` 的 `value={'list': [], 'cursor': None}` 子用例：旧要求抛 APIError，新需求要求正常结束。不能同时保持此反例语义和实现新需求。已请求仅把这一处过时反例迁为正例，保留其余畸形/风控断言；**尚未修改该文件**。确认后只需单独 test 提交修正该输入的预期，并重跑双版本完整执行器 discover；fill-sim 本轮已有完整通过结果。
+
+原 **57 个 Python 测试/夹具文件逐字未变**（规范 CRLF 比较），**2,791 个断言、1,353 个类/函数定义**均保留。两版均完整运行并通过原 5 项真实文件 SQLite 跨进程测试。两套模拟器均通过：旧三种子 20261111/20261112/20261113 各 2712 回合、N=1、十项不变量 checks 各 2712 且 exercised 非零；默认 program 三种子各 12 场景，原 8 次开平仓、4 次明确拒单、8 次资金费延迟、20 次重启、40 次发送检查保留。完整 12 份种子统计入验收 JSON。
+
+110 个 Python 文件通过 3.10 语法解析，git diff --check 通过，接口契约仅追加。实施后自行审查分页拒绝分支、致命事件写入时机、脱敏和冒烟覆盖；没有调用子代理，不把自审称为独立终审。未测 CPU/RSS，未改变 MemoryMax、风控阈值、资金费证明、UNKNOWN 处理、外仓禁单或任何旧锁。
+
+复现命令仍为项目根目录 `python -m unittest discover -s tools/crossex_exec/tests -v` 和 `python -m unittest discover -s tools/fill_sim/tests -v`；3.10 使用用户指定的 `C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe` 执行相同参数。未过滤失败测试。
+
+### 交付边界与接续
+
+本轮只做本地 test/feat/docs 提交，显式暂存任务文件，提交关闭 hooks/GPG；父仓库 worktree 索引写入使用已授权本地提交的扩展权限，无自动审批拒绝。未 push、SSH、WSL、amend、真实鉴权、线上备份或部署。线上当前版本仅按用户报告记为回退 f559f95，未独立核实。
+
+Temp 保留红绿灯、双版本全量日志；新测试临时数据库由自身 fixture 清理，没有删除旧诊断、WIP 或其他任务产物。最终仓库只包含本轮提交，无新未跟踪整库或凭据。
+
+接续先取得上面单一测试冲突的明确决定并完成全量绿灯，之后再做独立终审。线上只读/影子发布应在新任务另行授权，先备份并验证真实空账户启动和持续运行；不要直接部署当前尚有测试冲突的交付，不通过删库、改证明、解锁或降低风控恢复服务。后续页面或其他模块另建任务。

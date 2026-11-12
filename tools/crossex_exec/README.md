@@ -320,3 +320,11 @@ USDT/USD 保留原报告口径。全户硬风控、任何正负债停开并告�
 本地真实 Engine/SQLite/适配器账户负载（21,001 条流水、12,863 条目录、3 笔外仓、2,048 条模拟签名）65 秒稳态平均单核 CPU **19.733%**，最大稳态 RSS **108.27 MB**。这是离线账户负载，未覆盖真实网络、全部公共市场 worker、并发 API 或 Linux/systemd；不是线上完整服务资源验收。MemoryMax 192M 保留，后续需获授权测实际影子峰值与稳态。
 
 Python 3.12/指定 3.10 各执行器 **608 项**、fill-sim **158 项**，含五项跨进程与两套三种子模拟器全过；原 53 个测试/夹具文件逐字未变，2,731 个断言保留，契约只追加。详见[交接](../../docs/task-handoff-2026-11-12-crossex-exec-r8.md#第十七轮)、[新增契约](../../docs/live-exec-contract-2026-11-11.md#第十七轮增补2026-11-12)、[验收 JSON](../../docs/crossex-exec-r17-validation-2026-11-12.json)。仅本地 test/feat/docs 提交，无 push/SSH/WSL/amend/真实鉴权/部署。
+
+## 第十八轮：真实空页、致命诊断和启动冒烟
+
+Bitget 四个分页接口共同接受结构完整的 `list=[],cursor=null` 终止页，保留 `cursor=""` 兼容；满页或短页的非空字符串游标继续读取。仅 financial-records 继续允许已有实测证据的 `list=null,cursor=null`。其他 null 列表、缺键、错误类型、空页带后续游标、满页无游标、重复游标和预算耗尽仍拒绝。CrossEx 保持顶层数组与页码分页。
+
+CLI 启动/运行致命异常退出 1，`fatal` JSON 和可写数据库内的 `FATAL` 事件增加 `error_type` 与 `location`（模块:行号）。不输出异常正文、调用栈、源码、路径或局部变量；数据库未打开/无法写入时仍保留安全标准输出，不让记录失败替换原异常。
+
+`test_round18_lifecycle.py` 用真实 Engine、Accounts、适配器、后台线程和文件 SQLite 运行 startup → tick → finish_shutdown → close，并覆盖 CLI 的模拟 SIGTERM 路径。仅替换远端 I/O、公共行情及 Windows 不提供的 POSIX 锁/信号操作；不使用假的 validate_startup 返回值。形态夹具来自用户 2026-11-12 报告，所有行、游标和账户值均为合成数据。完整结果、旧测试冲突处理及线上边界见[第十八轮交接](../../docs/task-handoff-2026-11-12-crossex-exec-r8.md#第十八轮)。
