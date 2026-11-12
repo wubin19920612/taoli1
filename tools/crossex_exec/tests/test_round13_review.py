@@ -245,6 +245,15 @@ def real_accounts(now, debt='0', gate_debt='0'):
 
 
 class LiabilityTests(ExternalFixture,unittest.TestCase):
+    def test_invalid_new_debt_read_immediately_revokes_opening_admission(self):
+        self.engine.accounts=real_accounts(lambda:self.now)
+        self.engine.reconcile()
+        self.assertTrue(self.engine.can_open())
+        self.engine.accounts=real_accounts(lambda:self.now,'invalid-debt')
+        self.engine.refresh_accounts()
+        self.assertFalse(self.engine.can_open())
+        with self.assertRaises(ValueError): self.engine.check_order(intent())
+
     def test_both_venue_liabilities_preserve_native_coin_route_and_source(self):
         snapshot=real_accounts(lambda:self.now,'28.5','7').snapshot()
         self.assertEqual(len(snapshot['liabilities']),2)
