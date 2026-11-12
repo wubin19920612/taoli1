@@ -69,7 +69,7 @@ describe("第十四轮程序风险与整户观测分开显示", () => {
   });
 
   it.each(["missing", "unverified", "old_scope", "version", "stale", "future", "missing_time", "snapshot_missing",
-    "snapshot_old", "revision", "wrong_day", "invalid_decimal", "read_failure"])(
+    "snapshot_old", "revision", "wrong_day", "invalid_decimal", "read_failure", "missing_journal", "missing_revision"])(
     "does not present %s proof as a current program stop basis", async state => {
       if (state === "missing") income = null;
       if (state === "unverified") income!.verified = false;
@@ -84,6 +84,8 @@ describe("第十四轮程序风险与整户观测分开显示", () => {
       if (state === "wrong_day") income!.day = "2026-11-11";
       if (state === "invalid_decimal") income!.program_total = "NaN";
       if (state === "read_failure") externalError = true;
+      if (state === "missing_journal") delete income!.program_journal;
+      if (state === "missing_revision") delete income!.revision;
       render(<LiveExecPage />); await flush();
       expect(value("程序累计损益")).toBe("— USD");
       expect(risk().getByText(/程序损益证明不可用或已过期/)).toBeTruthy();
@@ -101,6 +103,25 @@ describe("第十四轮程序风险与整户观测分开显示", () => {
     remote.snapshot_version = 17;
     await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
     expect(value("程序累计损益")).toBe("— USD");
+  });
+
+  it("refreshes program proof alongside remote snapshots at five seconds", async () => {
+    render(<LiveExecPage />); await flush();
+    const nextAt = "2026-11-12T00:00:05Z";
+    remote = { ...remoteSnapshot, snapshot_at: nextAt, snapshot_version: 18,
+      positions: remoteSnapshot.positions.map(row => ({ ...row, snapshot_at: nextAt, snapshot_version: 18 })) };
+    income = { ...proof, captured_at: proof.captured_at + 5, snapshot_version: 18, program_total: "-10.125" };
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(value("程序累计损益")).toBe("-10.125 USD");
+    expect(risk().getByText("未达程序损益停机阈值")).toBeTruthy();
+  });
+
+  it("uses a stricter code/env cap as well as the frozen runtime setting", async () => {
+    summary.caps = { ...liveFixtures.summary.caps, equity_drop_max_usd: 30 };
+    income!.program_total = "-30";
+    render(<LiveExecPage />); await flush();
+    expect(value("程序损益停机阈值")).toBe("30.00 USD");
+    expect(risk().getByText("已达程序损益停机阈值")).toBeTruthy();
   });
 
   it("shows alert-only as a verified external liability rule and leaves unpublished attribution unknown", async () => {
