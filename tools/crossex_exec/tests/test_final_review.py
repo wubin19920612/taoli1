@@ -1,5 +1,4 @@
 """Final-review regressions: real SQLite, simulated clocks and venues, no network."""
-import copy
 import json
 import sqlite3
 import threading
@@ -159,6 +158,116 @@ class FinalExecutionTests(unittest.TestCase):
                 release.set()
             self.assertEqual(job.result()['state'], 'OPEN')
 
+    def test_actual_sent_transaction_commit_delay_is_inside_final_age_check(self):
+        delayed = []
+        def trace(statement):
+            if statement == 'COMMIT' and not delayed:
+                states = [r[0] for r in self.store.db.execute(
+                    "SELECT json_extract(value,'$.state') FROM orders")]
+                if states == ['SENT', 'SENT']:
+                    delayed.append(True)
+                    self.now[0] += 1.01
+        self.store.db.set_trace_callback(trace)
+        try:
+            self.engine.ingest(self.trigger())
+        finally:
+            self.store.db.set_trace_callback(None)
+        self.assertEqual(delayed, [True])
+        self.assertFalse(any(r[0] == 'place' for r in self.trace))
+        self.assertEqual([o['state'] for o in self.store.all_orders()], ['UNSENT', 'UNSENT'])
+
+
+class FinalHistoryTests(unittest.TestCase):
+    setUp = previous.EngineAdmissionTests.setUp
+    snapshot = previous.EngineAdmissionTests.snapshot
+    pair = previous.EngineAdmissionTests.pair
+    trigger = previous.EngineAdmissionTests.trigger
+
+    def history(self):
+        self.engine.live = self.engine.executor.live = False
+        pair = self.engine.ingest(self.trigger())
+        for n in range(257):
+            self.store.pair(dict(pair, id='history-'+str(n)))
+            self.store.save_order(dict(intent('history-'+str(n)), state='SHADOW', filled='0', leg=0,
+                                       pair_id='history-'+str(n), accounting_pending=False))
+        return pair
+
+    def test_runtime_paths_do_not_materialize_full_order_or_pair_history(self):
+        self.history()
+        pairs = self.store.pairs
+        def active_only(active=False):
+            if not active:
+                raise AssertionError('full pair history')
+            return pairs(active=True)
+        with patch.object(self.store, 'all_orders', side_effect=AssertionError('full order history')), patch.object(
+                self.store, 'pairs', side_effect=active_only):
+            self.assertTrue(self.engine.can_open())
+            self.assertEqual(self.engine.totals(), (dec(0), dec(0)))
+            self.assertEqual(self.engine.limits.exposure(self.snapshot(), intent('next')), dec(100))
+            self.engine.executor.recover(startup=False)
+            self.engine.tick()
+            self.engine.reconcile_positions(dict(self.snapshot(), captured_at=self.now[0]+1))
+
+    def test_risk_and_realized_loss_include_records_beyond_first_page(self):
+        self.history()
+        entry = dict(intent('late-entry'), pair_id='late', leg=0, state='TERMINAL', filled='1',
+                     accounting_pending=False, vwap='100', fee='0', created_at=self.now[0])
+        close = dict(entry, cid='late-close', reduce_only=True, side='sell', vwap='90')
+        self.store.save_order(entry)
+        self.store.save_order(close)
+        self.assertEqual(self.engine.totals(), (dec(-10), dec(-10)))
+        pending = dict(entry, cid='late-pending', pair_id='pending', state='UNKNOWN', quantity='.7',
+                       filled='0', vwap=None, accounting_pending=True)
+        self.store.save_order(pending)
+        self.assertEqual(self.engine.limits.exposure(self.snapshot(), pending), dec(70))
+        self.assertFalse(self.engine.can_open())
+
+    def test_api_summary_does_not_decode_shadow_history(self):
+        from tools.crossex_exec.api_data import Budget, JournalView
+        self.history()
+        decoded = []
+        decode = Budget.decode
+        def observe(budget, raw):
+            value = decode(budget, raw)
+            if isinstance(value, dict) and value.get('state') == 'SHADOW':
+                decoded.append(value)
+            return value
+        with patch.object(Budget, 'decode', observe):
+            summary = JournalView(self.store_path(), {}, clock=lambda:self.now[0]).get('summary', {})
+        self.assertEqual(decoded, [])
+        self.assertEqual(summary['caps']['open_pairs'], 0)
+
+    def test_api_history_does_not_retain_all_decoded_orders(self):
+        from tools.crossex_exec.api_data import Budget, JournalView
+        self.history()
+        for n in range(129):
+            pair = self.store.get_pair('history-'+str(n))
+            pair.update(state='CLOSED', closed_at=self.now[0])
+            self.store.pair(pair)
+        live, peaks = [0], []
+        class Observed(dict):
+            def __init__(self, value):
+                super().__init__(value)
+                live[0] += 1
+                peaks.append(live[0])
+            def __del__(self):
+                live[0] -= 1
+        decode = Budget.decode
+        def observe(budget, raw):
+            value = decode(budget, raw)
+            return Observed(value) if isinstance(value, dict) and 'cid' in value else value
+        with patch.object(Budget, 'decode', observe):
+            view = JournalView(self.store_path(), {}, clock=lambda:self.now[0])
+            self.assertEqual(view.get('summary', {})['total']['trades'], 129)
+            self.assertEqual(len(view.get('trades', {})), 129)
+            self.assertEqual(view.get('stats', {})['n'], 129)
+        self.assertGreater(len(peaks), 129)
+        self.assertLessEqual(max(peaks), 4)
+
+    def store_path(self):
+        from pathlib import Path
+        return Path(self.tmp.name)/'exec.db'
+
 
 class StoragePagingTests(unittest.TestCase):
     def setUp(self):
@@ -184,6 +293,13 @@ class StoragePagingTests(unittest.TestCase):
                         accounting_pending=True, sent_since=10))
         self.assertEqual([r['cid'] for r in rows], ['pending'])
         self.assertEqual(decode.call_count, 1)
+
+    def test_unknown_state_is_not_hidden_by_sql_not_in_null_semantics(self):
+        self.store.pair(dict(id='unknown-state', state=None))
+        self.store.save_order(dict(intent('unknown-state'), state=None, filled='1'))
+        self.assertEqual([p['id'] for p in self.store.pairs(active=True)], ['unknown-state'])
+        self.assertEqual([o['cid'] for o in self.store.iter_orders(exclude_states=('SHADOW','UNSENT'))],
+                         ['unknown-state'])
 
     def test_keyset_pages_do_not_skip_rows_while_current_rows_are_updated(self):
         statements = []

@@ -94,6 +94,7 @@ class EngineTests(unittest.TestCase):
         self.exec.can_open=self.engine.can_open
         self.exec.check_order=self.engine.check_order
         self.exec.check_pair=self.engine.check_pair
+        self.exec.check_release=self.engine.check_release
         self.exec.alert=self.engine.alert
         self.engine.limits.initialize(self.accounts.snapshot())
         self.engine.account_cache.publish(self.accounts.snapshot())

@@ -14,6 +14,29 @@ from tools.crossex_exec.api_data import JournalView
 from tools.crossex_exec.storage import encode
 
 
+def process_peak():
+    if sys.platform != 'win32':
+        return
+    import ctypes
+    from ctypes import wintypes
+    class Counters(ctypes.Structure):
+        _fields_ = [('cb', wintypes.DWORD), ('PageFaultCount', wintypes.DWORD)]+[
+            (name, ctypes.c_size_t) for name in ('PeakWorkingSetSize', 'WorkingSetSize',
+                'QuotaPeakPagedPoolUsage', 'QuotaPagedPoolUsage', 'QuotaPeakNonPagedPoolUsage',
+                'QuotaNonPagedPoolUsage', 'PagefileUsage', 'PeakPagefileUsage')]
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    psapi = ctypes.WinDLL('psapi', use_last_error=True)
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
+    counters = Counters()
+    counters.cb = ctypes.sizeof(counters)
+    if not psapi.GetProcessMemoryInfo(kernel.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
+        raise ctypes.WinError(ctypes.get_last_error())
+    print(json.dumps(dict(probe='process_peak_working_set', peak_bytes=counters.PeakWorkingSetSize,
+                          peak_mib=round(counters.PeakWorkingSetSize/2**20, 4),
+                          metric='Windows process working set including fixture and tracemalloc, not Linux RSS')))
+
+
 def measure(name, action):
     gc.collect()
     tracemalloc.start()
@@ -57,6 +80,8 @@ def main():
         measure('hard_exposure', lambda: str(fixture.engine.limits.exposure(fixture.snapshot(), orders[0])))
         measure('engine_totals', lambda: list(map(str, fixture.engine.totals())))
         measure('engine_tick', fixture.engine.tick)
+        measure('paged_pair_history', lambda: sum(1 for _ in fixture.store.iter_pairs()))
+        measure('paged_order_history', lambda: sum(1 for _ in fixture.store.iter_orders()))
         for endpoint in ('summary', 'positions', 'trades', 'stats'):
             measure('api_'+endpoint, lambda endpoint=endpoint: len(json.dumps(view.get(endpoint, {}))))
         # A second case verifies that selecting a few live records does not decode history.
@@ -64,6 +89,7 @@ def main():
             fixture.store.pair(dict(copy.deepcopy(template), id='active-'+str(n), state='OPEN'))
         measure('active_pairs_3', lambda: len(fixture.store.pairs(active=True)))
         measure('api_positions_3', lambda: len(view.get('positions', {})))
+        process_peak()
     finally:
         fixture.doCleanups()
 
