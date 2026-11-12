@@ -259,3 +259,73 @@ python -m tools.crossex_exec release-halt --env-file /private/crossex-exec.env -
 - SENT 提交后，以开仓冻结配置只读已发布成交额缓存，复查两条精确合约的金额、300 秒时效及符合身份的交易所数量；失败整对拒发，此处不联网补数。
 - 订单内部新增 sent_persisted_ms，表示写入 SENT 批次前采集的持久化阶段时间；sent_ms 改为各腿传输完成签名、即将调用请求写出前的内存时间，随后随 ACK/UNKNOWN/拒绝等原有落库流程保存。统一放行至写出前没有新增同步写库。
 - 原 send_delta_ms 使用两腿实际 sent_ms 的绝对差。任一实际时刻未知时为 null，不用 sent_persisted_ms 补造指标；重启后无实际时刻的记录仍以持久化阶段时刻参与原有最近订单/拒单率风控。旧版本共享时间形成的历史指标不追溯重算，250ms 人工延迟和真实传输层 150ms 签名延迟均有回归覆盖。
+
+## 第十轮增补（2026-11-12）
+
+仅增加并发前提字段、读取字段及冲突结果；全部既有参数、响应字段、权限、业务限制保留。本节为当前请求体约定：第八轮示例须加上以下必填字段，原空 `{}` 写请求不再有效。`equity/rebaseline` 不变。页面及转发须把**用户看到的版本/状态**原样带回，不能在提交前自动取新状态覆盖旧前提，也不能收到 409 后自动重试。
+
+### PUT /api/v1/config 请求体
+
+`expected_version` 为必填顶层非负 JSON 整数；bool、字符串、浮点数（含 `0.0`）、null 均不接受。其余顶层字段仍为非空部分参数更新，没有 `values` 包裹层。例如先 GET 得到 version=3 后：
+
+```json
+{"expected_version":3,"order_usd_max":30,"min_quote_volume_usd":2000000}
+```
+
+比较和更新在同一个 `BEGIN IMMEDIATE` 事务内完成。相等时版本加一，200 成功体仍为 `{version,values,fallback}`；不等时参数/版本均不变，返回：
+
+```json
+{"error":"version_conflict","current_version":4}
+```
+
+该响应状态为 **409**。缺少字段、类型不合格、空更新、原有参数验证不合格仍为 400。冲突写 `CONFIG_CONFLICT`，成功仍写 `CONFIG_CHANGED`。`GET /api/v1/config/audit` 追加冲突条目，最近 500 条的范围包含成功和冲突；冲突沿用 `version/at/source/old/new`，其中 version=current_version，old/new 为 `{}`，另增 `error:"version_conflict"`、`expected_version`、`current_version`。冲突不会伪造一次配置更新。
+
+### POST /api/v1/mappings/{id}/confirm 或 reject 请求体
+
+`GET /api/v1/mappings` 每项新增 **`multiplier` 字符串**。定义为按 `market_key` 排序后的第一腿 `quantity_multiplier ÷` 第二腿 `quantity_multiplier`，用无多余末尾零的普通十进制表示，例如 `"1000"` 或 `"0.001"`。它是候选的单位换算倍数；原 `ratio` 仍是发现时的原生价格比，原各腿的数字 `quantity_multiplier` 均保留。客户端直接回传 multiplier，不要用数值重新换算、舍入或格式化。
+
+confirm 和 reject 都恰好接受两个必填字段：
+
+```json
+{"expected_multiplier":"1000","expected_status":"pending"}
+```
+
+expected_status 取 `pending/confirmed/rejected`；expected_multiplier 为 1–80 字符的数字表示字符串（字符限 `0-9 . e E + -`），必须与当前 multiplier **逐字符相同**，`"1000.0"` 不等于 `"1000"`。两项中任一不等即 409，示例：
+
+```json
+{"error":"mapping_conflict","current_status":"confirmed","current_multiplier":"1000"}
+```
+
+成功返回原映射 schema 加 multiplier。缺字段/非法类型/额外键为 400；候选缺失、不可用或年龄不在 [0,300] 秒仍为 400。候选复核、比较、状态变更、`MAPPING_CHANGED` 在同一写事务内；后台发现也参与写事务，不能跨进程覆写已提交决定。冲突记录 `MAPPING_CONFLICT`，含 id、action、expected/current status 与 multiplier、at、source=admin_api，不改映射。
+
+### POST /api/v1/universe/{base}/classify、exclude 或 unexclude 请求体
+
+`GET /api/v1/universe` 每个 base 新增 `status`，格式 `u1:` 加 64 位小写十六进制。它是应原样回传的不透明状态标记，包含该 base 的完整管理决定、递增 revision 和原始合约目录规则；不随盘口或成交额变化。分类、所选市场、排除状态及目录规则变化都会使旧标记失效；管理决定改后又改回，也不会复用原标记。它不是 category、eligible 或 excluded 的别名。
+
+三个路由均新增必填 `expected_status`。以下 status 仅演示格式，实际使用最新 GET 中用户已查看的值。
+
+```json
+{"expected_status":"u1:0000000000000000000000000000000000000000000000000000000000000000"}
+```
+
+上例为 exclude/unexclude 的完整请求体。classify 保留原全部业务字段并增加 expected_status：
+
+```json
+{"expected_status":"u1:0000000000000000000000000000000000000000000000000000000000000000",
+ "category":"listed_equity","underlying_market":"KRX",
+ "markets":["binance|future|SKHYNIXUSDT","bitget|future|SKHYNIXUSDT"]}
+```
+
+缺少或格式错误为 400；与事务内当前状态不等为 **409**：
+
+```json
+{"error":"status_conflict","current_status":"u1:1111111111111111111111111111111111111111111111111111111111111111"}
+```
+
+成功仍返回原管理决定对象，增加 `revision` 整数与更新后的 `status`。比较、决定及 `UNIVERSE_CHANGED` 同事务提交；冲突写 `UNIVERSE_CONFLICT`（base、action、expected_status、current_status、at、source），不改决定。原禁止类别/股票市场/精确所身份检查仍适用。不存在于列表的 base 没有可供页面选择的状态；不得因获得冲突体就静默重试排除或分类。
+
+### 审计失败与后台诊断
+
+409 只在冲突审计成功提交后返回；审计、事务或数据库失败为 503，不宣称冲突审计已经落库。成功变更的审计失败时整笔回滚。ADMIN/只读令牌隔离、无真实账户调用的配置/映射/交易范围接口边界均保留。
+
+`BACKGROUND_FAILED` 内部事件新增 `location:"模块名:行号"`，与已有 worker、error_type 同时保存；后台错误日志同步增加 location。取异常最内层位置，不输出异常正文、完整 traceback、源码、绝对路径、请求/响应或局部变量。同一 worker 的同类型同位置每 60 秒最多记录一次，不同位置分别记录。本字段为内部诊断，不更改旧业务 API schema。

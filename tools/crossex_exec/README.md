@@ -232,3 +232,11 @@ python -m tools.crossex_exec.benchmark_steady --bases 187 --dynamic-bases 40 --h
 ```
 
 该探针禁止外部 DNS/连接，合成 I/O 驱动实际公共解析、请求队列、Engine、账户/基准后台调度及并发 API 投影；以进程 CPU 秒除以实测墙钟秒计算单核占用。准备 187 币的 24 小时历史，另外 40 币随动态成交额进入/退出采样；额外币在此短测中尚未完成 3 小时预热。准备、30 秒调度预热和单独 cProfile 不计入 180 秒稳态区间。结果不替代 Linux/systemd、真实网络和 24h 影子验收。
+
+## 第十轮：采样故障和管理并发
+
+最新本地验收见[第十轮交接](../../docs/task-handoff-2026-11-12-crossex-exec-r8.md#第十轮)与[完整验收数据](../../docs/crossex-exec-r10-validation-2026-11-12.json)。副本加真实公开 GET 复现了不支持的非 ASCII 基础币导致整轮 baseline 中断；现在在动态候选和记录入口隔离这些身份，原 ASCII 校验、交易资格、采样/预热/风险门槛保持不变。公开目录保留原名。后台日志和 BACKGROUND_FAILED 增加模块:行号，仍不输出异常正文、源码或完整 traceback。
+
+管理写请求的新必填字段：PUT config 顶层 `expected_version`；mappings confirm/reject 的 `expected_multiplier` 与 `expected_status`；universe classify/exclude/unexclude 的 `expected_status`。GET mappings 新增字符串 multiplier，GET universe 新增不透明 status；从用户所见读取结果原样回传。比较、更新和审计由同一写事务保护，冲突返回 409 并持久化审计；不要自动更新前提重试。完整 JSON 和 400/409/503 语义见[契约第十轮](../../docs/live-exec-contract-2026-11-11.md#第十轮增补2026-11-12)，此前不带前提的写入示例需要增加字段。
+
+Python 3.12.10/指定 3.10.20 各执行器 415 项、fill-sim 158 项全过，三种子各 2,568 回合；原 1,934 个断言保留。仅本地 test/feat/docs 提交，没有推送或部署。HL `io:OAI` 外部持仓只有方案比较，当前仍要求专用账户，没有新增忽略名单或解除任何风控锁。

@@ -1,5 +1,7 @@
 # crossex-exec 第八轮交接（2026-11-12，本地验收完成）
 
+> 当前最新交付见文末[第十轮](#第十轮)：baseline 故障与管理写并发修复、双版本验收、外部持仓待选方案。下方各旧轮次与合并记录保留作历史证据。
+
 > 最新交付见文末 [合并终审修复](#合并终审修复)：`codex/crossex-exec` 的 `abf8dba` 已用 `--no-ff` 合入，本地代码验收以该节为准。下方第八轮原始交付及性能测量保留作历史证据。
 
 第八轮实现、双版本两套 unittest、不变量模拟器、采样 CPU/内存实测及接口契约已完成。本节取代文末历史停点；原 WIP 已保留并接续提交。**用户明确限定本地交付：不 push、SSH、WSL、amend 或真实鉴权。本轮没有部署或实盘验收。**
@@ -505,3 +507,118 @@ $py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d
 推送未执行；线上备份/校验、部署版本、运行服务和实际接口均未读取或修改；未 SSH/WSL/amend，未使用真实凭据。按用户提供的信息，线上影子版本是 abf8dba，当前状态没有重新确认。仓库无用户遗留改动被覆盖；测试与性能 Temp 日志、忽略的 Python 缓存保留，压测数据库仅由探针清理自己创建的临时目录。
 
 下一任务另行授权 Linux/systemd/SQLite 3.37 与真实目录/账户的 LIVE=0 影子验证：部署前按当轮授权备份；核对新鲜快照耗时/恢复事件、负债币种和账户状态、真实 CrossEx 全量未完成订单响应；测 187 币及实际动态规模在长时间预热后的 CPU、cgroup 内存和 24h 恢复情况。Windows 3.10 是语法与行为兼容证据，不等于 Ubuntu 或真钱验收。不要删除数据库解锁，不把本地全绿或影子通过解释为开实盘授权。
+
+## 第十轮
+
+### 范围、基线与本地提交
+
+工作树 `C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec-r8`，分支 `codex/crossex-exec-r8`，起点 `1b82eec6010ebc1cce9392914076054b1ea90d0e`；起始工作区干净。先读第九轮和接口契约。本轮只处理 baseline 故障、后台诊断和管理写接口乐观并发；外部持仓仅下述方案，没有行为改动。用户禁止 push/SSH/WSL/amend/真实鉴权，本轮完全保留该边界。
+
+| 用途 | 提交 | 内容 |
+|---|---|---|
+| test | `2205230` | 从只读数据库副本提取最小公开夹具，新增故障与并发红灯测试；旧管理测试仅补请求前提 |
+| test | `d040560` | 跨进程映射/范围竞争、发现线程竞争、审计失败回滚与原候选时效 |
+| feat | `6fe888400a981f07277016a42a41ad08777d1e05` | 身份隔离、异常位置、原子比较更新及冲突审计 |
+| docs | 本节所在独立提交 | 契约仅追加第十轮、README、next-task 和验收 JSON；用 `git log -1 --format=%H -- docs/task-handoff-2026-11-12-crossex-exec-r8.md` 查询 |
+
+Git 仅显式暂存本轮文件；本地父仓库 worktree 索引写入的自动审批通过，没有拒绝。提交禁用 hooks/GPG，不访问远端。没有覆盖其他任务文件。
+
+### baseline 故障：副本、真实公开 GET、旧版本与 HEAD
+
+用户给定的 `proddb/crossex-exec-20261112.db` **先复制再用 SQLite mode=ro 打开**，原件从未被 SQLite 打开。复制到 `%TEMP%/crossex-r10-23sodv9x/crossex-exec-20261112.db`，6,037,504 字节，quick_check=ok；源文件与复制件 SHA-256 均为 `ddcc6431f17c364440448167cc14ac1118d450688f89786d765e6185f843c775`，完成后再次核验原件未变。复现写入使用另建的临时 DB，只导入公开目录；没有打开真实账户客户端或启动服务。
+
+副本包含 4,364 个目录合约、18 个非 ASCII 基础币合约、19,984 条 baseline_samples，**baseline_state 为 0 行**；最近 BACKGROUND_FAILED 确实只有 `worker=exec-baseline,error_type=ValueError`。来自公开目录的 `牛来/哈基米/龙虾/币安人生` 等基础币能通过原始 Market/行情解析，并可能达到采样成交额门槛；`baseline.pair_key` 则要求 ASCII 大写字母数字。动态采样把这些身份传入后，使整轮中断，而非单币失败。
+
+在起始 HEAD 上，使用副本全量公开目录和真实六所批量行情（共 **8 个公开 GET**，六组成交额加 Binance/Aster bookTicker，全部成功）复现：
+
+```text
+1b82eec: Engine.refresh_baselines (engine.py:372)
+         -> Baseline.record (baseline.py:123)
+         -> pair_key (baseline.py:38), ValueError
+```
+
+没有鉴权头或账户调用。原始公开响应保存在上述 Temp 目录的 `public-capture.json`。再用本地 `git archive 33933b1` 导出旧源码，对**同一公开快照、同一副本目录**回放：旧版本 `engine.py:321 -> baseline.py:123 -> baseline.py:38` 同样失败。因而该问题在 **33933b1 与起始 HEAD 均存在**，不是根据旧日志类型猜测。源代码归档、完整公开快照与复制 DB 都只留 Temp，未入仓。
+
+实现与边界：
+
+- `baseline.supported_base` 复用原严格身份条件；`pair_key` 仍拒绝非 ASCII、小写、分隔符、HL DEX 原名等不支持身份，没有扩展交易资格或将其改名。
+- `MarketData.sample_quotes` 在生成候选前排除不支持的公共基础币；`Baseline.record` 再统一过滤 bases，覆盖样本构造、公开报价写入、无报价状态刷新和失败轮撤销引用。仅在其中一处过滤不足以修复：单所不支持身份也会在写报价或遍历空状态时抛错。
+- 公开目录/market_tickers 保留原始市场；正常币种继续预热。24h 保留、6h 窗口、300 点且跨度 ≥3h、90 秒新鲜度、结构性锁/10 分钟复核、成交额/分类/映射/资金费等检查未改。
+- 修复后回放同一全量快照成功：**4,958 个样本、13,170 条状态**；再做一轮新的 8 个真实公开 GET，也成功：3,934 条行情、5,020 个样本、13,200 条状态，账户调用 0。目录、成交额及时效会使轮次规模不同。
+- 新鲜单轮 `ready=0` 是正常预热状态，不能声称已完成生产 3h 预热。确定性回归先验证单点不 ready，再用明确的测试历史满足原窗口，验证 BTC ready=1；没有伪造线上预热成功。
+- `tests/fixtures/round10_public_baseline.json` 仅 4,221 字节：从副本抽取 Binance/Bitget 的 BTC 与牛来四个公开 Instrument，加三个公开响应的必要行情字段及原始时间。无账户、订单、权益、令牌或整库内容；unittest 禁止外部网络。
+
+`background.exception_location` 从异常最内层取模块名与行号，日志和 `Engine.background_error` 的 BACKGROUND_FAILED 同存 `location`、`error_type`、worker。不记录异常正文、绝对路径、源码、局部变量或完整 traceback。每个 worker 按「类型+位置」限频 60 秒；同类型不同位置不会互相掩盖。
+
+### 管理写接口与原子性
+
+当前请求体以[契约第十轮](live-exec-contract-2026-11-11.md#第十轮增补2026-11-12)为准；原契约全文保留，仅追加。`Management.write` 在 Store 的 `BEGIN IMMEDIATE` 中读取当前值、比较、调用原业务更新并审计；进程内继续使用路径锁，跨进程由 SQLite 事务保证。没有把“先读后写”拆成两个事务。
+
+| 路由 | 新必填前提 | 不匹配结果 |
+|---|---|---|
+| PUT config | 顶层 expected_version，严格非负整数 | 409 `{error:"version_conflict",current_version:N}`，版本不变 |
+| mappings confirm/reject | expected_multiplier 字符串、expected_status | 409 mapping_conflict，附 current_multiplier/current_status |
+| universe classify/exclude/unexclude | expected_status 字符串 | 409 status_conflict，附 current_status |
+
+映射 GET 新增 multiplier 字符串，为 market_key 排序后第一腿/第二腿数量倍数的精确十进制表示；价格比 ratio 和原有腿字段保留。必须逐字符相等，`1000.0` 不能替代 `1000`；原 300 秒候选时效保留。后台 `Universe.discover` 也改用事务，避免另一进程发现旧 pending 状态后覆盖管理提交。
+
+Universe 原本没有独立 status，因此 GET/写成功响应新增不透明 `u1:<64 hex>` 标记；原分类、所选市场和 excluded 保留。标记包含原始目录规则、管理决定及递增 revision；行情刷新不改变标记，决定改后再改回也会冲突。前端必须提交用户所见状态，409 后重新展示并由用户决定，不得自动补新前提重试。
+
+冲突分别写 CONFIG_CONFLICT/MAPPING_CONFLICT/UNIVERSE_CONFLICT；事件提交后才返回 409。配置 audit GET 同时展示配置冲突，保留旧字段并追加 expected/current version 与 error。成功审计失败整笔回滚；冲突审计失败返回 503，没有假报已审计。原 ADMIN/只读隔离、有界 JSON、交易限制均不变。本轮未修改前端或 taoli1 转发；其写请求需要在独立页面任务适配新增字段。
+
+### TDD、原断言和双版本验收
+
+初始 13 项在旧实现上先红（9 failures/11 errors，包含 subTest 错误），日志 `%TEMP%/crossex-r10-red.log`；随后全部转绿。补齐为 17 项；跨进程发现竞争另在测试中临时恢复旧的仅 Python RLock 实现，明确得到失败，再使用新事务实现通过，见 `%TEMP%/crossex-r10-discovery-old-lock-red.log`。没有回退工作区、改随机种子、skip/xfail 或降低阈值。
+
+相对起点，对两套测试的 **36 个原文件、881 个函数、1,934 个断言节点**做 AST 检查，原函数无删除、原断言无删改。唯一旧测试适配在 `test_round8_admin.AdminTests.write`：构造旧测试请求时带上新必填版本/状态；原每个 HTTP 状态码、范围和权限断言原文保留。新测试使用独立原始 HTTP helper，确保真正验证“缺少前提必须 400”，没有被旧 helper 自动补齐。fill-sim 源码和测试完全未改。
+
+全量命令：
+
+```powershell
+python -m unittest discover -s tools/crossex_exec/tests -v
+python -m unittest discover -s tools/fill_sim/tests -v
+$py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe'
+& $py310 -m unittest discover -s tools/crossex_exec/tests -v
+& $py310 -m unittest discover -s tools/fill_sim/tests -v
+```
+
+| 解释器 | 执行器最终全量 | fill-sim 全量 | 退出码 |
+|---|---|---|---|
+| Windows 3.12.10 / SQLite 3.49.1 | 415 项 / 113.912s / OK | 158 项 / 29.891s / OK | 全部 0 |
+| 指定 Windows 3.10.20 / SQLite 3.50.4 | 415 项 / 121.152s / OK | 158 项 / 31.416s / OK | 全部 0 |
+
+两个版本都实际执行种子 **20261111、20261112、20261113**，每个 **2,568 回合 = 2,400 随机 + 168 定向**；N=1，I1a–d、I2–I7 每项 checks=2,568、exercised 非零。完整六组计数、日志 SHA-256、数据库与夹具指纹、复现结果均在 [第十轮验收 JSON](crossex-exec-r10-validation-2026-11-12.json)。fill-sim 沿用本轮同一最终实现下的完整首轮结果；此后只补执行器测试，两版本执行器已完整重跑。78 个 Python 文件通过 3.10 AST 语法检查；`git diff --check` 通过。
+
+代码自审重点覆盖：BEGIN/比较/更新/冲突审计的事务生命周期、不同进程竞争、后台发现覆写窗口、成功与失败审计回滚、严格原身份边界、异常敏感文本不输出、原风险行为和测试断言保留。未启动子代理。没有将本机 3.10 视作 Ubuntu/systemd/cgroup 验收；本轮未重新测 CPU/内存。
+
+### 外部持仓：方案比较，尚未实施
+
+用户说明该多单不是本程序开的；副本 `last_upnl.positions` 可核对到精确身份 **`crossex|HYPERLIQUID_FUTURE_io:OAI_USDC|long`**，并记录 position_mismatch 与 daily_loss 两个锁。这里只确认历史副本，未鉴权查询当前持仓或仓位归属。
+
+现有链路：`Accounts.snapshot` 汇总全账户 positions/upnl/notionals；`Engine.reconcile_positions` 将全部远端持仓与本地流水持仓精确比较；`totals/roll_daily_upnl` 使用全账户浮亏；`reconcile` 还取 `min(流水损益, 整户权益差)`；`HardLimits` 使用整户权益、保证金与全远端名义敞口。因此“只在 mismatch 里忽略 HL”并不能去掉 daily_loss，也不应静默绕开这些保护。
+
+| 维度 | (a) 保持专用账户要求 | (b) 允许永久不交易合约上的外部仓位 |
+|---|---|---|
+| mismatch | 任一非本程序仓位仍阻断；最易识别丢单/漏账 | 只排除经明确登记、精确身份匹配且与本程序永久禁止交易集合一致的外仓；其余仍阻断 |
+| 日亏 | 账户所有浮亏/权益变化均影响当前日亏 | 程序日亏剔除外仓的当日贡献，需完整归属浮亏变化、已实现损益、费用与资金费；不能只去掉当前 upnl |
+| 整户风险 | 当前保护全部保留 | 外仓继续计入原始整户权益基线/回撤和保证金倍数，仍可能触发停开、减仓或停机 |
+| 总亏损/名义额 | 当前规则 | 本需求没有授权放宽，仍保留原累计亏损与总名义额检查；外仓可能继续占用 600 USD 总额度或触发累计亏损，不能承诺因此能开仓 |
+| 恢复/运维 | 配置简单，需专用账户或由用户自行处置外仓 | 需要永久禁止交易注册表、收益归属、重启/日界线迁移及专门审计；外仓未平时现有 rebaseline/release-halt 仍拒绝 |
+| 主要风险 | 外部人工操作会阻断执行，资金利用限制较多 | 分类错误会把本程序丢失的仓位藏起来；共享抵押使外仓亏损仍能危及本程序；收益漏归属可导致错误日亏放行 |
+
+若选择 (b)，建议后续任务必须同时明确并验收以下边界：
+
+1. 外仓登记按原始 route/exchange_type/business/symbol/quote/DEX 绑定。本例保留 `HYPERLIQUID`、`io:OAI`、`USDC` 和原始完整 symbol；不能按 `OAI/OPENAI` 归一 ticker、方向或“暂时不在候选中”自动豁免。永久禁止交易应覆盖两个方向、别名映射、重启、初始准入及最终发送关口。
+2. 若该精确合约存在本程序历史归属、活动仓位、未终结/UNKNOWN 订单、待记账或恢复义务，不得改标外仓来解除 mismatch。未知身份、字段缺失、两类归属重叠或目录规则变化应保守停开，保留全部原始远端快照。
+3. 分别保存“全账户风险快照”和“本程序对账/日亏投影”。对账只比较本程序集合，日亏使用可核实的本程序已实现损益、费用/资金费和当日浮亏差。`reconcile` 的原整户**日权益差**分支也必须按完整外仓当日净贡献扣除，否则外仓损失会再次流入 daily_loss。不能通过删掉整个权益兜底或把外仓当前亏损当成固定抵扣额实现。
+4. 外仓开/平/增减、跨 UTC 日界线、结算资金费、转入转出与已实现收益必须能核对；未取得所需流水时不能假定为零。单独的原始整户 `account_equity_baseline`/权益回撤、保证金倍数、负债、累计亏损及总名义额维持保守规则；调整程序日亏口径不等于修改账户硬限额。
+5. 本程序不得为消除 mismatch 自动平掉外仓。当前 `flatten_all` 的停机完成条件要求远端全空；若保留外仓，必须区分“程序仓位已平”和“全账户已平”，不能误报全户安全。现有管理重基线/解除停机要求全空，若未来要允许带外仓操作，需另行明确前提与审计，不能顺手放宽。
+6. 验收需覆盖相同 ticker 不同 DEX、两方向、程序孤单/UNKNOWN、外仓盈利与亏损、外仓结算/平仓、跨日/重启、目录变化、外仓导致保证金或权益硬限额触发、审计故障，以及不能发单到永久禁止合约。
+
+当前继续采用 **(a)**。方案 (b) 没有实现，没有增加忽略名单、重写任何账户基线、解除 position_mismatch/daily_loss 或操作该 HL 仓位；等待用户选择后新建外部持仓模块任务。
+
+### 线上状态、产物和下一任务
+
+未 push、未 SSH/WSL/amend、未真实鉴权、未部署、未生产备份或线上验收。线上影子 `33933b1` 来自用户说明；本轮只通过本地源码和数据库副本复现，没有确认服务器当前 HEAD 或服务状态。数据库复制校验是离线诊断证据，不是新做的线上备份。原临时副本、公开快照、旧源码归档、TDD/全量日志继续保留，未提交整个 DB。
+
+本轮文件均进入 test/feat/docs 分组提交；交付后工作区应干净，没有新未跟踪文件，Python 缓存仍按既有规则忽略。下一任务：页面按新请求前提接入；生产升级、Linux 兼容与持续 ≥3h 的真实影子预热另行授权。外部持仓待用户选择后独立实施，不以本轮本地通过作为实盘授权。
