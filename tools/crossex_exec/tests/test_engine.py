@@ -28,6 +28,10 @@ class FakeMarket:
         return {ex:{base:mid for base in bases} for ex,mid in
                 (('binance','99.5'),('bitget','102.5'),('bybit','99.5'))}
 
+    def sample_quotes(self,minimum):
+        bases=tuple(sorted({i.spec.base for i in self.mapping.values()}))
+        return self.baseline_quotes(bases),bases
+
     def books(self,instruments):
         if self.missing:
             return [None]*len(instruments)

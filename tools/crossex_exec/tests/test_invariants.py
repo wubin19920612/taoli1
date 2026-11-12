@@ -201,6 +201,8 @@ class World:
         seed_baseline(self.store,self.now,'15' if opening_fault == 'baseline_not_flat' else '5')
         self.market = SimpleNamespace(mapping={i.market.key:i for i in self.instruments}, books=self.books,
             funding=self.funding,
+            open_interests=lambda instruments,books:[dict(market_key=i.market.key,usd='10000000',at=self.now,
+                unit='base',unit_verified=True,source='fixture') for i in instruments],
             turnovers=lambda instruments:['10000000']*len(instruments))
         self.accounts = SimpleNamespace(cross=self.venues[0], bitget=self.venues[1], snapshot=self.snapshot,
             validate_startup=self.snapshot, position_snapshot=self.positions,
