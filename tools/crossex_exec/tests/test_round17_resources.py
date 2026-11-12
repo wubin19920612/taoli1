@@ -68,6 +68,27 @@ class ResourceSafetyTests(ExternalFixture, unittest.TestCase):
 
 
 class RedactionCostTests(unittest.TestCase):
+    def test_digest_streams_plain_json_without_building_a_second_object_tree(self):
+        import hashlib
+        import json
+        from decimal import Decimal
+        from tools.crossex_exec.external import plain
+        value = dict(rows=[dict(v=Decimal('-0.12'), ids=('a','b'))])
+        expected = hashlib.sha256(json.dumps(plain(value),sort_keys=True,
+            separators=(',',':'),allow_nan=False).encode()).hexdigest()
+        with patch('tools.crossex_exec.external.plain', side_effect=AssertionError('extra_tree')):
+            self.assertEqual(digest(value), expected)
+
+    def test_history_hash_cache_distinguishes_json_types_not_python_numeric_equality(self):
+        from tools.crossex_exec.external_accounting import history_index
+        cache = {}
+        activity = dict(from_ms=0,to_ms=1,crossex_book=[dict(id='one',create_time='1',extra=1)],
+                        crossex_trades=[],bitget_book=[])
+        first = history_index(activity,cache)
+        activity['crossex_book'][0]['extra'] = True
+        second = history_index(activity,cache)
+        self.assertNotEqual(first, second)
+
     def test_signature_inventory_is_not_sorted_for_each_scalar(self):
         redactor = Redactor()
         redactor.register('secret-key')
