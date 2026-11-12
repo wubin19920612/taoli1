@@ -205,3 +205,30 @@ sudo -u ubuntu /usr/bin/python3 -m tools.crossex_exec --help
 `python -m tools.crossex_exec.benchmark_sampling --output <结果路径>` 为离线实测入口，默认 84 币种×6 所=504 原生合约、24h 历史；`--bases 500 --history-hours 6` 为放大检查，不使用网络或凭据。前后比较用起始 WIP 备份的 performance-before 模块，复现与结果见交接。
 
 管理令牌 CROSSEX_EXEC_ADMIN_TOKEN 与只读令牌必须不同，默认不设置。真实 env、账户和系统服务未修改；本次合并保留终审分支的 service 布局与 `MemoryMax=192M`，尚未安装。
+
+## 第九轮运行说明
+
+完整接口与二次确认格式见 [第九轮契约增补](../../docs/live-exec-contract-2026-11-11.md#第九轮增补2026-11-12)，本地验收和线上待核实事项见 [第九轮交接](../../docs/task-handoff-2026-11-12-crossex-exec-r8.md#第九轮)。
+
+```sh
+# 运行中交给本机 ADMIN API；服务停止时持有同一个 flock 后执行。
+python -m tools.crossex_exec rebaseline --env-file /private/crossex-exec.env --confirm --reason verified_transfer
+# 服务已因 HALTED 退出后，confirm 必须精确匹配当前 halt_reason。
+python -m tools.crossex_exec release-halt --env-file /private/crossex-exec.env --confirm account_equity_drop --reason verified_transfer
+```
+
+两项操作均要求本地与两边远端空仓、无非终态/待记账订单、无仓位类锁、无负债及两边新鲜正权益。读不到即拒绝；不发送订单、撤单或划转。失败输出固定拒绝原因，不输出交易所异常正文。运行中 rebaseline 要求原有独立 ADMIN 令牌；停机操作沿用 env 所有权/0600 和 flock，仍是 POSIX 运行路径。划转前先置 STOP 文件，核对后显式重设基线；不得通过删除数据库或修改历史费用复位。
+
+重设后保留历史交易/费用统计，以审计中的风险计量偏移开启新的损失基线；新损失阈值不变。当日日亏锁、STOP 文件及其他原因锁不会被清除。release-halt 只能解除已完成全平的权益停机，不代替仓位/未知订单恢复，也不启动服务。
+
+账户刷新使用三个不同的新鲜快照恢复 account_snapshot_unavailable；任何失败、陈旧或超过 10 秒的采样间隔重置计数。新 summary 的 account_snapshot 同时给出当前年龄与该次完整刷新耗时，重复读取缓存不会让观测“变新”。CrossEx 正负债现在会停开并告警，保留 coin/exchange_type/liability；连续三个新鲜无负债快照才解除这一原因，既有平仓/停机恢复继续可用。
+
+告警、HardLimits、StopLocks 和账户生命周期统一使用 Store 的重入锁；需要组合时为协调器→Executor→Store。发送共享屏障在 SENT 提交后再次只读成交额缓存，检查两腿金额、时效、所数及其他原门禁。实际 sent_ms 由各腿传输在请求写出前采集到内存，随后随原有 ACK/UNKNOWN 等记录落库；sent_persisted_ms 单独保留写入阶段时间。观察不到实际时刻时不伪造 send_delta_ms，最近订单风险统计仍保守计入持久化发送阶段。
+
+公开行情、基准状态按行比较，只写变化或删除当轮缺失数据；基准样本查询使用原主键的 bucket 范围，同时保留精确时间边界。采样仍为 30 秒，6 小时窗口/24 小时留存和所有开仓、持仓风险门槛不变。离线等价稳态测量：
+
+```sh
+python -m tools.crossex_exec.benchmark_steady --bases 187 --dynamic-bases 40 --history-hours 24 --warmup 30 --seconds 180 --output steady.json
+```
+
+该探针禁止外部 DNS/连接，合成 I/O 驱动实际公共解析、请求队列、Engine、账户/基准后台调度及并发 API 投影；以进程 CPU 秒除以实测墙钟秒计算单核占用。准备 187 币的 24 小时历史，另外 40 币随动态成交额进入/退出采样；额外币在此短测中尚未完成 3 小时预热。准备、30 秒调度预热和单独 cProfile 不计入 180 秒稳态区间。结果不替代 Linux/systemd、真实网络和 24h 影子验收。

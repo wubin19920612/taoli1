@@ -176,3 +176,86 @@ legs 追加 raw_symbol/native_base/quantity_multiplier/mapping_id/native_qty/nat
 写入仅接受独立且不同于只读令牌的 CROSSEX_EXEC_ADMIN_TOKEN。未设置则没有写权限，同令牌配置拒绝启动 API。写 body 必须 Content-Type: application/json、Content-Length 1–8192 字节；拒绝重复长度头、Transfer-Encoding、重复 JSON 键、非法 UTF-8 与非对象。非法输入 400，未认证 401，只读令牌写 403，不支持方法 405，数据库不可用/繁忙 503。
 
 GET 使用独立只读连接，2 秒与 8 MiB 读取预算保留；写操作另开连接并原子提交。旧四个业务路由继续拒绝非 GET。管理请求不调用真实账户或交易接口。taoli1 转发的会话、CSRF 和私有令牌配置由另一任务实现。
+
+## 第九轮增补（2026-11-12）
+
+本节只增加接口、字段和限制。原四个 GET、参数范围、ADMIN/只读令牌隔离及请求大小边界全部保留。下面的账户管理动作是第八轮“管理请求不调用真实账户”说明的明确增补：仅新 `equity/rebaseline` 路由会重新读取两边账户及未完成订单，所有交易所请求均为 GET；不下单、撤单、划转或修改账户设置。此路由绑定正在运行的 Engine，由协调器串行执行，不能使用另一个数据库连接绕过执行状态检查。
+
+### POST /api/v1/equity/rebaseline
+
+仅接受独立 `CROSSEX_EXEC_ADMIN_TOKEN`，body 必须恰好包含两个键：
+
+```json
+{"confirm":true,"reason":"verified_transfer"}
+```
+
+`confirm` 必须是 JSON 布尔值 true，数字 1 和字符串 "true" 均不接受；reason 必须为非空文字，最长 200 字符，不允许控制字符。页面调用应先显示旧基线、账户状态及不可撤销的审计记录说明，再取得用户二次确认后发送。页面和 taoli1 会话/CSRF 转发按既有 `live-exec-page` 交接接入，执行服务不向浏览器分发 ADMIN 令牌。
+
+前提与效果：
+
+- 本地没有实仓、活动 pair、非终态/未知状态/待记账订单、尚未落库的订单观察或在途发送；position_mismatch/unhedged_position/repair_stopped 等仓位、订单锁存在时拒绝。
+- 重新读取两边真实账户、持仓及两边所有未完成订单；任一读取失败、结构不明、非空持仓或非空订单均拒绝。没有正负债，两边权益为有限正数，浮动盈亏为零。整个读取、历史核对及提交前检查仍受 10 秒时效限制。
+- HALTING/HALTED 不接受本接口，必须用下文 `release-halt`。二次检查本地状态和基线版本后，原子保存两边独立权益基线、总权益/当日权益、当日浮盈亏基线及历史已实现损益的风险计量偏移，并写 `EQUITY_REBASELINED`。原订单、费用、交易与事件历史不改写；历史收益展示不清零。此后的新损失仍按原风控限额判定。
+- 操作完成即更新运行中账户缓存；操作开始前仍在途的旧账户读取不能覆盖新基线。先置运行风险为 STOP，由正常对账恢复。STOP 文件、当日日亏锁、其他原因停开锁保持原规则，重设基线不能解除它们。
+- 审计或任一数据库写入失败，整次变更回滚，内存基线也不提前更新。
+
+成功返回 200，包含完整审计投影（下例省略的旧嵌套值以 null 表示尚未建立，不删除字段）：
+
+```json
+{
+  "old": {
+    "account_equity_baseline":{"crossex":753,"bitget":1514},
+    "equity_baseline":2267,"daily_equity":null,"daily_upnl":null,"risk_pnl_baseline":null
+  },
+  "new": {
+    "account_equity_baseline":{"crossex":29753,"bitget":517},
+    "equity_baseline":30270,
+    "daily_equity":{"day":"2026-11-12","equity":30270},
+    "daily_upnl":{"day":"2026-11-12","upnl":0,"positions":{},"captured_at":"2026-11-12T01:00:00Z"},
+    "risk_pnl_baseline":{"day":"2026-11-12","total":-4.2,"daily":-1.3}
+  },
+  "at":"2026-11-12T01:00:01Z","captured_at":"2026-11-12T01:00:00Z",
+  "reason":"verified_transfer","source":"admin_api","halt_reason":null,"revision":1
+}
+```
+
+金额保持 JSON 数字；`at/captured_at` 为 UTC ISO8601，`day` 为 UTC 日期。SQLite 审计内部保留 Decimal 字符串和 epoch 秒，CLI 直接执行的 JSON 日志使用内部审计格式。revision 单调增加并跨重启保留。
+
+状态码：400 表示 body/字段不合规；401 未认证；403 只读令牌；409 为安全前提不成立，返回 `{"error":"<固定原因>"}`；503 为运行 Engine 未绑定、数据库或其他操作不可用。409 原因包括 `local_orders_pending`、`position_or_order_lock`、`local_positions`、`halted_requires_release`、`remote_positions`、`remote_orders`、`remote_orders_unavailable`、`account_read_unavailable`、`account_snapshot_stale`、`account_liability`、`equity_invalid`、`equity_revision_changed`。未知异常正文不返回。超时或响应丢失不意味着没有提交，应先检查 summary 中的 revision 及事件审计，不自动重试管理动作。
+
+### CLI 人工管理
+
+```sh
+python -m tools.crossex_exec rebaseline --env-file /private/crossex-exec.env --confirm --reason verified_transfer
+python -m tools.crossex_exec release-halt --env-file /private/crossex-exec.env --confirm account_equity_drop --reason verified_transfer
+```
+
+继续使用原 env 文件所有权/0600 校验及同一个数据库 `.lock`。运行中 `rebaseline` 通过本机 ADMIN 接口转交当前 Engine，审计 source=admin_api；停机后持有排他锁时执行，source=cli。CLI 不启动第二个执行服务，账户客户端即使 env 配置 LIVE=1 也禁用写交易所请求。
+
+`release-halt` 要求原服务已退出、state=HALTED，`--confirm` 精确等于真实 halt_reason（旧记录回退 stop_reason）；其余空仓、订单、负债、权益和时效前提同上。成功写 `HALT_RELEASED`，重新建立基线，将 state 改为 RUNNING，仅移除 account_equity_drop/total_loss 的权益停机锁；不启动服务，不移除 STOP 文件或其他锁。仓位类锁一律拒绝，不能借此“确认”丢失的仓位/订单。HALTING 仍须完成原恢复流程。
+
+### 新增 summary 字段及账户恢复
+
+```json
+{
+  "equity_baseline_revision":1,
+  "account_snapshot":{
+    "captured_at":"2026-11-12T01:00:00Z","completed_at":"2026-11-12T01:00:00.500Z",
+    "age_seconds":2,"refresh_seconds":0.5,"fresh":true
+  },
+  "liabilities":[{"coin":"USDC","exchange_type":"HYPERLIQUID","liability":28.5}],
+  "stop_locks":{"account_liability":["global"]}
+}
+```
+
+- account_snapshot 没有观测时各时间/时长为 null，fresh=false。age_seconds 从账户读取开始时刻到本次 API 投影时刻；fresh 当且仅当年龄在 [0,10] 秒。refresh_seconds 为该次读取开始到首次完整发布核验的时长，包含 I/O、等待锁及核验；协调器重读同一缓存不覆盖此时长。它与原 accounts.ok 的最近对账展示不同，后者不是开仓放行凭据。
+- snapshot 失败/超时/陈旧时停开。`ACCOUNT_RECOVERY_SNAPSHOTS=3`：连续三个不同读取起点的新鲜完整快照自动解除自身 account_snapshot_unavailable 锁，并原子记录 ACCOUNT_SNAPSHOT_RECOVERED；相邻读取起点超过 10 秒、失败或陈旧会重置计数，重复缓存不累计。不会解除 HALTED、仓位锁或其他停开原因。
+- CrossEx 任意正 liability 均停开并记录 ACCOUNT_LIABILITY/ALERT，保留币种与原始 exchange_type。负债本身不新增强制平仓策略，已有减仓/停机恢复通道保持可用；若同时触发权益、保证金或累计亏损条件，仍执行原全平/停机流程。连续三个不同且新鲜的无负债快照才解除自身 account_liability 锁并写 ACCOUNT_LIABILITY_RECOVERED。
+- halt_reason 优先返回持久化的真实停机原因，不因后续另一条告警覆盖；stop_locks 为独立原因及归属集合，stop_reason 继续仅作兼容展示。
+
+### OKX 目录与实际发送时间
+
+- universe.markets 增加 `rule_type`（原始目录 ruleType，未知为 null）、`trading_blocked`（布尔）。OKX pre_market/rebase_contract 优先于 crypto/人工分类，盘前市场不展示为候选；其他未知非 normal 规则也禁止开仓、采样及映射。人工分类不能覆盖该禁止标志。已有持仓仍使用原始身份减仓。
+- SENT 提交后，以开仓冻结配置只读已发布成交额缓存，复查两条精确合约的金额、300 秒时效及符合身份的交易所数量；失败整对拒发，此处不联网补数。
+- 订单内部新增 sent_persisted_ms，表示写入 SENT 批次前采集的持久化阶段时间；sent_ms 改为各腿传输完成签名、即将调用请求写出前的内存时间，随后随 ACK/UNKNOWN/拒绝等原有落库流程保存。统一放行至写出前没有新增同步写库。
+- 原 send_delta_ms 使用两腿实际 sent_ms 的绝对差。任一实际时刻未知时为 null，不用 sent_persisted_ms 补造指标；重启后无实际时刻的记录仍以持久化阶段时刻参与原有最近订单/拒单率风控。旧版本共享时间形成的历史指标不追溯重算，250ms 人工延迟和真实传输层 150ms 签名延迟均有回归覆盖。

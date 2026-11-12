@@ -409,3 +409,99 @@ INVARIANTS seed=20261113 rounds=2568 random_rounds=2400 N=1 checks={'1a': 2568, 
 仅本地交付：推送未执行；线上 DB 备份、校验、部署版本和线上接口检查均未执行，线上状态未读取或修改。没有真实 API 凭据/账户调用，不把本地通过认作真钱交易验收。仓库无新增未跟踪交付文件；Temp 验收日志和忽略的 Python 缓存保留。
 
 后续请新建对应模块任务，从本节继续：另行授权 Linux/systemd/SQLite 3.37、实际目录和账户、完整 cgroup 资源预算及 24h 影子验收；页面联调仍属于 `live-exec-page`。不要继续使用两个合并父分支的旧 HEAD 作为合并完成版本，也不要根据历史的“80M/323 项/289 项”描述覆盖本节。
+
+## 第九轮
+
+### 目标、分支与交付范围
+
+工作目录仍为 `C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec-r8`，分支 `codex/crossex-exec-r8`；起点 `efd296eea4effa2914cddd639f7f6ba7e208d693`，进入任务时工作区干净。先读第八轮只读终审、本轮任务书及本交接，然后完成执行器模块的本地修复。用户明确要求不 push/SSH/WSL/amend/鉴权，因此未采用仓库默认的生产交付步骤。
+
+本轮提交按用途分开：
+
+| 提交 | 内容 |
+|---|---|
+| `48bc076` | test：第八轮终审、第九轮管理与存储回归，先在旧实现上得到红灯 |
+| `18e214c` | test：锁交错、实际写出时间、恢复与基线边界、旧夹具新增接口适配 |
+| `e24adc2` | feat：全部本轮功能及离线稳态测量入口 |
+
+文档、契约与验收产物另作 docs 提交；功能固定版本完整 SHA 见 [验收数据](crossex-exec-r9-validation-2026-11-12.json)。本节替代此前“353 项/无解除接口”等与本轮有关的状态描述，历史证据保留原文。
+
+### 修复与关键入口
+
+| 项目 | 实现及验收 |
+|---|---|
+| P1-1 嵌套锁死锁 | `engine.py` 的 alert/lifecycle、`limits.py` 的 HardLimits、`stops.py` 共用 Store RLock；组合顺序为协调器→Executor→Store。账户线程不获取 Executor；发送线程不获取协调器。补账户先进入告警、发送先持 Store、SENT 提交时账户刷新到达等交错，线程按限时结束且未误开仓。 |
+| P1-2 SENT 后成交额复核 | `Engine.check_release` 在持久化 SENT 后通过 `MarketData.cached_turnovers` 只读冻结配置对应的两腿缓存；复查金额、300 秒时效及兼容市场所数。299.75 秒缓存经历 0.5 秒提交后整对拒发；金额/时效等号及第三所过期都有测试，最终关口禁用刷新调用。 |
+| P1-3 OKX 盘前标志 | `Instrument.rule_type` 保留原 ruleType；native category 优先盘前。pre_market/rebase_contract 及其他未知非 normal 规则在 Universe 候选、人工分类、映射、采样与 Engine 开仓路径被拒绝；人工 crypto 决策不能覆盖。既有持仓原始市场身份仍可用于减仓。 |
+| P2 两腿真实发送时间 | `Executor` 将 sent_persisted_ms 与 sent_ms 分开；`Transport` 在完成签名、请求即将写出前调用纯内存观察。随 ACK/UNKNOWN 等原有保存流程落库，最终统一放行后没有增加同步写库。250ms 腿延迟及传输层 150ms 签名延迟被正确观测，签名失败不伪造发送时刻。 |
+| CPU | 继承第八轮表存储/30 秒采样；`public_store.py` 行比较、变化才写、当轮缺失即撤销；`storage.py` 的 6 小时样本查询增加 bucket 主键范围，同时保留 at 精确边界。风控、窗口、预热、保留期均未降低。 |
+| release-halt | `__main__.py` 同一 flock，原服务停止后才操作；HALTED 且 confirm 精确匹配。`equity.py` 核对两边空仓/全部未完成订单、本地流水/待记账/在途发送及仓位锁；无负债、正权益且新鲜才重建基线并写 HALT_RELEASED。只清权益停机锁，不启动服务。 |
+| rebaseline | 停机 CLI 同上；运行 CLI 交给本机 ADMIN API。`Management` 绑定 `Engine.rebaseline`，协调器阻止新一轮发送；网络读取不持 Store/Executor 锁；提交前重查本地状态、时效及 revision。SQLite 事务同时写全部基线和 EQUITY_REBASELINED，失败回滚；旧在途刷新不可覆盖新 revision。 |
+
+重设基线保留订单、费用及收益历史，以 risk_pnl_baseline 的每日/累计偏移建立新的风险计量起点。已有亏损 200 的空仓停机案例重设后归零风险计量，再新增亏损 100 仍按原累计限额停机。原 STOP 文件、日亏锁、手工锁、仓位类锁均保留原规则。API 返回金额为数字、时间为 UTC ISO8601；内部审计保留精确 Decimal 字符串和 epoch 秒。
+
+分离 sent_ms 后，崩溃/签名失败可能留下没有实际写出观测的 SENT 记录；最近订单/拒单率查询使用 `coalesce(sent_ms,sent_persisted_ms,0)`，新增对应索引，避免遗漏历史风险样本。send_delta_ms 仍只用实际 sent_ms，任一未知就为 null。原有历史共享时刻不追溯伪造。
+
+### 线上 stale 与负债的调查结论
+
+本轮只读本地 Git 中的 `abf8dba` 源码，没有访问运行服务器或真实账户。可确认：旧 `Engine.refresh_accounts` 会先发布缓存并更新 account_equity_current，**不会在该后台路径清除 account_snapshot_unavailable**；但旧 `reconcile` 成功后确实执行 `stops.discard('account_snapshot_unavailable')`，而 `tick` 并不因该锁跳过对账。因此不能将现象定性为“锁一旦置位永不解除”。
+
+读取起点用于 10 秒时效检查，权益写入本身不证明快照新鲜；旧对账的其他异常也统一投影为 account_snapshot_unavailable。持续权益更新与持续 stale 可以同时发生。第八轮前的采样 CPU/锁等待、私有读取耗时、其他对账异常都是仍待线上时间证据区分的原因，不能根据本地代码认定 CPU 饥饿就是唯一根因。任务书中的 80–87% 是用户提供的旧线上观测，本轮没有重新测量服务器。
+
+本轮补齐明确的恢复规则：`ACCOUNT_RECOVERY_SNAPSHOTS=3`，账户刷新或对账观察连续三个**不同读取起点**、年龄 [0,10] 秒且相邻起点间隔不超过 10 秒的完整快照后，只解除自身快照锁，并将 ACCOUNT_SNAPSHOT_RECOVERED 与解锁放在同一事务。失败、陈旧或过长间隔重置计数；同一缓存重复使用不累计；审计写失败继续保留锁。不会解除 HALTED、仓位不匹配、裸露或其他原因的锁。
+
+summary 增加 account_snapshot（captured_at/completed_at/age_seconds/refresh_seconds/fresh）、stop_locks、liabilities、equity_baseline_revision。refresh_seconds 包含该次读取、等锁与完整核验，重复读取缓存不覆盖原刷新耗时；halt_reason 保留真正的停机原因。后续线上核验应同时观察该耗时、当前年龄、ACCOUNT_REFRESH_FAILED/ACCOUNT_SNAPSHOT_RECOVERED、最近 RECONCILE 及 CPU/线程栈，才能区分慢刷新与协调器问题。
+
+旧实现仅记录正 liability，没有用它直接拒绝开仓。本轮按用户指定的 spec 语义修复：`HYPERLIQUID / USDC / 28.5` 合成快照使 HardLimits/Engine 停开并写 ACCOUNT_LIABILITY/ALERT，SENT 提交后新出现负债也整对拒发。负债自身不另创强制平仓策略；已有减仓和原权益/保证金/累计亏损停机规则继续执行。三个不同且新鲜的无负债快照才清自身负债锁，HALTED 保持；rebaseline/release-halt 均拒绝有负债的账户。本轮没有确认线上这笔负债当前是否仍存在，也未执行还款或划转。
+
+### TDD、原断言与全量验证
+
+初始专项在旧实现上先红（`%TEMP%/crossex-r9-red-20261112.log`）；后续针对传输层签名延迟、风险发送窗口、历史核对期间快照过期、HTTP 金额/时间格式及重复缓存刷新观测继续先红后绿。最终新增三个第九轮测试文件合计 **45 项**，执行器总数 **398 = 原 353 + 新 45**。
+
+对起点逐函数 AST 审计了两套测试的 33 个原文件、673 个函数、1,756 个 `assert*/fail/skipTest` 或 `assert`，全部原断言节点保留，测试方法无删除。仅新增 summary 四个键；旧夹具补 cached_turnovers、实际 on_send 回调及发送风险窗口 fallback。原 `test_liability_written_to_state_and_event` 的两个断言原文保留，在原开仓调用外新增 assertRaises(account_liability)，强化为用户要求的“拒开且记录”；未通过吞异常/跳过测试保持绿灯。没有修改 fill-sim 模块、随机种子、故障序列、N=1、任何原风控数值或验收阈值。
+
+最终完整执行以下四条命令，没有筛选或跳过用例：
+
+```powershell
+python -m unittest discover -s tools/crossex_exec/tests -v
+python -m unittest discover -s tools/fill_sim/tests -v
+$py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe'
+& $py310 -m unittest discover -s tools/crossex_exec/tests -v
+& $py310 -m unittest discover -s tools/fill_sim/tests -v
+```
+
+| Python | 执行器 | fill-sim | 退出码 |
+|---|---|---|---|
+| 3.12.10 | 398 tests / 117.586s / OK | 158 tests / 29.878s / OK | 两条均 0 |
+| 3.10.20（用户指定解释器） | 398 tests / 128.016s / OK | 158 tests / 32.016s / OK | 两条均 0 |
+
+每个解释器都实际完成三种子 `20261111/20261112/20261113`，各 **2,568 回合 = 2,400 随机 + 168 定向**。I1a–d、I2–I7 各项 checks 均为 2,568，exercised 全部非零；N 仍为 1。六次运行的 checks/exercised/coverage 分别保存在 [验收数据](crossex-exec-r9-validation-2026-11-12.json)，不把两版本的 wall-clock 轮询计数改成相同。原始 stdout/stderr 保存在本机 `%TEMP%`，完整 SHA-256：
+
+| 日志文件 | SHA-256 |
+|---|---|
+| `crossex-r9-final-py312-crossex_exec-20261112.log` | `1a211ef88dbb36bd37cbaf3aed766c56d3195789d7883c295fc5189188bc259c` |
+| `crossex-r9-final-py312-fill_sim-20261112.log` | `175eb0b7c6c79f4654fad3c84cbe89db9cffa0c0f65be3aacbc077d11a83d8f1` |
+| `crossex-r9-final-py310-crossex_exec-20261112.log` | `9c5172285e83f15914dcf88b3c395da9dc19521443035bcb86e39eb3b1bc375b` |
+| `crossex-r9-final-py310-fill_sim-20261112.log` | `37712819d68e430eaf3e6bfb515f9a441ec437779d07410f848726b6954a96e0` |
+
+### CPU 实测与复现
+
+第八轮代码在本机补测 187 币、6 所、24 小时历史的三轮采样，CPU 秒分别为 4.609375/4.515625/4.484375，平均 4.536458 秒。除以既有 30 秒周期，**仅采样**预算就约单核 15.12%，尚不包含执行协调器、账户和接口投影，故在此前优化上继续补足。原始结果为 `%TEMP%/crossex-r9-sampling-baseline-20261112.json`。
+
+测量入口 `python -m tools.crossex_exec.benchmark_steady --bases 187 --dynamic-bases 40 --history-hours 24 --warmup 30 --seconds 180 --output steady.json`；使用整个进程（全部线程）的 `time.process_time()` 差值除以 `time.monotonic()` 实测区间，不除以宿主机核数。187 币历史预热，另外 40 币按成交额在 187/207/227 采样规模间变化，额外币在短测中尚未完成 3 小时预热。真实公共解析、请求队列、协调器、账户/行情后台和 API 投影运行；I/O 为合成数据，外部 DNS/连接被强制禁止。历史准备、30 秒预热、另行 cProfile 不计入稳态 CPU。
+
+固定功能提交 `e24adc2` 的最终复测：Windows Python 3.12.10 / SQLite 3.49.1；1,362 原生合约，结束时 8,063,970 条历史样本；**22.718750 CPU 秒 / 180.125 墙钟秒 = 单核 12.6128%**，满足本机等价稳态 ≤15% 目标。五个完整约 30 秒窗口分别 13.53%/12.84%/12.81%/13.12%/11.39%，最后不足 30 秒的尾段计入总平均；该次完整窗口最大 13.53%。稳态工作集 47.37 MiB、进程峰值工作集 49.31 MiB，后台异常列表为空。912 次协调器 tick、45 次账户读取、43 次并发 API 投影、184 次机会轮询为含预热的总计数，采样数组含末尾单独 profile，不能将它们冒充稳态区间专用计数。
+
+首轮同方案稳态平均 12.9578%，但有一个完整窗口为 22.28%，两次结果均保留在 [性能数据](crossex-exec-r9-performance-2026-11-12.json)，没有只保留最好一轮。采样前测与稳态测量的工作负载不同，不据此计算虚假的同比降幅；首个采样 JSON 中 mode=after 指第八轮探针相对它自己的旧实现，属于本轮继续优化之前的采样基线。短时局部测量不保证所有瞬时窗口、其他硬件或动态币完成长时间预热后的 CPU 上限。
+
+最终原始 `%TEMP%/crossex-r9-final-steady-187-20261112.json` SHA-256 为 `b5adb1049aa60573af77a04a2262edcaf64729e70a2406dd6fa3a12b8c7ae688`；同名 `.log` SHA-256 为 `bec6a3cc25d697c9eed19854b139bc211843fc78eb2b5e378025f8c37d79d159`。仓库性能数据完整保存前测、首轮和最终复测、profile 及源文件校验值。
+
+### 契约、线上边界与下一步
+
+契约 [第九轮增补](live-exec-contract-2026-11-11.md#第九轮增补2026-11-12) 只追加原文，包含 POST /api/v1/equity/rebaseline、ADMIN/二次确认、400/409/503 原因、响应字段、CLI 前提、四个 summary 新字段、OKX 不可交易标志和发送时间语义。旧四个 GET 及所有旧字段保留。页面按钮、taoli1 登录态/CSRF/私有令牌转发仍按既有交接归 `live-exec-page` 模块，本轮用户明确列出的交付为 CLI + ADMIN 写接口。
+
+公开字段依据：[OKX instruments](https://www.okx.com/docs-v5/en/#public-data-rest-api-get-instruments) 定义 ruleType；[Gate CrossEx 官方文档](https://www.gate.com/docs/developers/crossex/en/) 的 Query All Current Open Orders 为 GET `/crossex/open_orders`（交易所/业务/symbol 筛选可省略，本实现全量读取）。文档访问无鉴权，所有交易测试仅本地 fake/回环 HTTP，不将其视为真实交易所验收。
+
+推送未执行；线上备份/校验、部署版本、运行服务和实际接口均未读取或修改；未 SSH/WSL/amend，未使用真实凭据。按用户提供的信息，线上影子版本是 abf8dba，当前状态没有重新确认。仓库无用户遗留改动被覆盖；测试与性能 Temp 日志、忽略的 Python 缓存保留，压测数据库仅由探针清理自己创建的临时目录。
+
+下一任务另行授权 Linux/systemd/SQLite 3.37 与真实目录/账户的 LIVE=0 影子验证：部署前按当轮授权备份；核对新鲜快照耗时/恢复事件、负债币种和账户状态、真实 CrossEx 全量未完成订单响应；测 187 币及实际动态规模在长时间预热后的 CPU、cgroup 内存和 24h 恢复情况。Windows 3.10 是语法与行为兼容证据，不等于 Ubuntu 或真钱验收。不要删除数据库解锁，不把本地全绿或影子通过解释为开实盘授权。

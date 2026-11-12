@@ -1,5 +1,11 @@
 # 下一任务入口
 
+2026-11-12 最新入口为 [第九轮交接](task-handoff-2026-11-12-crossex-exec-r8.md#第九轮)，分支仍为 `codex/crossex-exec-r8`。从 `efd296e` 修复终审全部 3P1/1P2，补账户快照三次新鲜恢复、负债停开、release-halt/rebaseline CLI 与 ADMIN 写接口；功能提交 `e24adc2`，测试提交 `48bc076`、`18e214c`。Python 3.12/指定 3.10 各执行器 398 项、fill-sim 158 项全过，三种子各 2,568 回合；[验收数据](crossex-exec-r9-validation-2026-11-12.json) 保留六次模拟统计和日志校验值。
+
+187 币加 40 币动态变化、24 小时历史的最终本机稳态为单核 **12.61%**（180.125 秒），完整结果与短测边界见 [性能数据](crossex-exec-r9-performance-2026-11-12.json)。下一任务按模块继续：Linux/实际账户/24h 影子验收另行授权，页面按钮及 taoli1 会话/CSRF 转发在 `live-exec-page` 接入[追加契约](live-exec-contract-2026-11-11.md#第九轮增补2026-11-12)。本轮仅本地提交，未 push/SSH/WSL/amend/真实鉴权或部署。线上 stale 根因未获得运行证据，不能将它直接归因为锁永不解除或 CPU；检查新增刷新时长、快照年龄、恢复事件和真实负债。不要删除数据库重置基线。
+
+以下为第九轮之前的交付记录：
+
 2026-11-12 `codex/crossex-exec-r8` 已通过 no-ff 合并终审修复：合并 `3b1d056`，专项测试 `eb297ef`，锁顺序修复 `8e95ea7`。后续从 [合并终审修复](task-handoff-2026-11-12-crossex-exec-r8.md#合并终审修复) 的最终双版本原始汇总继续。第八轮复核已进入 SENT 原子提交后的共享屏障，SQL 分页、采样优化及 ADMIN 写接口保留；service 当前 `MemoryMax=192M` 仍待 Linux 实机验收。本次仅本地提交，不 push/SSH/WSL/amend/鉴权；部署、线上备份和页面联调另建任务。
 
 以下为合并前第八轮交付记录：

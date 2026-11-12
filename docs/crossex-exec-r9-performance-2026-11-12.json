@@ -1,0 +1,651 @@
+{
+  "implementation_revision": "e24adc2deae43c86970e3b02415607ed789b8540",
+  "cpu_formula": "100 * process_time_delta / monotonic_delta; all process threads; no CPU-count normalization",
+  "boundaries": [
+    "Synthetic I/O with external sockets/DNS forbidden; no credentials or orders",
+    "187 bases carry 24h history; 40 dynamic additions are not fully warmed",
+    "Setup, 30s warmup and separate cProfile excluded from 180s steady interval",
+    "Baseline is sampling-only projection; steady includes coordination, account/reference and API reads",
+    "Windows local measurement does not establish Linux or 24h production acceptance"
+  ],
+  "results": {
+    "round8_sampling_187_baseline": {
+      "source_file": "crossex-r9-sampling-baseline-20261112.json",
+      "sha256": "df1372f21e54f089ef290a95b20572d37edff9e7bf160b3ad6d20518a5fe45f3",
+      "measurement": {
+        "mode": "after",
+        "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+        "platform": "win32",
+        "bases": 187,
+        "native_contracts": 1122,
+        "venue_pairs": 2805,
+        "history_hours": 24,
+        "sample_rows": 8081205,
+        "network": false,
+        "credentials": false,
+        "initial_memory": {
+          "rss_bytes": 31203328,
+          "peak_rss_bytes": 31203328,
+          "private_commit_bytes": 20987904,
+          "peak_private_commit_bytes": 20987904
+        },
+        "rounds": [
+          {
+            "round": 1,
+            "cpu_seconds": 4.609375,
+            "wall_seconds": 4.755382800009102,
+            "rss_bytes": 32165888,
+            "peak_rss_bytes": 32165888,
+            "private_commit_bytes": 22032384,
+            "peak_private_commit_bytes": 22040576
+          },
+          {
+            "round": 2,
+            "cpu_seconds": 4.515625,
+            "wall_seconds": 4.627583699999377,
+            "rss_bytes": 32313344,
+            "peak_rss_bytes": 32313344,
+            "private_commit_bytes": 22167552,
+            "peak_private_commit_bytes": 22167552
+          },
+          {
+            "round": 3,
+            "cpu_seconds": 4.484375,
+            "wall_seconds": 4.562433100072667,
+            "rss_bytes": 32329728,
+            "peak_rss_bytes": 32329728,
+            "private_commit_bytes": 22167552,
+            "peak_private_commit_bytes": 22167552
+          }
+        ],
+        "average_cpu_seconds": 4.536458333333333,
+        "projected_one_core_percent_at_30s": 15.121527777777777,
+        "final_memory": {
+          "rss_bytes": 32415744,
+          "peak_rss_bytes": 32415744,
+          "private_commit_bytes": 22167552,
+          "peak_private_commit_bytes": 22167552
+        },
+        "database_and_wal_bytes": 971861688,
+        "profile": [
+          {
+            "file": "baseline.py",
+            "line": 138,
+            "name": "status",
+            "calls": 2805,
+            "own_seconds": 0.5380787,
+            "cumulative_seconds": 5.1157747
+          },
+          {
+            "file": "storage.py",
+            "line": 201,
+            "name": "baseline_samples",
+            "calls": 2805,
+            "own_seconds": 1.6059389000000002,
+            "cumulative_seconds": 3.3669707000000004
+          },
+          {
+            "file": "baseline.py",
+            "line": 103,
+            "name": "record",
+            "calls": 1,
+            "own_seconds": 0.0385659,
+            "cumulative_seconds": 5.7257147
+          },
+          {
+            "file": "storage.py",
+            "line": 102,
+            "name": "set_meta",
+            "calls": 1,
+            "own_seconds": 1.73e-05,
+            "cumulative_seconds": 0.0054159
+          }
+        ],
+        "elapsed_seconds": 229.10216600005515
+      }
+    },
+    "round9_first_steady": {
+      "source_file": "crossex-r9-steady-187-20261112.json",
+      "sha256": "6bc11030451c0c066b57000dec60d57696759b98820d9e4148f98ed953f50b7b",
+      "measurement": {
+        "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+        "sqlite": "3.49.1",
+        "platform": "Windows-11-10.0.26200-SP0",
+        "bases": 187,
+        "dynamic_bases": 40,
+        "native_contracts": 1362,
+        "history_hours": 24,
+        "sample_rows": 8063970,
+        "warmup_seconds": 30,
+        "wall_seconds": 180.03100000019185,
+        "cpu_seconds": 23.328125,
+        "one_core_percent": 12.957837816806627,
+        "windows": [
+          {
+            "wall_seconds": 30.0,
+            "cpu_seconds": 4.0,
+            "one_core_percent": 13.333333333333334
+          },
+          {
+            "wall_seconds": 33.735000000102445,
+            "cpu_seconds": 7.515625,
+            "one_core_percent": 22.278420038467992
+          },
+          {
+            "wall_seconds": 30.186999999918044,
+            "cpu_seconds": 4.0,
+            "one_core_percent": 13.250737072285618
+          },
+          {
+            "wall_seconds": 30.281000000191852,
+            "cpu_seconds": 3.4375,
+            "one_core_percent": 11.35200290604082
+          },
+          {
+            "wall_seconds": 30.07799999997951,
+            "cpu_seconds": 3.953125,
+            "one_core_percent": 13.142911762759136
+          }
+        ],
+        "sampling": [
+          {
+            "at": 1794457065.3032138,
+            "bases": 187,
+            "quote_wall_seconds": 0.07934759999625385
+          },
+          {
+            "at": 1794457096.079481,
+            "bases": 207,
+            "quote_wall_seconds": 0.84582499996759
+          },
+          {
+            "at": 1794457126.0952907,
+            "bases": 227,
+            "quote_wall_seconds": 0.8461492999922484
+          },
+          {
+            "at": 1794457155.3374074,
+            "bases": 207,
+            "quote_wall_seconds": 0.07160680019296706
+          },
+          {
+            "at": 1794457185.3454194,
+            "bases": 187,
+            "quote_wall_seconds": 0.06469959998503327
+          },
+          {
+            "at": 1794457216.3447871,
+            "bases": 207,
+            "quote_wall_seconds": 1.0480404999107122
+          },
+          {
+            "at": 1794457245.3592422,
+            "bases": 227,
+            "quote_wall_seconds": 0.06246190005913377
+          },
+          {
+            "at": 1794457276.3533537,
+            "bases": 207,
+            "quote_wall_seconds": 1.0802086000330746
+          }
+        ],
+        "coordinator_ticks": 912,
+        "account_reads": 44,
+        "api_reads": 42,
+        "source_polls": 185,
+        "initial_memory": {
+          "rss_bytes": 44597248,
+          "peak_rss_bytes": 46747648,
+          "private_commit_bytes": 31961088,
+          "peak_private_commit_bytes": 34291712
+        },
+        "steady_memory": {
+          "rss_bytes": 48537600,
+          "peak_rss_bytes": 50262016,
+          "private_commit_bytes": 35475456,
+          "peak_private_commit_bytes": 37998592
+        },
+        "background_failures": [],
+        "network": false,
+        "credentials": false,
+        "live": false,
+        "profile": [
+          {
+            "file": "benchmark_steady.py",
+            "line": 189,
+            "name": "profile_round",
+            "calls": 2,
+            "own_seconds": 0.0001878,
+            "cumulative_seconds": 5.8473796
+          },
+          {
+            "file": "baseline.py",
+            "line": 103,
+            "name": "record",
+            "calls": 1,
+            "own_seconds": 0.057098600000000006,
+            "cumulative_seconds": 4.770334500000001
+          },
+          {
+            "file": "baseline.py",
+            "line": 138,
+            "name": "status",
+            "calls": 3105,
+            "own_seconds": 0.5585585000000001,
+            "cumulative_seconds": 4.164052
+          },
+          {
+            "file": "storage.py",
+            "line": 201,
+            "name": "baseline_samples",
+            "calls": 3105,
+            "own_seconds": 1.6918272,
+            "cumulative_seconds": 1.7858566
+          },
+          {
+            "file": "benchmark_steady.py",
+            "line": 104,
+            "name": "sample_quotes",
+            "calls": 2,
+            "own_seconds": 0.000142,
+            "cumulative_seconds": 1.0768587
+          },
+          {
+            "file": "market.py",
+            "line": 344,
+            "name": "sample_quotes",
+            "calls": 2,
+            "own_seconds": 0.0061206,
+            "cumulative_seconds": 1.0766952
+          },
+          {
+            "file": "queue.py",
+            "line": 154,
+            "name": "get",
+            "calls": 377,
+            "own_seconds": 0.0021109,
+            "cumulative_seconds": 0.9657482000000001
+          },
+          {
+            "file": "threading.py",
+            "line": 323,
+            "name": "wait",
+            "calls": 377,
+            "own_seconds": 0.0033546,
+            "cumulative_seconds": 0.9620132
+          },
+          {
+            "file": "~",
+            "line": 0,
+            "name": "<built-in method time.sleep>",
+            "calls": 95,
+            "own_seconds": 0.9433847000000001,
+            "cumulative_seconds": 0.9433847000000001
+          },
+          {
+            "file": "core.py",
+            "line": 12,
+            "name": "dec",
+            "calls": 2052940,
+            "own_seconds": 0.8213872000000001,
+            "cumulative_seconds": 0.9315983000000001
+          },
+          {
+            "file": "~",
+            "line": 0,
+            "name": "<method 'execute' of 'sqlite3.Connection' objects>",
+            "calls": 9334,
+            "own_seconds": 0.5958735000000001,
+            "cumulative_seconds": 0.5958735000000001
+          },
+          {
+            "file": "statistics.py",
+            "line": 601,
+            "name": "median",
+            "calls": 6210,
+            "own_seconds": 0.012277000000000001,
+            "cumulative_seconds": 0.5612899
+          },
+          {
+            "file": "~",
+            "line": 0,
+            "name": "<built-in method builtins.sorted>",
+            "calls": 17182,
+            "own_seconds": 0.5508394,
+            "cumulative_seconds": 0.5515134
+          },
+          {
+            "file": "storage.py",
+            "line": 196,
+            "name": "add_baseline_samples",
+            "calls": 1,
+            "own_seconds": 2.16e-05,
+            "cumulative_seconds": 0.521375
+          },
+          {
+            "file": "~",
+            "line": 0,
+            "name": "<built-in method builtins.next>",
+            "calls": 14,
+            "own_seconds": 2.61e-05,
+            "cumulative_seconds": 0.3317895
+          },
+          {
+            "file": "storage.py",
+            "line": 78,
+            "name": "transaction",
+            "calls": 6,
+            "own_seconds": 3.19e-05,
+            "cumulative_seconds": 0.331757
+          },
+          {
+            "file": "contextlib.py",
+            "line": 141,
+            "name": "__exit__",
+            "calls": 3,
+            "own_seconds": 1.5300000000000003e-05,
+            "cumulative_seconds": 0.33165730000000004
+          },
+          {
+            "file": "~",
+            "line": 0,
+            "name": "<built-in method builtins.abs>",
+            "calls": 2004570,
+            "own_seconds": 0.18222270000000002,
+            "cumulative_seconds": 0.18222270000000002
+          },
+          {
+            "file": "public_store.py",
+            "line": 132,
+            "name": "save_baseline_state",
+            "calls": 3105,
+            "own_seconds": 0.0367533,
+            "cumulative_seconds": 0.1223811
+          },
+          {
+            "file": "~",
+            "line": 0,
+            "name": "<method 'is_finite' of 'decimal.Decimal' objects>",
+            "calls": 2052940,
+            "own_seconds": 0.1102111,
+            "cumulative_seconds": 0.1102111
+          }
+        ]
+      }
+    },
+    "round9_final_steady": {
+      "source_file": "crossex-r9-final-steady-187-20261112.json",
+      "sha256": "b5adb1049aa60573af77a04a2262edcaf64729e70a2406dd6fa3a12b8c7ae688",
+      "measurement": {
+        "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+        "sqlite": "3.49.1",
+        "platform": "Windows-11-10.0.26200-SP0",
+        "bases": 187,
+        "dynamic_bases": 40,
+        "native_contracts": 1362,
+        "history_hours": 24,
+        "sample_rows": 8063970,
+        "warmup_seconds": 30,
+        "wall_seconds": 180.125,
+        "cpu_seconds": 22.71875,
+        "one_core_percent": 12.612768910478833,
+        "windows": [
+          {
+            "wall_seconds": 30.030999999959022,
+            "cpu_seconds": 4.0625,
+            "one_core_percent": 13.527688055694261
+          },
+          {
+            "wall_seconds": 30.187000000150874,
+            "cpu_seconds": 3.875,
+            "one_core_percent": 12.836651538677685
+          },
+          {
+            "wall_seconds": 30.015999999828637,
+            "cpu_seconds": 3.84375,
+            "one_core_percent": 12.80567030924155
+          },
+          {
+            "wall_seconds": 30.016000000061467,
+            "cpu_seconds": 3.9375,
+            "one_core_percent": 13.118003731316422
+          },
+          {
+            "wall_seconds": 30.046000000089407,
+            "cpu_seconds": 3.421875,
+            "one_core_percent": 11.388787192936888
+          }
+        ],
+        "sampling": [
+          {
+            "at": 1794458324.5355716,
+            "bases": 187,
+            "quote_wall_seconds": 0.07742600003257394
+          },
+          {
+            "at": 1794458354.5516055,
+            "bases": 207,
+            "quote_wall_seconds": 0.08432219992391765
+          },
+          {
+            "at": 1794458384.553971,
+            "bases": 227,
+            "quote_wall_seconds": 0.061949800001457334
+          },
+          {
+            "at": 1794458414.5634496,
+            "bases": 207,
+            "quote_wall_seconds": 0.06777510000392795
+          },
+          {
+            "at": 1794458444.5675771,
+            "bases": 187,
+            "quote_wall_seconds": 0.06838690000586212
+          },
+          {
+            "at": 1794458474.5875008,
+            "bases": 207,
+            "quote_wall_seconds": 0.06678969995118678
+          },
+          {
+            "at": 1794458504.5822952,
+            "bases": 227,
+            "quote_wall_seconds": 0.056710399920120835
+          },
+          {
+            "at": 1794458534.584955,
+            "bases": 207,
+            "quote_wall_seconds": 0.059430700028315187
+          },
+          {
+            "at": 1794458539.0298722,
+            "bases": 207,
+            "quote_wall_seconds": 0.6715814999770373
+          }
+        ],
+        "coordinator_ticks": 912,
+        "account_reads": 45,
+        "api_reads": 43,
+        "source_polls": 184,
+        "initial_memory": {
+          "rss_bytes": 45461504,
+          "peak_rss_bytes": 46645248,
+          "private_commit_bytes": 32968704,
+          "peak_private_commit_bytes": 34320384
+        },
+        "steady_memory": {
+          "rss_bytes": 49668096,
+          "peak_rss_bytes": 51703808,
+          "private_commit_bytes": 36311040,
+          "peak_private_commit_bytes": 38461440
+        },
+        "background_failures": [],
+        "network": false,
+        "credentials": false,
+        "live": false,
+        "profile": [
+          {
+            "file": "benchmark_steady.py",
+            "line": 189,
+            "name": "profile_round",
+            "calls": 2,
+            "own_seconds": 0.0001932,
+            "cumulative_seconds": 4.371705700000001
+          },
+          {
+            "file": "baseline.py",
+            "line": 103,
+            "name": "record",
+            "calls": 1,
+            "own_seconds": 0.0454902,
+            "cumulative_seconds": 3.7032450000000003
+          },
+          {
+            "file": "baseline.py",
+            "line": 138,
+            "name": "status",
+            "calls": 3105,
+            "own_seconds": 0.45559920000000004,
+            "cumulative_seconds": 3.6084033000000004
+          },
+          {
+            "file": "storage.py",
+            "line": 203,
+            "name": "baseline_samples",
+            "calls": 3105,
+            "own_seconds": 1.5244412,
+            "cumulative_seconds": 1.5997371
+          },
+          {
+            "file": "core.py",
+            "line": 12,
+            "name": "dec",
+            "calls": 2052940,
+            "own_seconds": 0.6446622000000001,
+            "cumulative_seconds": 0.7437738
+          },
+          {
+            "file": "benchmark_steady.py",
+            "line": 104,
+            "name": "sample_quotes",
+            "calls": 2,
+            "own_seconds": 0.0001218,
+            "cumulative_seconds": 0.6682695000000001
+          },
+          {
+            "file": "market.py",
+            "line": 344,
+            "name": "sample_quotes",
+            "calls": 2,
+            "own_seconds": 0.0045881,
+            "cumulative_seconds": 0.6681428
+          },
+          {
+            "file": "queue.py",
+            "line": 154,
+            "name": "get",
+            "calls": 229,
+            "own_seconds": 0.0009383000000000001,
+            "cumulative_seconds": 0.5785747
+          },
+          {
+            "file": "threading.py",
+            "line": 323,
+            "name": "wait",
+            "calls": 229,
+            "own_seconds": 0.0016721000000000001,
+            "cumulative_seconds": 0.5768325000000001
+          },
+          {
+            "file": "~",
+            "line": 0,
+            "name": "<built-in method time.sleep>",
+            "calls": 58,
+            "own_seconds": 0.5739933,
+            "cumulative_seconds": 0.5739933
+          },
+          {
+            "file": "statistics.py",
+            "line": 601,
+            "name": "median",
+            "calls": 6210,
+            "own_seconds": 0.0107115,
+            "cumulative_seconds": 0.5277986
+          },
+          {
+            "file": "~",
+            "line": 0,
+            "name": "<built-in method builtins.sorted>",
+            "calls": 17182,
+            "own_seconds": 0.5187356000000001,
+            "cumulative_seconds": 0.5192799
+          },
+          {
+            "file": "~",
+            "line": 0,
+            "name": "<built-in method builtins.abs>",
+            "calls": 2004570,
+            "own_seconds": 0.1546402,
+            "cumulative_seconds": 0.1546402
+          },
+          {
+            "file": "~",
+            "line": 0,
+            "name": "<method 'execute' of 'sqlite3.Connection' objects>",
+            "calls": 9334,
+            "own_seconds": 0.12160710000000001,
+            "cumulative_seconds": 0.12160710000000001
+          },
+          {
+            "file": "public_store.py",
+            "line": 132,
+            "name": "save_baseline_state",
+            "calls": 3105,
+            "own_seconds": 0.0322539,
+            "cumulative_seconds": 0.1053872
+          },
+          {
+            "file": "~",
+            "line": 0,
+            "name": "<method 'is_finite' of 'decimal.Decimal' objects>",
+            "calls": 2052940,
+            "own_seconds": 0.09911160000000001,
+            "cumulative_seconds": 0.09911160000000001
+          },
+          {
+            "file": "market.py",
+            "line": 322,
+            "name": "refresh_tickers",
+            "calls": 2,
+            "own_seconds": 0.0004379,
+            "cumulative_seconds": 0.0581493
+          },
+          {
+            "file": "public_store.py",
+            "line": 114,
+            "name": "baseline_state",
+            "calls": 3105,
+            "own_seconds": 0.005751200000000001,
+            "cumulative_seconds": 0.0433614
+          },
+          {
+            "file": "~",
+            "line": 0,
+            "name": "<method 'executemany' of 'sqlite3.Connection' objects>",
+            "calls": 6,
+            "own_seconds": 0.0270511,
+            "cumulative_seconds": 0.0280391
+          },
+          {
+            "file": "storage.py",
+            "line": 104,
+            "name": "set_meta",
+            "calls": 3,
+            "own_seconds": 7.3e-05,
+            "cumulative_seconds": 0.028034000000000003
+          }
+        ]
+      }
+    }
+  }
+}
