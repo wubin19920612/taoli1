@@ -129,6 +129,26 @@ class FXQueueTests(unittest.TestCase):
             self.assertEqual(self.market.spot_fx(('USD','USDT')), {})
             self.assertEqual(self.market.queue.send_count,before)
 
+    def test_late_queued_converters_keep_original_currency_after_next_batch(self):
+        queued=[]
+        def batch(items,**kwargs):
+            queued.extend(items)
+            return [None]*len(items)
+        with patch.object(self.market,'batch',side_effect=batch):
+            self.market.spot_fx(('DAI','USDC'))
+        # Simulate a timed-out worker returning only after the next coin batch.
+        for index,coin in enumerate(('DAI','USDC')):
+            for venue,url,convert in queued[index*3:index*3+3]:
+                self.assertEqual(convert(payload(venue,self.now,coin))['base'],coin)
+
+    def test_cache_cannot_extend_an_already_59_second_old_quote(self):
+        with patch.object(self.market.client,'_perform',side_effect=lambda v,u:payload(v,self.now-59)) as send:
+            self.market.spot_fx(('USDC',))
+            self.assertEqual(send.call_count,3)
+            self.now+=2
+            self.market.spot_fx(('USDC',))
+            self.assertEqual(send.call_count,6)
+
 
 class FXAccountingTests(ExternalFixture,unittest.TestCase):
     def setUp(self):
