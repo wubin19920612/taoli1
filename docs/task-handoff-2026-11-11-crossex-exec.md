@@ -1167,3 +1167,80 @@ INVARIANTS seed=20261113 rounds=2448 random_rounds=2400 N=1 checks={'1a': 2448, 
 现有入口：`engine.py::ingest/opening_review/check_pair`、`policy.py::review/send_review`、`admission.py::OpeningLimits`、`limits.py::HardLimits`、`storage.py::Store`、`market.py::MarketData`、`api.py::APIService/_Handler.dispatch`、`api_data.py::JournalView`。映射必须贯穿开仓、成交记账、实仓恢复及减仓数量，不只改开仓公式，保持第一至七轮裸露、穿零和共享放行约束。
 
 未变更生产代码；未 push、SSH、WSL、amend、调用真实鉴权接口、读取真实 env/凭据、启动服务、生产备份、部署或线上验证，线上版本未触碰。父仓库索引的首次普通写入被文件沙箱阻止，随后在用户已授权的本地提交范围内通过自动审批，没有审批拒绝；提交禁用 hooks/GPG。仅提交本任务文件，临时日志及被忽略的 Python 缓存保留，没有额外未跟踪仓库文件需要移交。仍停在 crossex-exec 第八轮，不进入前端模块。
+
+## 第八轮交付（2026-11-12 续跑，定量行为冲突待 PM，未完成）
+
+**本次未完成第八轮。** 已读取 `ab33e05` 修订任务书、本交接上一节、当前实现和旧测试。用户本轮允许扩展新增键引起的精确字典期望，但明确要求遇到风控行为、阈值、上限、方向或恢复语义断言冲突时停下交给 PM。本次发现并复现了最小下单量的取整行为冲突，未修改旧断言或生产实现，已发出裁决问题，尚未收到答复。
+
+### 范围、分支与提交
+
+- 模块仍为 crossex-exec 第八轮；taoli1 前端由 `live-exec-page` 任务负责。
+- 指定 worktree 和分支未变；续跑基线为 `ab33e05`，起始工作区干净。`67897da` 的三项新增计数期望保留。
+- test：`b98d4125171dac5569a341ed2fc036054d67cc16`，只新增 `tools/crossex_exec/tests/test_round8_sizing_contract.py`，两个先红测试。
+- docs：本节和 `docs/live-exec-contract-2026-11-11.md` 的修订状态说明独立提交；用 `git log -1 --format=%H -- docs/task-handoff-2026-11-11-crossex-exec.md` 获取 hash。没有 feat 提交。
+- 本次未扩展任何原测试期望；允许的新增字段适配清单为空。未改动 `execution.py`、`storage.py` 或 service 文件，便于后续合并主分支终审修复。
+
+### PM 待决：向上补最小量与向下取整后放弃
+
+`policy.py::review` 先经 `fill_sim.core.opening(..., amount=100)` 得到公倍数步长向下取整的数量，再在交易所最小下单要求不足时补一个步长。第三轮明确锁定这个行为：
+
+| 原测试（`tools/crossex_exec/tests/test_round3.py`） | 旧行为与断言 | 第八轮要求 |
+|---|---|---|
+| `Round3PolicyTests.test_r6_final_sell_limit_minimum_bumps_one_common_step`，487–497 行 | 卖腿最小名义额 `99.94`；数量 `0.980` 在最终卖限价 `101.96` 下只有 `99.92080`，补到 `0.981`，断言数量恰好 `0.981`；随后 `max_qty=0.980` 必须拒绝 | 向下取整后低于任一腿最小名义额则 `size_too_small`，不可补一步长 |
+| `Round3PolicyTests.test_r6_min_quantity_bumps_once_and_still_invalid_minimum_rejects`，499–507 行 | 最小数量 `0.981` 时由 `0.980` 补到 `0.981` 并成功；最小数量 `0.982` 时拒绝 | 向下取整后不足最小量即放弃 |
+
+新红测复用这两项的原始盘口、费率、资金费率、成交额和规格输入，要求 `ValueError('size_too_small')`。它们只隔离最终定量行为，不假装覆盖 OI、版本化参数、默认 50 USD 或新的完整公式。当前代码仍返回成功，因此两项均为 `AssertionError: ValueError not raised`。
+
+建议 PM 采用第八轮规则，授权替换上述两项“补一步长成功”的旧行为断言，同时保留交易所最大量拒绝及其余安全断言，并补充分别由深度/OI/单笔/余额约束主导的边界用例。采用建议之前不做该行为变更；没有通过调用方特判、保留只为旧测试服务的路径、mock 生产结果或弱化断言来伪造全绿。
+
+### 本次联网核实的公开字段
+
+以下为 2026-11-12 官方文档读取结果；没有执行文档示例，没有请求真实鉴权接口。字段说明不是已交付的适配器。USD、USDT、基础币和张数须分别保留原单位，不能直接互换；任何未经证实的 OI 单位仍须拒绝开仓并记 `oi_missing`。
+
+| 所 | OI | 批量成交额与目录分类 |
+|---|---|---|
+| Binance | [USD-M Market Data / Open Interest](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data#open-interest) 确认 `/fapi/v1/openInterest`、`openInterest/symbol/time`；该页仍未明确基础币/张单位，待补证 | 同页 [24hr ticker](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data#24hr-ticker-price-change-statistics) 的 `quoteVolume` 为报价币量；[exchange information](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data#exchange-information) 有 `underlyingType=COIN` 示例、`underlyingSubType` 数组，完整 RWA/PREMARKET 枚举未证实 |
+| Bybit | [Open Interest](https://bybit-exchange.github.io/docs/v5/market/open-interest) 明确 linear 的 `openInterest` 是基础币且为双边合计，`singleOpenInterest` 是单边，`timestamp` 毫秒 | [tickers](https://bybit-exchange.github.io/docs/v5/market/tickers) 有 `turnover24h`、`volume24h`；[目录](https://bybit-exchange.github.io/docs/v5/market/instrument) 有 `isPreListing`；[symbolType 枚举](https://bybit-exchange.github.io/docs/v5/enum#symboltype) 有 `commodity/stock/ETF/forex`。未知类别不可仅凭 linear 自动当作 crypto，股票仍须用户确认原始标的市场 |
+| OKX | [Open Interest](https://www.okx.com/docs-v5/en/#public-data-rest-api-get-open-interest) 的 `oi/oiCcy/oiUsd` 分别为张/币/USD，`ts` 毫秒 | [tickers](https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-tickers) 的衍生品 `volCcy24h` 是基础币量，`vol24h` 是张数；当前旧代码乘 `low24h` 得到的是保守金额下界，并非精确 24h 报价成交额。[目录](https://www.okx.com/docs-v5/en/#public-data-rest-api-get-instruments) 的 `instCategory`：1 crypto、3 stocks、4 commodities、5 forex、6 bonds、空值未知 |
+| Gate | [Futures statistics](https://www.gate.com/docs/developers/apiv4/en/futures/) 的 `open_interest` 为张数，`open_interest_usd` 为报价币金额，`time` 为统计时间 | 同页 `/futures/{settle}/tickers` 的 `volume_24h_quote` 为报价币量；旧 `volume_24h_usd` 已标记弃用。目录 `contract_type` 例举 stocks/metals/indices/forex/commodities；未取得完整 crypto/pre-market 枚举，未知分类须人工判断 |
+| Bitget | [Classic Contract Market / Open Interest](https://www.bitget.com/docs/catalog/classic-contract-market/classic-contract-market#get-open-interest) 的 `/api/v2/mix/market/open-interest` 返回 `data.openInterestList[].size`，单位为基础币，`data.ts` 毫秒；须校验返回 symbol | 同页批量 tickers 的 `usdtVolume` 明确为 USDT 量、`quoteVolume` 为报价币量、`holdingAmount` 为基础币持仓量；目录 `isRwa=YES/NO`。另查 [UTA Market Data](https://www.bitget.com/docs/catalog/market/market-data) 确认 V3 `turnover24h/openInterest`，但本次未取得 V3 OI 更明确的单位说明，不能把 V2 与 V3 字段静默混用 |
+| Aster | [官方 V3 文档](https://raw.githubusercontent.com/asterdex/api-docs/master/V3%28Recommended%29/EN/aster-finance-futures-api-v3.md) 全文未找到 `openInterest`，公开 OI 接口及单位仍未证实 | 同文档 `/fapi/v3/ticker/24hr` 支持省略 symbol 返回全市场数组，示例含 `quoteVolume`；目录示例含 `underlyingType/underlyingSubType`。不可仅因 API 外观兼容 Binance 就推定 OI 路由或分类枚举 |
+
+新增预筛应使用全市场 24h ticker 数据。当前 Binance/Aster 的 `baseline.BATCH_URLS` 仍为 `bookTicker`，不含 24h 成交额；这部分尚未实现。后续应保留盘口批次时效与精确 raw symbol 身份，不能用旧 bookTicker 当作成交额证据。
+
+### 本地验证与验收缺口
+
+在新增测试后执行用户要求的两条命令：
+
+```text
+python -m unittest discover -s tools/crossex_exec/tests -v
+Ran 274 tests in 90.948s
+FAILED (failures=5)
+
+python -m unittest discover -s tools/fill_sim/tests -v
+Ran 158 tests in 29.884s
+OK
+```
+
+执行器 269 项通过、5 项失败，失败清单：
+
+1. 第七轮 `test_all_six_counters_are_zero_then_count_once_per_trigger_across_restart`：`67897da` 已扩展三键期望，但生产实现尚无新键。
+2. `test_round8_contract.py` 两项 summary 新键红测：同样尚无生产实现。
+3. `test_round8_sizing_contract.py` 两项本次新增的定量行为红测。
+
+没有其他失败。单独执行 `python -m unittest discover -s tools/crossex_exec/tests -p test_round3.py -k Round3PolicyTests -v`，原五项全部通过；新定量文件单独执行，两项均先红。已有第一至七轮测试文件及夹具均未修改。
+
+完整回归包含原第七轮不变量模拟器：种子 `20261111/20261112/20261113` 各 `2448` 回合（随机 `2400`），全部通过，各原不变量 exercised 非零；本次开仓数分别为 `37/34/47`。**没有新增“运行中改参数、映射币种开仓、成交额不足放弃”覆盖，不能作为第八轮验收证据。** 约 500 合约的新版采样尚未实现，也未做新版内存实测，不给未经实测的 MemoryMax 结论。
+
+日志保留在 `%TEMP%`，未覆盖上一轮日志：
+
+| 文件 | SHA-256 |
+|---|---|
+| `crossex-round8-resume-sizing-unittest-20261112.log` | `1f6ecda37d7994926de72a0c696932d6e99adb79e195844eed0f753740f69cb6` |
+| `crossex-round8-resume-fill-sim-20261112.log` | `0712d3df2b084cccaf0c1981c51560f3c4b116ef973c9fbc347b5d36748774aa` |
+
+### 继续入口、线上状态与未提交产物
+
+先取得 PM 对上述两项行为断言的裁决，再在本 worktree 按修订后的第八轮任务书继续 TDD。现有入口仍是 `engine.py::ingest/opening_review/check_pair`、`policy.py::review/send_review`、`market.py::MarketData`、`baseline.py::Baseline`、`admission.py::OpeningLimits`、`limits.py::HardLimits`、`api.py` 和 `api_data.py`。参数与审计、动态 universe、成交额和 OI、按预筛的 SQLite 采样优化、映射数量贯穿恢复/减仓、管理 API、字段投影以及新模拟器覆盖均未交付。
+
+`codex/crossex-exec` 的终审修复由另一任务进行，本次未合并或改动其工作区。本轮遵守不 push、不 SSH、不 WSL、不 amend、不调真实鉴权接口；未备份、部署或验证线上，线上版本未触碰。Git 索引位于父仓库，普通暂存受沙箱阻止后按用户既有本地提交授权经自动审批执行，没有审批拒绝。仅暂存本任务文件，提交禁用 hooks/GPG；未读取真实凭据。没有额外未跟踪仓库文件，忽略的 Python 缓存和上述临时日志保留。

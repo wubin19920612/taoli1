@@ -84,3 +84,13 @@
 待实现接口为 `GET/PUT /api/v1/config`、`GET /api/v1/config/audit`、`GET /api/v1/universe`、`POST /api/v1/universe/{base}/enable|exclude`、`GET /api/v1/mappings`、`POST /api/v1/mappings/{id}/confirm|reject`。写操作使用与只读令牌不同的 `CROSSEX_EXEC_ADMIN_TOKEN`；参数越界原子拒绝并返回 400，只读令牌调用写接口返回 403。正式实现时补齐请求/响应、版本和审计字段定义。
 
 第八轮拟在现有 `opening_skip_counts` 中追加 `size_too_small`、`oi_missing`、`mapping_ratio_mismatch`，旧六项保留，新项缺记录为 0，按触发机会去重并跨重启保留。已有六项完整字典断言尚未获准适配，因此此扩展目前只有两个先失败测试，尚未进入生产实现。
+
+## 第八轮修订状态（2026-11-12，ab33e05 后续，仍待实现）
+
+本节追加最新状态，不删除上面的历史记录或第一至七轮接口。`67897da` 已获准扩展第七轮完整计数字典的三个新增键，且已保留；此前的 schema 冲突不再是待决事项。当前新阻塞为第三轮“最小量不足时补一个步长”与第八轮“向下取整、不足放弃”的行为断言冲突，证据见交接文档最后的“第八轮交付”一节；等待 PM 裁决，尚无第八轮生产实现。
+
+修订任务书取消固定白名单：开仓须检查两腿精确合约的 24h 成交额，缓存不超过五分钟；类别、映射及股票标的市场仍需按任务书确认，排除列表继续生效。`CROSSEX_BASES` 非空时仅作额外限制，空值不限制交易范围。基准按任一所成交额达到采样预筛门槛的精确代码合约每 30 秒采样，落 SQLite，仍须至少三小时预热。这些是待实现要求，不是当前服务行为。
+
+修订后待实现的 universe 写路由为 `POST /api/v1/universe/{base}/exclude|unexclude|classify`，代替历史待实现清单中的 `enable|exclude` 提案；此前没有已实现的 `enable` 路由可供删除。config、audit、mappings 和独立管理令牌的要求仍按任务书执行。正式实现时应补齐请求/响应 schema；前端不可根据本状态说明假定接口已开放。
+
+summary 待追加共六项：`size_too_small / oi_missing / mapping_ratio_mismatch / volume_too_low / volume_unknown / category_unconfirmed`。保留全部原键及其计数、去重、持久化语义；trades/positions 待追加参数版本、sizing 明细和开仓时两腿成交额。用户已授权仅因新增键导致的精确相等断言扩展，实施时须在交接中逐项列出；风控行为断言不在此授权内。
