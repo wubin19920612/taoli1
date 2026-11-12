@@ -1041,3 +1041,89 @@ $py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d
 仅完成本地提交；未推送、未读取服务器 HEAD、未做线上备份、部署或真实 API 验收。没有读取/复制真实账户数据库。工作区起始无 WIP，仅显式纳入本轮文件；Temp 日志、合成测试副产物及原有文件未清理。
 
 下一模块请新建 live-exec-page 任务，依据新增契约启用登记/取消按钮、保留 taoli1 会话/CSRF 和 ADMIN 转发边界；实际页面和线上端到端行为尚未验收。真实行情源、资金流水权限/分页/时延、历史证据迁移、Linux 文件锁/systemd、持续影子及发布必须在后续明确授权的任务中完成。本轮测试通过不授权实盘交易，也不自动解除旧损失锁。
+
+## 第十四轮
+
+### 目标、范围与本地提交
+
+执行 [第十四轮任务书](crossex-exec-round14-2026-11-12.md)：程序与用户已登记外仓彻底隔离。此次风险归属变化来自用户明确指示和 PM 决定，覆盖旧轮次整户损失/额度口径；其余风险门槛不放宽。开工先读第十一至十三轮交接和契约。指定工作树为 `C:/Users/wubin/Desktop/code/codex/taoli1/.worktrees/crossex-exec-r8`，分支 `codex/crossex-exec-r8`，起始 HEAD `c6f5884`，起始工作区干净。
+
+| 类型 | 提交 | 内容 |
+|---|---|---|
+| test | `d1ac1c7` | 首批 17 项外仓隔离专项，修改实现前实际 13 failures |
+| test | `f22f940` | 专项扩至 25 项、旧测试口径适配、原模拟器追加 48 回合 |
+| feat | `ca9b15d` | 可核实程序损益、外仓债务分类、程序额度和持久化告警去重 |
+| docs | 本节后续独立提交 | 追加契约、本交接、README、next-task 与验收 JSON；自身 SHA 由 git log 查询 |
+
+只显式暂存本轮路径；本地提交关闭 hooks/GPG。首次普通 git add/commit 因父仓库 worktree 索引不在可写根内失败，之后仅为用户已授权的本地提交取得自动审批扩展权限；没有自动审批拒绝。无 push、SSH、WSL、amend、鉴权请求、真实订单、划转、借还款、线上备份或部署。没有调用子代理。
+
+### 已完成行为与代码入口
+
+1. **程序损失统一。** `external_accounting.py` 使用既有双快照、固定窗口全账本、现金/成交数量连续性和不可变历史索引，追加 `program_daily/program_total/program_funding_total/program_upnl/program_journal`。已实现和费用来自核对后的不可变程序订单；资金费累计通过起点 `program_funding_carry` 跨 UTC 日和重启保留；程序逐仓浮盈亏必须完整且汇总相符。`engine.py` 的 totals/reconcile/check_new_risk 和 `limits.py` 默认都消费同一份证明，整户权益差不再用于程序日亏、累计亏损或 150 回撤停机。
+2. **证据不降级。** `program_risk.py` 在计算开始、提交及最终发送核对订单摘要，且要求当前账户快照版本、权益/归属版本、当前 UTC 日、十秒有效期和原 FX 时钟一致。零成交的新 INTENT/SENT 仍由原两腿共享屏障管理；任何已成交/终态记账变化撤销旧证明。缺费用、缺逐仓浮盈亏、现金不符、缺页、旧流水丢失/改写或旧库缺累计资金费起点均停开，不把未知当零。新账户发布总会撤销旧证明；默认无外仓时也走完整证明路径。
+3. **出入金分离。** 仅明确 `TRANSFER_IN/TRANSFER_OUT`、空合约、正确金额符号的本金流，在完整流水及逐交易所/币种现金连续性通过后剔除；Bitget 还要求该转账 fee=0。未知类型、借还款/利息/换币、非零但无法归属的转账费用继续停开。旧 `equity_daily` 与外仓保守 FX 贡献仍保留作观测，不用于程序损失。外仓非零非 USD 收益的旧 FX 证明未删减。
+4. **程序额度。** `HardLimits.exposure` 经 `program_notionals` 只排除已登记、目录和原始快照均可核实的外仓；程序远端/本地成交与 INTENT/SENT/ACK/UNKNOWN 剩余名义额继续计入 600。原单腿 150、默认单笔 50、配置更小值、资金费/成交额/深度/市场倍率、UNKNOWN 不重发、SENT 后共享检查不变。
+5. **外仓债务。** `debt_attribution` 用精确 route/exchange/coin 分类；同域非零远端仓位必须全部是登记外仓、没有程序待发或未知单，逐仓原生 `initial_margin` 汇总须等于原资产 `futures_initial_margin`，原 liability 相符且不超出外仓保证金需求，才仅 `EXTERNAL_LIABILITY` 告警。Bitget debt、超额、混合归属、身份或金额缺证据仍停开。不跨币种净额抵销。阻断债务恢复仍需三份不同新鲜“无阻断债务”观测，重复读缓存不增加计数。
+6. **唯一整户风险。** 两边维持保证金倍数仍低于 3 停开、低于 2 减程序仓位；收益证明失败也不能掩盖该保护。外仓永久禁单、原始 DEX 身份、只减程序仓位和 program_flat/account_flat 区分保留。未登记远端持仓仍 mismatch，恢复保留原三次匹配规则。
+7. **告警。** `alerts.py` 按原因/owner 保存 `alert_states`，持续原因不随金额和时间刷新重复刷屏，小时提醒、状态变化/恢复后重发及重启去重都有测试；外仓告警状态与审计同事务提交。外部 sink 失败仍记录失败事件，不宣称已送达。阻断原因锁与只告警的外仓债务分开。
+8. **管理与兼容。** `EquityAdmin` 默认无外仓也读取收益证据；允许可核实的外仓负债建立显式新起点，但无活动订单/程序空仓/无恢复义务/新鲜证据/正权益/保证金和确认前提保留，不清旧日亏锁。原专用账户测试显式使用 `CROSSEX_RISK_SCOPE=dedicated_account` 保持整户旧断言；默认 `program`，只要存在登记或墓碑则强制程序证明，不能用兼容配置绕过外仓核实。真实共享账户使用默认口径。
+
+完整字段与优先级见 [第十四轮追加契约](live-exec-contract-2026-11-11.md#第十四轮增补2026-11-12)。原 summary 账户权益/回撤字段仍是整户观测，前端不能将它们展示成程序停机依据；程序风险展示读取 income 的新增字段并检查 verified/版本/时间。
+
+### 用户明确改变机制的旧测试适配
+
+本轮没有宣称“所有旧断言原文不变”。按 AST 的 assert 节点及属性 assert 调用、原 owner/次数审计，基线共有 2,401 个断言（执行器 1,816，fill-sim 585）；8 处原调用改变如下，其余原调用及全部原类/函数定义保留。原测试文件现在同口径 2,404 个断言。完整旧调用文本见 [验收 JSON](crossex-exec-r14-validation-2026-11-12.json) 的 `tests.explicitly_changed_assertions`。
+
+| 文件 / 用例 | 适配及依据 |
+|---|---|
+| `test_round11_external.AccountingTests.test_profit_loss_both_sides_excluded_from_daily_but_total_preserved` | 1 处：原累计损益不得高于整户权益差，改为外仓盈亏变化时程序累计为 0。保留程序日亏为 0、无 mismatch 和程序投影空仓断言。新的程序资金费/费用/已实现损失测试确认自身损失仍计入。 |
+| 同文件 `test_equity_and_margin_hard_limits_include_external_catastrophe` | 保留 HALTED 和 account_flat=false 原断言，夹具新增可核实的程序 -150 资金费及对应资金余额。1 处原“订单列表为空”改为“无减仓订单”，因为合成程序所有权订单必须存在；新增 I8/专项检查外仓从不发送或改变。 |
+| `test_round12_fx.FXAccountingTests.test_external_profit_upper_and_loss_lower_never_hide_own_loss` | 3 处：只由整户权益与 FX 差额推断的 -20.1 不再作为程序日亏，改为程序日亏 0、无 daily_loss、可开。旧外仓贡献、旧 equity_daily=-20.1 与空订单断言保留，明确它们现在只是观测。新增真实程序已实现/费用/资金费总计 -20 的日亏锁测试，以及外仓盈利不能抵销程序 -60/-101/-150 的测试。 |
+| 同文件 `test_missing_public_provider_never_blocks_full_account_protection` | 2 处：外仓亏损且 FX 不可核实的场景，改为停开而非仅凭整户权益 HALTED；不再要求不存在的 flatten_status.account_flat。新增保证金 1.5 时仍调用 flatten 的断言，保留无外仓发送。 |
+| `test_round13_review.NotionalTests.test_external_500_usdc_plus_two_50_usd_legs_exceeds_hard_600` | 1 处身份键变化：用未登记的 `xyz:OAI_USDC` 构造原 506.01+100=606.01 的超限场景；金额和拒开断言不变，未按同名 io 合约豁免。新增 60000 外仓不占程序额度，而程序 600+新增订单仍拒绝的隔离测试。 |
+
+其余夹具修改没有改变旧断言：
+
+- `test_engine/test_round3/test_round4/test_round5/test_round8_completion/test_round10_baseline/test_api` 的原专用账户 Engine 构造显式配置 `dedicated_account`；`test_round2` 的 HardLimits 和较小上限构造同样显式配置。阈值、拒绝、发送屏障与 UNKNOWN 断言未改。
+- `test_invariants.World.make_engine` 原无外仓世界显式专用账户口径；`round11_simulator.enable` 登记后自动切换强制程序证明。原随机种子、前 2,400 随机回合、原 168 定向回合及 96 外仓回合保留，所有原 I1a–d/I2–I7 和原覆盖断言保留；追加 48 回合及 I8/I9 检查。
+- `test_round11_evidence.test_external_notional_liability_and_margin_keep_original_limits` 将 601 名义额放入未登记的精确 `BINANCE_FUTURE_ETH_USDC`，保留显式两源 FX、601 超限、无法归属负债停开与保证金减仓原断言。
+- `test_round13_review` 两个 FX/时效用例改用未登记精确合约，保留缺价/到期拒开和减仓可用性；`real_accounts` 合成夹具提供完整空账本，使无外仓默认程序路径也具备可核实证据，坏 debt 响应仍立即撤销可开状态。
+
+未修改任何 fill-sim 源码或测试，基线下全部 51 个跟踪文件按统一换行后逐文件相同。没有 skip、过滤原测试、降低金额阈值或更改原故障随机序列制造通过。
+
+### TDD、最终验收与证据
+
+首批 17 项实际先得到 13 failures 后实现到绿。后续三个自审缺口均补反例后先红再修：默认无外仓时逐仓浮盈亏覆盖缺失；损益计算过程中订单变化可能把旧结果绑定新摘要；外仓告警审计和状态非原子提交。另 5 项为补充边界验证，没有声称它们在实现前失败。25 项专项最终通过。
+
+首轮完整执行器 528 项有 3 个模拟器失败，均是新增失败保护分支提前消费 HALTING 重试，使原 I7 本 tick 重试次数断言失败；修正调用时机，保留原 I7，不改阈值或重试断言。第二轮 530 项通过后，补齐上述竞态/原子性及边界测试，再在 feat `ca9b15d` 上用两个解释器完整重跑：
+
+| 解释器 | 执行器 unittest discover | fill-sim unittest discover | 退出码 |
+|---|---|---|---|
+| Windows 3.12.10 / SQLite 3.49.1 | **536 项 / 153.737s / OK** | **158 项 / 33.020s / OK** | 全部 0 |
+| 指定 Windows 3.10.20 / SQLite 3.50.4 | **536 项 / 164.745s / OK** | **158 项 / 34.202s / OK** | 全部 0 |
+
+```powershell
+python -m unittest discover -s tools/crossex_exec/tests -v
+python -m unittest discover -s tools/fill_sim/tests -v
+$py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe'
+& $py310 -m unittest discover -s tools/crossex_exec/tests -v
+& $py310 -m unittest discover -s tools/fill_sim/tests -v
+```
+
+fill-sim 双版本在本轮已完整运行，此后只改执行器专项/证明绑定和告警事务，其源码测试始终未变；不重复运行以制造不同性能数字。所有执行器文件库和跨进程测试均包含在 discover 中。
+
+两个版本均实际运行种子 **20261111 / 20261112 / 20261113**，每种子 **2,712 = 2,400 + 168 + 96 + 48** 回合、N=1。原十项不变量 checks 各 2,712，exercised 均非零；原外仓检查各 96。每种子新增检查 48 次，外仓剧烈盈亏变化 4 次、入金/出金各 2 次；40 次明确检查保证金充足且程序自身无损失时仍可开、程序日亏/累计为零，后续收尾只平程序并保留外仓。
+
+[验收 JSON](crossex-exec-r14-validation-2026-11-12.json) 保存四份全量日志的路径、SHA-256、六份模拟器完整计数、四份有效红灯日志、旧断言逐项差异和源码指纹。日志保留 `%TEMP%/crossex-r14-*.log`，全部为离线合成数据；首个“缺逐仓浮盈亏”尝试曾被夹具现金差异提前挡住，未将该次通过误报成红灯，后续修正夹具得到独立失败反例。
+
+93 个执行器/fill-sim Python 文件通过指定 3.10 AST 解析。`git diff --check` 通过；契约相对 c6f5884 的规范化文本 startswith 检查通过，只追加。自审覆盖证据读取/计算/事务/发送的版本绑定、跨日资金费进位、外仓负债域/额度、持久化去重、未知资金流和失败不遮蔽保证金保护；没有重新声称 CPU/RSS、Linux 或真实账户验收。
+
+### 线上状态、遗留边界与下一任务
+
+本轮只有本地 test/feat/docs 提交，未推送、未读取线上 HEAD、未备份/部署、未鉴权或触碰真实账户数据库。代码提交后工作区干净，随后新增的文档和验收 JSON 仅属本任务；最终 docs 提交后再检查状态。未清理原有文件、Python 缓存或 Temp 日志。
+
+升级旧库不能默认累计资金费为零：缺 `program_funding_carry` 或已有程序历史却缺新起点时会停开，需原有带审计的程序空仓 rebaseline/release-halt；不自动清旧 daily_loss。真实资产是否包含可核实的逐仓/资产初始保证金、账本是否及时完整、外仓借款相关现金流能否持续证明、公开 FX 是否新鲜，仍需后续明确授权只读核对。本轮不把字段名字匹配当真实账户验收；证据不齐的分支明确停开。
+
+默认无外仓也增加了完整流水核实，因此旧分页上限、十秒账户采样预算和全窗口读取成本仍需真实影子环境测量。窗口过长/数据过多会保守停开，未扩大预算或用部分数据放行。Windows 双版本结果不替代 Linux/systemd、实际网络/资金费和持续影子验收。
+
+本模块本地验收结束。页面展示/按钮、线上只读核对与发布请分别在新任务继续，先读本节及第十四轮契约；共享账户不要沿用旧“整户跌 150 即程序停机”文案，也不要把外仓只告警扩展为未知负债豁免。后续发布必须另获授权，本次测试通过不是实盘开仓授权。

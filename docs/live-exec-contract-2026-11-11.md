@@ -547,3 +547,54 @@ USDT/USD 的 `C_c_upper=x_c`。不同币种分别折算后才能求和。任一�
 rebaseline 与 release-halt 的审计 `old` 在同一写事务中保存全部原基线，补齐 `external_equity_anchor/program_daily_upnl/program_last_upnl/external_verified_history/last_upnl/account_loss_current/external_income`；审计写失败回滚。本轮不增加清日亏、删 STOP、跳过三快照或更改 HALTED 释放条件的入口。
 
 2026-11-12 官方字段核实：[Bitget UTA assets/debt](https://www.bitget.com/docs/catalog/account/assets-balance)、[Bitget UTA current-position/avgPrice](https://www.bitget.com/docs/catalog/trading/position-management)、[CrossEx positions/entry_price](https://www.gate.com/docs/developers/crossex/en/)。只查阅公开文档，未做真实账户鉴权。
+
+## 第十四轮增补（2026-11-12）
+
+本节按用户明确指示及 PM 第十四轮任务书改变风险归属口径，覆盖前文全户回撤、全户累计亏损、外仓占用 600 额度和任何负债一律停开的描述；其余门槛、证据要求和接口保持。未删除任何历史契约、字段或端点。本轮仅本地实现和离线验收，未部署。
+
+### 默认风险口径：本程序
+
+- `max_equity_drop_usd` 仍受代码/env/冻结配置中的最严阈值约束，硬上限 150 USD；现在比较本程序累计已实现损益、手续费、资金费和当前浮盈亏之和。达到负阈值进入 HALTING，只平本程序仓位。沿用 `account_equity_drop` / `account_equity_halt` 原因码；名称不再表示整户权益差。
+- `daily_loss_stop_usd` 与 `total_loss_stop_usd` 同样只看本程序，原硬上限分别 20 / 100 USD 不变。累计亏损 100 的较严门槛仍可先于 150 触发；150 不是新允许亏损额度。日亏使用程序 UTC 浮盈亏基线差，累计使用当前程序浮盈亏。旧 daily_loss、HALTED、STOP 文件和其他恢复锁不会因登记、升级、外仓盈利或出入金自动清除。
+- 单腿 150 / 总额 600 的硬上限及配置中的更小额度不变。总额仅剔除当前可核实且已登记的精确外仓；本地已成交与远端程序敞口取较大值，再加未决订单剩余名义额。INTENT/SENT/ACK/UNKNOWN 继续占用额度。未登记远端持仓仍保守计入并触发 `position_mismatch`，不提供忽略未知持仓的通道。
+- 整户 `equity/equity_by_venue/account_equity_current` 及 API `accounts.*.equity_usd/baseline_usd/drop_usd` 保留为观测值；出入金和外仓盈亏不参与默认程序损失判定。`external_income.equity_daily` 也保留旧公式的观测结果，不能再用于判断程序损失或作为程序损益展示。
+- 唯一保留的整户风险门槛是两边维持保证金覆盖倍数：任何一边低于 3 停开，低于 2 减本程序仓位；等于 3 可以通过该门槛，等于 2 停开而不因该门槛减仓。缺值/未知仍停开。外仓永久禁单在减仓和最终发送关口仍有效。
+
+为原专用账户回归保留显式 `CROSSEX_RISK_SCOPE=dedicated_account` 的旧整户保守模式；默认是 `program`。该兼容模式仅在登记表完全为空时适用：一旦存在登记或永久墓碑，强制使用程序隔离及完整收益证明，不能靠该参数绕过外仓证据。旧测试明确设置专用账户口径，当前共享账户不应配置该兼容选项。未增加 ADMIN 配置字段或解除锁的接口。
+
+### 可核实程序收益与新增字段
+
+默认模式即使没有外仓登记，也使用第十一至十三轮的双账户快照、完整固定窗口流水、逐交易所/币种现金连续性、不可变历史 ID/哈希、快照版本和基线版本机制。缺页、旧流水消失/改写、缺费用/成交均价、活动订单、数量/现金不符、未知资金流、过期 FX 或新快照替换旧证明，都停开；不把不可核实收益记为零。
+
+程序已实现/手续费仍由本地不可变成交计算，并与完整账本核对；逐仓浮盈亏必须覆盖程序全部远端仓位且金额汇总一致。资金费新增累计计量：`external_equity_anchor.program_funding_carry` 保存跨 UTC 日已核实累计值，当日起点之后新 ID 的资金费加到累计值；同毫秒新增 ID 不漏计，重启和滚日不清零，显式重基线才建立新风险计量期。
+
+原 `GET /api/v1/external-positions` 的 `income` 成功对象只追加：
+
+| 字段 | 类型/语义 |
+|---|---|
+| `scope` | `"program"` |
+| `program_daily` | 十进制字符串；当前计量期内的程序 UTC 日损益 |
+| `program_total` | 十进制字符串；程序累计已实现、费用、资金费和当前浮盈亏之和 |
+| `program_funding_total` | 十进制字符串；本风险计量期的程序累计资金费 |
+| `program_upnl` | 十进制字符串；当前程序浮盈亏，非 USD 按下界估值 |
+| `program_journal` | 本地已成交/终态订单的内容摘要，用于证据绑定，不是授权令牌 |
+
+原 `verified/day/captured_at/snapshot_version/revision/equity_revision` 继续适用。计算开始记录订单摘要，提交与最终发送重复比较；新 INTENT/SENT 的未成交计划由原共享屏障处理，不会替代已成交损益证明。证明更新失败时旧 `account_loss_current` 可保留作诊断，不能将其解释为当前已核实值；查询方必须同时检查最新 income 和账户快照版本/新鲜度。`account_loss_current` 内部增加 `scope/snapshot_version`。
+
+全新且无任何本程序订单历史、远端程序空仓的数据库可在首次完整核实后建立初始起点。已有历史而缺少新累计资金费证据的旧库保守停开，需原有显式 rebaseline/release-halt 路径；不得默认旧累计为零，也不自动改写原亏损锁。管理操作仍要求程序空仓、无非终态/待记账/恢复义务、无远端活动订单、两边正权益、新鲜证据和原确认规则。
+
+明确 `TRANSFER_IN/TRANSFER_OUT` 的非合约资金流可在完整历史及逐币现金连续性核对后排除：要求方向符号正确，symbol 为空；Bitget 转入转出另要求 fee=0，非零费用的归属无法核实即停开。不认识的出入金枚举、借还款、利息、换币或其他未知流水继续停开。不会为了兼容出入金跳过现金连续性；两边本金变化及外仓收益不能抵消本程序已核实损失。所有原非 USD 外仓非零贡献的第十二轮 FX 证明仍保留；被排除的外仓名义额不再单独要求 FX 授权占额。
+
+### 外仓保证金借款与告警
+
+债务仍保存 route/exchange_type/coin/liability/source_field 的原生单位。只有以下条件全部成立，才列为外仓负债并只告警：
+
+1. 来源是 CrossEx `assets[].liability`；精确交易所/币种对应有效登记外仓，身份、目录和原始仓位核对成功。
+2. 同一交易所/币种的非零远端仓位全部归属已登记外仓，无程序或未登记仓位，也无本程序待发/UNKNOWN 等未决订单占用该域。
+3. 各外仓 `initial_margin` 有限、非负；汇总与该资产 `futures_initial_margin` 一致，原资产 liability 与汇总债务一致，且正负债不超过该原生币种的外仓初始保证金需求。不跨币抵销、不按 ticker 归并、不猜保证金。
+
+缺字段、币种/交易所不符、混合归属、超过需求或 Bitget debt 均继续 `account_liability` 停开。外仓债务可核实不代表程序收益可核实，两个门禁独立。原已阻断负债锁仅在三份不同、新鲜且没有阻断债务的快照后恢复；可核实外仓债务算作“无阻断债务”。带外仓显式重基线可接受同样核实的债务，但不能清旧日亏锁。
+
+内部 `liability_attribution` 保存 `external/blocking/snapshot_version/at`；外仓告警事件为 `EXTERNAL_LIABILITY` 和 `ALERT(reason=external_liability)`，不添加 stop lock。归属状态/资产身份变化时告警，同一状态每小时最多一次；解除后再次出现是新事件。该状态和告警审计同事务提交。程序模式下其他阻断告警按 reason/owner 独立持久化去重，数值/时间刷新或交替原因不再刷屏，恢复后再次发生可告警，重启保留去重记录。sink 失败保留 `ALERT_SINK_FAILED`，不宣称外部通知必达。
+
+公开字段依据仅用于解析和合成测试：[CrossEx 账户、持仓及账本](https://www.gate.com/docs/developers/crossex/en/)、[Bitget UTA 枚举](https://www.bitget.com/docs/uta/enum)。没有真实鉴权、借还款、划转、订单或线上验收。
