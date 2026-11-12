@@ -346,6 +346,8 @@ class Engine:
     def rebaseline(self,*,confirm,reason,source,release_halt=False):
         from .equity import EquityAdmin
         with self._coordinator_lock:
+            if self.external.records():
+                self.invalidate_external_income('external_admin_pending')
             return EquityAdmin(self.store,self.accounts,engine=self,clock=self.clock).apply(
                 confirm=confirm,reason=reason,source=source,release_halt=release_halt)
 
@@ -354,10 +356,19 @@ class Engine:
             with self.executor.lock,self.store.lock:
                 self._equity_admin_active=True
             try:
+                self.invalidate_external_income('external_admin_pending')
                 return ExternalAdmin(self.store,self.accounts,engine=self,clock=self.clock).apply(**kwargs)
             finally:
                 with self.store.lock:
                     self._equity_admin_active=False
+
+    def invalidate_external_income(self,reason):
+        # A failed new administrative observation cannot leave a prior proof
+        # authorizing sends. Reconciliation must certify a new observation.
+        with self.store.lock:
+            self.risk='STOP'
+            self.last_reconcile=0
+            self.store.set_meta('external_income',dict(verified=False,reason=reason,at=self.clock()))
 
     def read_account_snapshot(self):
         if not self.external.records():

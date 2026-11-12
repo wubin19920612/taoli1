@@ -191,11 +191,16 @@ class ExternalAdmin:
         if engine and (engine.executor.pending_writes or engine.executor.owned):
             raise ValueError('local_orders_pending')
         started=self.clock()
+        snapshot=None
         try:
             snapshot=self.accounts.snapshot()
             orders=self.accounts.cross.open_orders()
-        except Exception:
+        except Exception as error:
+            evidence=getattr(error,'account_snapshot',snapshot)
+            if evidence is not None:
+                store.set_meta('external_failed_snapshot',plain(evidence))
             raise ValueError('external_read_unavailable') from None
+        store.set_meta('external_admin_snapshot',plain(dict(snapshot,raw_open_orders=dict(crossex=orders))))
         conflict=None
         with store.transaction():
             current=registry.status()

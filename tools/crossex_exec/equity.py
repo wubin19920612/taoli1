@@ -72,8 +72,12 @@ class EquityAdmin:
         registry=ExternalRegistry(self.store,self.clock)
         try:
             snapshot=(read_snapshot(self.accounts,self.store,self.clock) if registry.records() else self.accounts.snapshot())
-        except Exception:
+        except Exception as error:
+            if registry.records() and getattr(error,'account_snapshot',None) is not None:
+                self.store.set_meta('external_failed_snapshot',plain(error.account_snapshot))
             raise ValueError('account_read_unavailable') from None
+        if registry.records():
+            self.store.set_meta('external_admin_snapshot',plain(snapshot))
         projection=registry.split(snapshot) if registry.records() else snapshot
         if not isinstance(projection.get('positions'),dict) or projection['positions']:
             raise ValueError('remote_positions')
