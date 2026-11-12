@@ -3,10 +3,10 @@ import { getLiveExecAdmin, type LiveAdminResource, type LiveAdminResources } fro
 import { isPageHidden } from "../../utils/pageVisibility";
 
 type Data = { [K in LiveAdminResource]: LiveAdminResources[K] | null };
-const resources: LiveAdminResource[] = ["config", "universe", "mappings", "config/audit"];
+const resources: LiveAdminResource[] = ["config", "universe", "mappings", "config/audit", "external-positions"];
 
 export function useLiveExecAdmin() {
-  const [data, setData] = useState<Data>({ config: null, universe: null, mappings: null, "config/audit": null });
+  const [data, setData] = useState<Data>({ config: null, universe: null, mappings: null, "config/audit": null, "external-positions": null });
   const [errors, setErrors] = useState<Partial<Record<LiveAdminResource, string>>>({});
   const current = useRef<AbortController | null>(null);
   const mounted = useRef(false);
@@ -16,7 +16,7 @@ export function useLiveExecAdmin() {
     const controller = new AbortController();
     current.current = controller;
     try {
-      // The upstream has a bounded read slot; do not send the four new reads in parallel.
+      // The upstream has a bounded read slot; serialize the management reads.
       for (const resource of resources) {
         const result = await getLiveExecAdmin(resource, controller.signal);
         if (controller.signal.aborted || !mounted.current) return;

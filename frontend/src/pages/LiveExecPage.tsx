@@ -1,11 +1,13 @@
 import { Alert, Button, Card, Col, Descriptions, Empty, Row, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useEffect, useState } from "react";
-import type { LiveAccount, LiveGroup, LiveOpeningSkipReason, LivePeriod, LivePosition, LiveSummary, LiveTrade } from "../api/liveExec";
+import type { LiveAccount, LiveFlattenStatus, LiveGroup, LiveOpeningSkipReason, LivePeriod, LivePosition, LiveSummary, LiveTrade } from "../api/liveExec";
 import { isPageHidden } from "../utils/pageVisibility";
 import { ProfitHistogram } from "./liveExec/ProfitHistogram";
 import { useLiveExec } from "./liveExec/useLiveExec";
 import { LiveExecAdmin } from "./liveExec/LiveExecAdmin";
+import { useLiveExecAdmin } from "./liveExec/useLiveExecAdmin";
+import { LiveExternalPositions } from "./liveExec/LiveExternalPositions";
 
 const reasons: Record<string, string> = {
   converged: "收敛止盈", stop_loss: "止损", max_hold: "超时", pre_funding: "结算前平仓",
@@ -84,7 +86,7 @@ function Account({ name, data, dropMax }: { name: string; data: LiveAccount | nu
     </>}
   </Card>;
 }
-function Summary({ data }: { data: LiveSummary | null }) {
+function Summary({ data, flatten }: { data: LiveSummary | null; flatten?: LiveFlattenStatus | null }) {
   return <Card title="执行汇总">
     {!data ? <Empty description="暂无汇总数据" /> : <Space direction="vertical" style={{ width: "100%" }}>
       <Space wrap>
@@ -108,7 +110,12 @@ function Summary({ data }: { data: LiveSummary | null }) {
         <Descriptions.Item label="结构性拉黑数">{number(data.structural_spread_pairs, 0)}</Descriptions.Item>
         <Descriptions.Item label="冷却数">{number(data.cooldown_pairs, 0)}</Descriptions.Item>
         <Descriptions.Item label="当前配置版本">{number(data.config_version, 0)}</Descriptions.Item>
+        <Descriptions.Item label="程序仓位已平">{flatten?.program_flat === true ? "是" : flatten?.program_flat === false ? "否" : "—"}</Descriptions.Item>
+        <Descriptions.Item label="全账户已平">{flatten?.account_flat === true ? "是" : flatten?.account_flat === false ? "否" : "—"}</Descriptions.Item>
+        <Descriptions.Item label="平仓核实时间">{flatten?.captured_at != null && Number.isFinite(flatten.captured_at)
+          ? new Date(flatten.captured_at * 1000).toLocaleString("zh-CN", { hour12: false }) : "—"}</Descriptions.Item>
       </Descriptions>
+      <Typography.Text type="secondary">平仓状态为上次核实结果；程序已平不代表全账户已平，也不代表当前允许开仓。</Typography.Text>
       <Typography.Text type="secondary">组合计数按基础币和无方向交易所组合去重；三项可能重叠，不表示可立即开仓。</Typography.Text>
       <Typography.Text type="secondary">汇总中的名义额及持仓对数上限为代码硬上限，当前可调参数见下方；账户回撤显示实际生效阈值。</Typography.Text>
       <Card size="small" title="累计放弃开仓原因" style={{ width: "100%" }}>
@@ -164,6 +171,7 @@ function GroupTable({ title, rows, exitReason = false }: { title: string; rows: 
 
 export function LiveExecPage() {
   const { summary, positions, trades, stats, error, loadingMore, canLoadMore, loadMore } = useLiveExec();
+  const management = useLiveExecAdmin();
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const timer = window.setInterval(() => { if (!isPageHidden()) setNow(Date.now()); }, 1000);
@@ -189,7 +197,11 @@ export function LiveExecPage() {
   return <Space direction="vertical" size="middle" style={{ width: "100%", padding: 16 }}>
     <Typography.Title level={3}>实盘</Typography.Title>
     {error && <Alert type="warning" showIcon message={`实盘服务未连接（${failureLabel(error)}）`} />}
-    <Summary data={summary} />
+    <Summary data={summary} flatten={management.data["external-positions"]?.flatten_status} />
+    <LiveExternalPositions registry={management.data["external-positions"]} rows={null}
+      error={management.errors["external-positions"]}
+      notice="当前远端持仓尚未核实，登记操作不可用；以下登记记录不代表当前仓位。"
+      refresh={() => management.refresh(true)} />
     <Typography.Paragraph type="secondary">基准、超额价差和预估两小时资金费成本均为开仓复核快照；开仓超额价差尚未扣除费用，预估成本不等于实际已付资金费。盘口时间差不代表订单发送或成交时间差；平仓盘口时间差可能远超 300 毫秒。历史快照缺失时显示“—”。</Typography.Paragraph>
     <Card title="当前持仓"><Table rowKey="id" size="small" columns={positionColumns} dataSource={positions}
       pagination={false} scroll={{ x: 2800 }} locale={{ emptyText: "暂无当前持仓" }} /></Card>
@@ -217,6 +229,6 @@ export function LiveExecPage() {
       <Descriptions.Item label="两腿成交间隔第 90 百分位">{number(vs.leg_fill_gap_ms_p90, 0)} 毫秒</Descriptions.Item>
       <Descriptions.Item label="单腿事件率">{percentage(vs.one_leg_rate)}</Descriptions.Item>
     </Descriptions>}</Card>
-    <LiveExecAdmin />
+    <LiveExecAdmin management={management} />
   </Space>;
 }

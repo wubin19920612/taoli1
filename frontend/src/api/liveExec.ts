@@ -79,8 +79,24 @@ export interface LiveMapping {
   id: string; base: string; status: "pending" | "confirmed" | "rejected"; multiplier: string; at: Text; ratio: Num;
   legs: { market_key: string; raw_base: string; quantity_multiplier: Num }[];
 }
+export interface LiveExternalIdentity {
+  route: string; exchange_type: string; business: string; symbol: string; quote: string; dex: string;
+}
+export interface LiveExternalContract {
+  identity: LiveExternalIdentity; raw_base: string; registered: boolean; forbidden: boolean;
+  revision: number; registered_at: number; updated_at: number;
+}
+export interface LiveFlattenStatus {
+  program_flat?: boolean | null; account_flat?: boolean | null; captured_at?: number | null;
+}
+export interface LiveExternalPositions {
+  status?: string; contracts: LiveExternalContract[];
+  income?: { verified?: boolean; reason?: string; at?: number } | null;
+  flatten_status?: LiveFlattenStatus | null;
+}
 export interface LiveAdminResources {
   config: LiveConfig; "config/audit": LiveConfigAudit[]; universe: LiveUniverse[]; mappings: LiveMapping[];
+  "external-positions": LiveExternalPositions;
 }
 export type LiveAdminResource = keyof LiveAdminResources;
 
@@ -110,7 +126,12 @@ export async function getLiveExecAdmin<K extends LiveAdminResource>(
             && Number.isFinite(rule.min) && (rule.max === null || Number.isFinite(rule.max))
             && typeof rule.integer === "boolean";
         })
-      : Array.isArray(data);
+      : resource === "external-positions" ? data && !Array.isArray(data) && Array.isArray(data.contracts)
+        && data.contracts.every((row: LiveExternalContract | null) => row && typeof row.registered === "boolean"
+          && typeof row.forbidden === "boolean" && row.identity
+          && (["route", "exchange_type", "business", "symbol", "quote", "dex"] as const)
+            .every(key => typeof row.identity[key] === "string"))
+        : Array.isArray(data);
     if (result?.available !== true || !shapeOk) return { available: false, error: "invalid_json" };
     return result;
   } catch {
@@ -125,7 +146,9 @@ export type LiveAdminWrite =
     category: Exclude<LiveCategory, "unconfirmed">; markets: string[]; underlying_market?: "US" | "KRX";
   } }
   | { resource: "mappings"; id: string; action: "confirm" | "reject";
-    expected_status: LiveMapping["status"]; expected_multiplier: string };
+    expected_status: LiveMapping["status"]; expected_multiplier: string }
+  | { resource: "external-positions"; action: "register" | "unregister";
+    identity: LiveExternalIdentity; expected_status: string; reason: string };
 
 export function hasUniversePrecondition(row: LiveUniverse): boolean {
   return typeof row.status === "string" && row.status.length === 67 && /^u1:[0-9a-f]{64}$/.test(row.status);
@@ -143,11 +166,14 @@ export class LiveAdminConflictError extends Error {
 export async function writeLiveExecAdmin(update: LiveAdminWrite): Promise<void> {
   const path = update.resource === "config" ? "config" : update.resource === "universe"
     ? `universe/${encodeURIComponent(update.base)}/${update.action}`
-    : `mappings/${encodeURIComponent(update.id)}/${update.action}`;
+    : update.resource === "external-positions" ? `external-positions/${update.action}`
+      : `mappings/${encodeURIComponent(update.id)}/${update.action}`;
   const body = update.resource === "config" ? { ...update.changes, expected_version: update.expected_version }
     : update.resource === "universe" ? {
       ...(update.action === "classify" ? update.classification : {}), expected_status: update.expected_status,
-    } : { expected_status: update.expected_status, expected_multiplier: update.expected_multiplier };
+    } : update.resource === "external-positions"
+      ? { identity: update.identity, expected_status: update.expected_status, reason: update.reason }
+      : { expected_status: update.expected_status, expected_multiplier: update.expected_multiplier };
   let response: Response;
   try {
     // Browsers supply Origin; never attach either server token. Writes are never retried.

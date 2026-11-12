@@ -2,7 +2,7 @@ import { Alert, Button, Card, Checkbox, Input, Modal, Space, Table, Tag, Typogra
 import { useRef, useState, type ReactNode } from "react";
 import { hasMappingPrecondition, hasUniversePrecondition, LiveAdminConflictError, liveAdminReadError, writeLiveExecAdmin, type LiveAdminWrite, type LiveCategory,
   type LiveMapping, type LiveUniverse } from "../../api/liveExec";
-import { useLiveExecAdmin } from "./useLiveExecAdmin";
+import type { useLiveExecAdmin } from "./useLiveExecAdmin";
 
 const labels: Record<string, string> = {
   min_quote_volume_usd: "单所 24 小时成交额门槛（USD）", min_venues_with_volume: "达到成交额门槛的交易所数",
@@ -35,8 +35,8 @@ function MappingDetails({ mapping }: { mapping: LiveMapping }) {
 }
 
 type Pending = { update: LiveAdminWrite; title: string; details: ReactNode; configVersion?: number };
-export function LiveExecAdmin() {
-  const { data, errors, refresh } = useLiveExecAdmin();
+export function LiveExecAdmin({ management }: { management: ReturnType<typeof useLiveExecAdmin> }) {
+  const { data, errors, refresh } = management;
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [pending, setPending] = useState<Pending | null>(null);
   const [classification, setClassification] = useState<LiveUniverse | null>(null);
