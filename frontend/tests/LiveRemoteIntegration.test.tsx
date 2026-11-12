@@ -141,7 +141,7 @@ describe("第十三轮完整远端持仓接入", () => {
     noEnabledActions(); expect(ui().queryByRole("button", { name: /取消登记/ })).toBeNull();
   });
 
-  it.each(["program", "bitget", "identity_unverified", "wrong_dex", "missing_dex", "row_stale", "row_version"])(
+  it.each(["program", "bitget", "identity_unverified", "wrong_dex", "missing_dex", "symbol_newline", "row_stale", "row_version"])(
     "does not register %s rows", async state => {
       registry.contracts = [];
       const row: Record<string, unknown> = { ...remotePosition };
@@ -151,11 +151,14 @@ describe("第十三轮完整远端持仓接入", () => {
       if (state === "identity_unverified") row.identity_verified = false;
       if (state === "wrong_dex") row.dex = "xyz";
       if (state === "missing_dex") delete row.dex;
+      if (state === "symbol_newline") {
+        row.symbol = remotePosition.symbol + "\n"; row.position_key = `crossex|${row.symbol}|long`;
+      }
       if (state === "row_stale") row.stale = true;
       if (state === "row_version") row.snapshot_version = 16;
       remote.positions = [row];
       render(<LiveExecPage />); await flush(); noEnabledActions();
-      expect(ui().getByText(String(row.symbol))).toBeTruthy();
+      expect(ui().getByText(String(row.symbol).trim())).toBeTruthy();
     });
 
   it.each(["register", "unregister"])("freezes %s identity/state, refreshes every management read on 409, then requires manual reconfirmation", async action => {

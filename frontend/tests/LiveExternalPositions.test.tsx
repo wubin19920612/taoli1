@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LiveExternalPositions, type ExternalPositionRow } from "../src/pages/liveExec/LiveExternalPositions";
+import { remoteSnapshot, remoteAt } from "./liveExecRemoteFixtures";
 
 const identity = { route: "crossex", exchange_type: "HYPERLIQUID", business: "FUTURE",
   symbol: "HYPERLIQUID_FUTURE_io:OAI_USDC", quote: "USDC", dex: "io" };
@@ -16,7 +17,7 @@ let fetch: ReturnType<typeof vi.fn>;
 let refresh: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
-  vi.useFakeTimers();
+  vi.useFakeTimers(); vi.setSystemTime(new Date(remoteAt));
   fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ available: true, data: {} }) }));
   vi.stubGlobal("fetch", fetch);
   refresh = vi.fn(async () => undefined);
@@ -24,8 +25,13 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("外部持仓确认与显示", () => {
+  it("requires snapshot evidence even if an outdated caller supplies actionable rows", () => {
+    // @ts-expect-error Simulate an outdated caller that omits the required snapshot proof.
+    render(<LiveExternalPositions registry={registry} rows={[baseRow]} refresh={refresh} />);
+    expect(screen.getByRole("button", { name: /登记为外部持仓/ }).hasAttribute("disabled")).toBe(true);
+  });
   it("shows all ownership categories and preserves same-ticker DEX identities", () => {
-    render(<LiveExternalPositions registry={registry} rows={[
+    render(<LiveExternalPositions snapshot={remoteSnapshot} registry={registry} rows={[
       baseRow,
       { ...baseRow, key: "xyz", identity: { ...identity, symbol: "HYPERLIQUID_FUTURE_xyz:OAI_USDC", dex: "xyz" },
         symbol: "HYPERLIQUID_FUTURE_xyz:OAI_USDC", dex: "xyz", ownership: "external", action: undefined },
@@ -45,13 +51,13 @@ describe("外部持仓确认与显示", () => {
   });
 
   it("shows verified zero USD without substituting missing values", () => {
-    render(<LiveExternalPositions registry={registry} rows={[{ ...baseRow, usdUpnl: 0, conversion: "已核实" }]} refresh={refresh} />);
+    render(<LiveExternalPositions snapshot={remoteSnapshot} registry={registry} rows={[{ ...baseRow, usdUpnl: 0, conversion: "已核实" }]} refresh={refresh} />);
     expect(screen.getByText("0.00 USD")).toBeTruthy();
     expect(screen.getByText("已核实")).toBeTruthy();
   });
 
   it("requires reason and second confirmation with all original identity fields and direction", async () => {
-    render(<LiveExternalPositions registry={registry} rows={[baseRow]} refresh={refresh} />);
+    render(<LiveExternalPositions snapshot={remoteSnapshot} registry={registry} rows={[baseRow]} refresh={refresh} />);
     await open();
     const dialog = within(screen.getByRole("dialog"));
     for (const value of ["crossex", "HYPERLIQUID", "FUTURE", identity.symbol, "USDC", "io", "多"])
@@ -70,14 +76,14 @@ describe("外部持仓确认与显示", () => {
   });
 
   it("cancel confirmation sends nothing", async () => {
-    render(<LiveExternalPositions registry={registry} rows={[baseRow]} refresh={refresh} />);
+    render(<LiveExternalPositions snapshot={remoteSnapshot} registry={registry} rows={[baseRow]} refresh={refresh} />);
     await open();
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /取\s*消/ })); await flush();
     expect(fetch).not.toHaveBeenCalled();
   });
 
   it.each(["", "   ", "a".repeat(201), "why\nnext"])("rejects invalid reason %s", async reason => {
-    render(<LiveExternalPositions registry={registry} rows={[baseRow]} refresh={refresh} />);
+    render(<LiveExternalPositions snapshot={remoteSnapshot} registry={registry} rows={[baseRow]} refresh={refresh} />);
     await open();
     fireEvent.change(screen.getByLabelText("操作说明"), { target: { value: reason } });
     await confirm();
@@ -86,12 +92,16 @@ describe("外部持仓确认与显示", () => {
 
   it("freezes identity and status on open, closes on 409, refreshes and never retries", async () => {
     fetch.mockImplementation(async () => ({ ok: false, status: 409, json: async () => ({ error: "external_conflict" }) }));
-    const view = render(<LiveExternalPositions registry={registry} rows={[baseRow]} refresh={refresh} />);
+    const changingRow = { ...baseRow, identity: { ...identity } };
+    const view = render(<LiveExternalPositions snapshot={remoteSnapshot} registry={registry} rows={[changingRow]} refresh={refresh} />);
     await open();
     fireEvent.change(screen.getByLabelText("操作说明"), { target: { value: "核实登记" } });
-    view.rerender(<LiveExternalPositions registry={{ ...registry, status: "x1:" + "b".repeat(64) }} rows={[
-      { ...baseRow, identity: { ...identity, dex: "xyz", symbol: "HYPERLIQUID_FUTURE_xyz:OAI_USDC" }, dex: "xyz" },
-    ]} refresh={refresh} />);
+    Object.assign(changingRow.identity, { dex: "xyz", symbol: "HYPERLIQUID_FUTURE_xyz:OAI_USDC" });
+    Object.assign(changingRow, { key: "xyz", dex: "xyz", symbol: changingRow.identity.symbol });
+    // The original contract remains actionable; mutation of another observation must
+    // not mutate the identity or expected_status frozen in the open confirmation.
+    view.rerender(<LiveExternalPositions snapshot={remoteSnapshot} registry={{ ...registry, status: "x1:" + "b".repeat(64) }}
+      rows={[baseRow, changingRow]} refresh={refresh} />);
     await confirm();
     expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ identity, expected_status: status, reason: "核实登记" });
     expect(screen.getByText("数据已被其他人修改，请刷新后重新确认")).toBeTruthy();
@@ -102,7 +112,7 @@ describe("外部持仓确认与显示", () => {
   });
 
   it("only offers unregister for the certified absent registered contract", async () => {
-    render(<LiveExternalPositions registry={registry} rows={[
+    render(<LiveExternalPositions snapshot={remoteSnapshot} registry={registry} rows={[
       { ...baseRow, ownership: "external", action: undefined },
       { ...baseRow, key: "absent", side: null, quantity: null, ownership: "external", action: "unregister" },
     ]} refresh={refresh} />);
@@ -116,12 +126,12 @@ describe("外部持仓确认与显示", () => {
   });
 
   it.each([undefined, "invalid", "x1:" + "a".repeat(64) + "\n"])("disables writes without exact concurrency state %s", status => {
-    render(<LiveExternalPositions registry={{ ...registry, status }} rows={[baseRow]} refresh={refresh} />);
+    render(<LiveExternalPositions snapshot={remoteSnapshot} registry={{ ...registry, status }} rows={[baseRow]} refresh={refresh} />);
     expect(screen.getByRole("button", { name: /登记为外部持仓/ }).hasAttribute("disabled")).toBe(true);
   });
 
   it("keeps failed reads distinct from empty accounts", () => {
-    render(<LiveExternalPositions registry={null} error="upstream_http_503" rows={null} refresh={refresh} />);
+    render(<LiveExternalPositions snapshot={remoteSnapshot} registry={null} error="upstream_http_503" rows={null} refresh={refresh} />);
     expect(screen.getByText(/外部持仓读取失败/)).toBeTruthy();
     expect(screen.getByText(/远端持仓数据不可用/)).toBeTruthy();
     expect(screen.queryByText("账户无远端持仓")).toBeNull();
@@ -130,7 +140,7 @@ describe("外部持仓确认与显示", () => {
   it("holds one in-flight request and retains a failed-write message without retry", async () => {
     let resolve: (value: unknown) => void = () => undefined;
     fetch.mockImplementation(() => new Promise(done => { resolve = done; }));
-    render(<LiveExternalPositions registry={registry} rows={[baseRow]} refresh={refresh} />);
+    render(<LiveExternalPositions snapshot={remoteSnapshot} registry={registry} rows={[baseRow]} refresh={refresh} />);
     await open();
     fireEvent.change(screen.getByLabelText("操作说明"), { target: { value: "核实登记" } });
     const button = within(screen.getByRole("dialog")).getByRole("button", { name: "确认提交" });
