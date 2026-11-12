@@ -63,3 +63,10 @@ class RuntimeTests(unittest.TestCase):
         self.assertIsNone(self.engine.ingest(self.trigger('excluded')))
         Universe(self.store).exclude('BTC', False)
         self.assertIsNotNone(self.engine.ingest(self.trigger('allowed')))
+
+    def test_default_million_accepts_4999999_with_other_guards_satisfied(self):
+        with patch.object(self.market, 'turnovers', return_value=['4999999', '9000000']):
+            pair = self.engine.ingest(self.trigger('r8-volume-default'))
+        self.assertIsNotNone(pair)
+        self.assertEqual(pair['config_at_open']['values']['min_quote_volume_usd'], 1000000)
+        self.assertEqual(len([o for o in self.store.all_orders() if not o['reduce_only']]), 2)

@@ -1,6 +1,9 @@
 """Management API has a separate credential and strict bounded request bodies."""
 import http.client
+from email.message import Message
+from io import BytesIO
 import json
+from types import SimpleNamespace
 import unittest
 
 from tools.crossex_exec import api
@@ -75,3 +78,15 @@ class AdminTests(previous.APIFixture, unittest.TestCase):
         self.assertEqual(self.write(service, {'order_usd_max': 30}, token=previous.TOKEN)[0], 403)
         with self.assertRaises(ValueError):
             api.APIService(dict(self.config, CROSSEX_EXEC_ADMIN_TOKEN=previous.TOKEN), self.path, None)
+
+    def test_denied_write_consumes_bounded_body_before_closing(self):
+        handler = api._Handler.__new__(api._Handler)
+        handler.server = SimpleNamespace(service=SimpleNamespace(clean=lambda value: value))
+        handler.command, handler.request_version = 'PUT', 'HTTP/1.1'
+        handler.requestline = 'PUT /api/v1/config HTTP/1.1'
+        handler.headers = Message()
+        handler.headers['Content-Length'] = '2'
+        handler.rfile, handler.wfile = BytesIO(b'{}'), BytesIO()
+        handler.reply(403, {'error': 'admin_required'})
+        self.assertEqual(handler.rfile.tell(), 2)
+        self.assertIn(b'403', handler.wfile.getvalue())

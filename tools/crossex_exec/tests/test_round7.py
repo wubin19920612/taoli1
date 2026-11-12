@@ -494,6 +494,7 @@ class ReferenceAndAPITests(unittest.TestCase):
         self.addCleanup(engine.close)
         engine.bases=('BTC',)
         engine.market.baseline_quotes=lambda bases: {'binance':{'BTC':'100'},'bitget':{'BTC':'102'},'bybit':{'BTC':'100'}}
+        engine.market.sample_quotes=lambda minimum: (engine.market.baseline_quotes(('BTC',)),('BTC',))
         engine.refresh_baselines()
         with patch.object(engine.market,'baseline_quotes',side_effect=ValueError('injected_failure')):
             with self.assertRaises(ValueError):

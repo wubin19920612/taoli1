@@ -230,6 +230,7 @@ class PricingTests(unittest.TestCase):
     def test_send_review_repeats_excess_and_hourly_cost_threshold(self):
         args = list(self.inputs())
         pair = dict(last_books=[b.to_dict() for b in args[1]], funding=args[3], baseline_at_open='40', excess_at_open='20')
+        pair['instruments'] = [i.dump() for i in args[0]]
         orders = [dict(quantity='1', price='101'), dict(quantity='1', price='100')]
         send_review(pair, orders, ['0','0'], NOW)
         pair['funding'][0].update(rate='.0003', interval=3600)

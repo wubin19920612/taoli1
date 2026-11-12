@@ -1,4 +1,4 @@
-"""Round-eight floor-only sizing requirements; pending PM's round-three decision.
+"""Round-eight floor-only sizing requirements approved by PM on 2026-11-12.
 
 Reuse the exact round-three minimum-order fixtures to make the behavioural
 conflict reproducible without editing any existing assertion or production code.
@@ -33,3 +33,9 @@ class Round8FloorOnlySizingContractTests(unittest.TestCase):
         args[0][0].spec = replace(args[0][0].spec, min_qty='.981')
         with self.assertRaisesRegex(ValueError, '^size_too_small$'):
             review(*args, baseline_bps=0)
+
+    def test_exchange_maximum_rejects_even_when_minimums_are_satisfied(self):
+        args = self.inputs()
+        args[0][1].spec = replace(args[0][1].spec, max_qty='.979')
+        with self.assertRaisesRegex(ValueError, '^final_size_above_max$'):
+            review(*args, baseline_bps=0, quantity='.980')
