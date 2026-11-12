@@ -17,7 +17,10 @@ describe("外仓 API", () => {
     expect((fetch.mock.calls[0] as unknown as [string])[0]).toContain("/api/live-exec/external-positions");
   });
 
-  it.each([null, [], {}, { contracts: null }])("rejects invalid external resource shape %s", async data => {
+  it.each([null, [], {}, { contracts: null }, { contracts: [null] }, { contracts: [{}] },
+    { contracts: [{ identity, registered: null, forbidden: true }] },
+    { contracts: [{ identity: { symbol: identity.symbol }, registered: true, forbidden: true }] },
+  ])("rejects invalid external resource shape %s", async data => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ available: true, data }) })));
     expect(await getLiveExecAdmin("external-positions", new AbortController().signal)).toEqual({ available: false, error: "invalid_json" });
   });
