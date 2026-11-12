@@ -190,3 +190,59 @@ python -m pytest tests -q -p no:cacheprovider --basetemp=../.pytest-tmp/live-rem
 npm.cmd test -- --maxWorkers=2 --minWorkers=2
 npm.cmd run build
 ```
+
+## 外仓复审三项 P2 修复追加（2026-11-12）
+
+### 范围、基线与固定契约来源
+
+- 本轮继续实盘页外部持仓管理模块，工作树 `taoli1/.worktrees/live-exec-admin`、分支 `codex/live-exec-admin`，起始 HEAD **`1f133a99ffc04f104a2e06d03cbd7bd6394d27bd`**。起始仅有未跟踪的 `docs/live-exec-extpos-review-2026-11-12.md`；已按用户要求原样先提交为 **`9d58912`**，保留报告内重复段落和原验证陈述，不把旧报告当作本轮验收结果。
+- [接口契约](live-exec-contract-2026-11-11.md) 从上游 `crossex-exec-r8` 对应固定提交 **`679791ab36130c0698be21b0f7a55974fd858683`** 的 Git 对象逐字节复制，未读取其变化中的工作区作为同步来源。契约 blob **`ba895cdc8d824137c874891649e33515e271fbc3`**，SHA-256 **`f36029b39db9f04a20458fd61ca3374906ea21aec0f6f4902c79f02aa8ac5fff`**；docs 提交信息注明完整来源 SHA。只新增第十四轮正文，保留此前契约。
+- 用户限定本地交付、TDD、test/feat/docs 分开提交，不修改 `.env`，不 push、SSH、WSL 或 amend。本轮不修改执行器、后端路由、认证或写接口契约。
+
+### 确认按钮与旧确认作废
+
+- `frontend/src/pages/liveExec/LiveExternalPositions.tsx` 的确认按钮同步检查快照存在、可用、新鲜度、读取错误、有效 `x1:` 并发证明、当前可操作行与旧确认是否已失效；不只依赖提交函数拦截。提交函数仍按当时时钟重查，并重新比较确认字段，覆盖 UI 尚未重渲染时观测对象已变化的情况。
+- 打开确认时冻结原始六项身份、方向、原生数量、归属、操作类型和同一精确 `route + symbol` 两个方向的确认字段。方向、数量（包含极小十进制差异）、身份/DEX、归属、可操作证明变化或出现另一方向持仓，均立即禁用旧确认并提示取消后重新确认。恢复到旧观测也不会恢复已作废的确认；重新打开会清空说明。
+- 弹窗新增原生数量显示。确认字段不包含表格索引或行情浮盈亏；同内容的新鲜快照和其他合约变化不会使旧确认失效。`expected_status` 继续使用打开时的原值，不随轮询替换，不把快照版本作为写并发令牌。409、单个在途写请求、人工重新确认及完整管理刷新规则保持。
+
+### 程序停机依据、整户观测与负债展示边界
+
+- `LiveProgramRisk.tsx` / `programRiskView.ts` 展示 `income.program_total/program_daily/program_funding_total/program_upnl`；累计损益按程序已实现损益、费用、资金费与当前浮盈亏解释，绝不使用旧 `equity_daily` 或已平仓净利润补造当前停机依据。
+- 当前程序值要求上游 `verified=true`、`scope=program`、当前 UTC 日、10 秒内采集时间、与完整新鲜远端快照一致的版本、有效基线 revision 和程序流水摘要；summary 提供权益基线 revision 时必须一致。旧服务缺字段、读取失败、版本错开、过期、未来时间或无效十进制都显示“—”及不可用提示，不默认为零。这是公开证据的展示校验；前端无法重算内部归属 revision、流水摘要或 FX 证明，最终风控仍由执行器裁决。
+- 原始十进制字符串保持精度；使用有长度/指数上限的 BigInt 十进制比较，覆盖 `-50`、`-5e1`、`-49.999999999999999999` 等阈值边界。停机阈值取代码硬上限 150、API 发布的代码/env 上限及运行/冻结配置中的较严值，达到负阈值时显示已达阈值。独立的日亏/累计亏损门槛可能更早触发，页面比较不授予开仓权限。
+- `LiveExecPage.tsx` 的两个账户卡保留权益、基线与跌幅，明确标为整户观测，移除程序阈值分母和按该阈值标红。保留实际账户异常与整户保证金门槛；说明已平仓净利润卡不包含当前浮盈亏。`LiveExecAdmin.tsx` 的三项风险参数文案同步为程序口径。
+- `useLiveExecAdmin.ts` 每 5 秒在同一串行读取通道内读取收益证明与远端快照，避免 30 秒旧证明长期与 5 秒快照错开；其余四项管理读取仍每 30 秒。30 秒边界每种端点只读一次，隐藏/卸载中止与迟到响应忽略规则保持。完整页面首次 10 次请求、5 秒累计 14 次、30 秒累计 40 次，恢复可见增加 10 次；测试同时核对端点分类与总数，没有过滤掉管理请求。
+- **负债边界：本轮完成“已核实外仓负债：仅告警”的规则展示，未把它伪装成当前账户归属状态。** 固定来源 `679791a` 的契约明确 `liability_attribution` 是内部状态；同提交 `management.py` 的 external-positions 仅返回 status/contracts/income/flatten_status/projection，`api_data.py` 的 summary.liabilities 仅有 coin/exchange_type/liability，没有 external/blocking 归属。不能用“没有停开原因”、程序收益核实成功或正权益推断债务已获豁免。因此界面另写“外仓负债当前归属状态：上游未提供”，并明确无法核实、混合归属或 Bitget 债务仍停开。执行中已向用户提出此展示方式及后续字段来源的可选问题，未收到补充字段时按上述保守方式交付。
+
+### TDD、验收与提交
+
+- **`df93683`**：三项 P2 的首批组件、真实页面和程序风险展示测试；旧实现 **40 failed / 61 passed**，日志 `.pytest-tmp/live-extpos-p2-red.log`。
+- **`364b156`**：收益证明与快照同频读取、较严代码/env 阈值及额外缺证据回归。定向先复现 **3 failed**；38 skipped 仅来自红灯命令的 `-t` 选取，不是新增 skip，日志 `live-extpos-p2-proof-red.log`。
+- **`08ed4ff`**：提交前未重渲染的数量变化、旧说明错误覆盖作废提示，以及异常十进制防线；定向先复现 **2 failed / 4 passed**，其余因 `-t` 未选取。日志 `live-extpos-p2-defense-red.log`。实现后重新验证所有受影响测试，不放宽断言。
+- 后端相关三套测试：**390 passed in 49.84s**，退出码 0；日志 `.pytest-tmp/live-extpos-p2-backend-related.log`。本轮后端无改动，不重复执行既有后端全量。
+- 首轮相关运行 `live-extpos-p2-green.log` 为 168 passed / 1 failed，唯一失败是提交拦截后出现两条相同失效提示；已合并提示。首轮全量启动后继续补充了提交前未重渲染、说明错误遮蔽提示两项回归，该运行加载旧组件，结果为 630 passed / 2 failed（`live-extpos-p2-frontend-full.log`）；随后冻结最终源码重新全量运行。中间日志均保留，不作为最终验收替代。
+
+### 产物、线上状态与下一步
+
+- 起始没有其他任务改动。只暂存本轮明确列出的报告、测试、前端源码、契约及本交接；既有 `.pytest-tmp`、output、node_modules、dist 和 tsbuildinfo 等诊断/构建产物均保留且不提交，没有修改依赖或锁文件。最终非忽略工作区状态以本轮末尾核对为准。
+- 所有验证使用离线合成 API 结果及本机依赖；未调用真实账户、启动执行器或进行浏览器现场验收。未 push、SSH、WSL、备份线上库或部署，线上版本未变，没有新增交易授权。本机与生产锁定依赖的差异沿用前文记录。
+- 下一步若需要实时外仓负债状态，先由执行器发布正式只读 external/blocking 归属、快照版本与采集时间契约，再用固定提交同步并补真实形状集成测试；不在 taoli1 重新归因债务。真实鉴权联调或上线须另行授权。其他功能模块请另开任务，并从本交接继续。
+
+复现命令（分别在 backend / frontend 目录执行；保留已有日志，复测使用新的 basetemp 名称）：
+
+```powershell
+# backend
+$env:PYTHONPATH='.'
+python -m pytest tests/test_live_exec_routes.py tests/test_live_exec_admin.py tests/test_live_exec_deployment.py -q -p no:cacheprovider --basetemp=../.pytest-tmp/live-extpos-p2-related-replay
+# frontend
+npm.cmd test -- --maxWorkers=2 --minWorkers=2
+npm.cmd run build
+```
+
+### 本轮最终验收记录
+
+- 实现提交：**`5e380ab80f26f4045045cc51761b589a559a93e5`**（7 个前端源码文件）；测试独立为 `df93683`、`364b156`、`08ed4ff`，原复审报告先提交为 `9d58912`。契约和本交接另作 docs 提交，来源注明 `679791ab36130c0698be21b0f7a55974fd858683`；docs 提交号可用 `git log -1 --format=%H -- docs/task-handoff-2026-11-12-live-exec-admin.md` 查询，无 amend。
+- 最终受影响 4 文件 **111 tests passed**，退出码 0，`Duration 44.81s`；日志 `.pytest-tmp/live-extpos-p2-final-related.log`。后端相关 **390 passed**，退出码 0。
+- 最终 `npm.cmd run build`（TypeScript + Vite）退出码 **0**，`built in 12.65s`；日志 `.pytest-tmp/live-extpos-p2-build-final.log`。PowerShell 把 npm 更新通知标为 NativeCommandError 文本，但构建进程实际成功，未升级 npm 或依赖。
+- 最终前端全量 **40 files / 632 tests passed**，退出码 **0**，`Duration 336.68s`；日志 `.pytest-tmp/live-extpos-p2-frontend-full-final.log`。在最终源码冻结后运行，无用例筛选、无新增跳过，保留既有 antd 弃用及 React act 提示。该结果包括提交前未重渲染和说明错误遮蔽提示的补充回归。
+- 最终 `git diff --check` 通过；docs 提交后核对普通工作区无未提交文件，已忽略日志和构建产物保留。本轮只证明本机依赖和合成接口数据下的行为，不代表线上部署或真实账户验收。未修改 `.env`、push、SSH、WSL 或 amend。
