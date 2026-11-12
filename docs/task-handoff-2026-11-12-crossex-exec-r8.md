@@ -1,5 +1,7 @@
 # crossex-exec 第八轮交接（2026-11-12，本地验收完成）
 
+> 当前最新交付见文末[第十二轮](#第十二轮)：PM 已批准公开现货中位价 ±0.2% 的外仓结算币保守折算；负债继续停开，旧日亏锁不因登记/折算成功清除。含 Claude 线上解锁操作顺序。本轮仅本地交付。
+
 > 当前最新交付见文末[第十一轮](#第十一轮)：按用户选择实施外仓方案 (b)，永久禁单、收益核实与全户硬风控隔离。`io:OAI_USDC` 非零贡献的历史折算证据仍不足，按要求停开；没有推送、部署或实盘验收。下方旧轮次保留作历史证据。
 
 > 当前最新交付见文末[第十轮](#第十轮)：baseline 故障与管理写并发修复、双版本验收、外部持仓待选方案。下方各旧轮次与合并记录保留作历史证据。
@@ -719,3 +721,240 @@ $py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d
 明确剩余边界：真实流水权限/分页/结算延迟、USDC 历史权益估值、Linux POSIX 权限/flock/systemd、实际账户风险与 24h 影子未验收。CrossEx 每种历史最多 20 页，Bitget 单次范围最多 30 天；数据过多或超过十秒采样预算时保守停开，不能称已解决实盘性能/连续性。永久墓碑不会自动清理，长历史归属扫描和全窗口流水成本需在真实影子验收中测量。
 
 本模块本地交付结束；下一模块请新建任务。建议先授权真实账户只读流水/估值证据与 Linux 影子验证，再决定是否生产发布；页面按钮/ADMIN 转发适配单独进入 live-exec-page。负债告警豁免等 PM 决定，不随部署顺手实现。任何下一任务都保留本节六项边界及已有风控，不以本轮通过作为实盘开仓授权。
+
+## 第十二轮
+
+### 范围、基线与本地提交
+
+本轮仅处理 crossex-exec 外仓结算币估值及原锁恢复说明。先读第十一轮；工作树 `C:/Users/wubin/Desktop/code/codex/taoli1/.worktrees/crossex-exec-r8`，分支 `codex/crossex-exec-r8`，起始 HEAD `bfb28615dc4f6d3d385d6af86fc960faa0646afe`，起始工作区干净。PM 三项裁决均已落地：公开现货保守折算、任何正负债保持停开并告警、不自动清旧亏损锁并交付既有流程的线上命令。
+
+| 类型 | 本地提交 | 内容 |
+|---|---|---|
+| test | `0abce17` | 18 项专项先红，覆盖正负贡献、证据不足、极端偏离、流水/混币/跨日和原硬保护 |
+| test | `91bcdeb` | 迟到队列回调的币种捕获红测、缓存不得延长源报价寿命 |
+| test | `1b25560` | 区间上界不变量、HALTED+mismatch 三快照/release-halt 顺序、跨日失败保留旧锁 |
+| feat | `0fe7941` | 新 `external_fx.py`，并接入 market/account snapshot/external accounting/final admission |
+| docs | 后续独立提交 | 本节、追加契约、README、next-task 和本轮验收 JSON；自身 SHA 用下方命令读取 |
+
+```powershell
+git log -1 --format=%H -- docs/task-handoff-2026-11-12-crossex-exec-r8.md
+```
+
+仅逐项暂存任务文件，本地提交禁用 hooks/GPG。首次普通 git add/commit 因父仓库 worktree 索引写权限失败，随后按用户已授权的本地提交范围取得自动审批；没有自动审批拒绝。未 push、SSH、WSL、amend、真实鉴权、真实订单、线上备份或部署。没有调用子代理。
+
+### PM 折算模型、实现与边界
+
+完整新增契约见[第十二轮增补](live-exec-contract-2026-11-11.md#第十二轮增补2026-11-12)。关键入口：
+
+- `external_fx.py`：三个固定公开现货 GET URL、精确币对解析、至少两家中位价、±0.2% 区间、源时间 60s 限制与保守贡献上界。检查成功码、现货、原始 symbol、买卖价、有限数和交易所/接收时间。所有有效来源的 bid/ask 必须在同一不确定带内，否则拒绝整币种，不修剪极端值。
+- `MarketData.spot_fx`：复用现有公开 RequestQueue/Client/Limiter/pool，优先级 0；每币种三个来源，30s 内只复用仍有效证据，超过源时间 60s 立即刷新/拒绝。失败不刷新旧价格时间。回调捕获各自币种，超时后迟到的旧任务不能按后一个币种解析。
+- `Engine.read_account_snapshot`：在账户 worker 读取完整原账务快照后附加公开 FX。报价失败仍返回账户风险证据，原全户硬退出不被遮蔽。没有公开方法的旧离线夹具不假定 FX=1，非零非 USD 贡献仍拒绝。
+- `ExternalAccounting._evaluate`：所有原现金、账本、成交、费用、数量、历史索引检查保留。先以原始结算币分别算贡献，再折算到原 USD 报告口径；起点仍保存原币金额，非 USD 起点/当前/现金非零项即使净抵消也必须有价格。新增原币贡献/净现金和报价证据，不删除原成功字段。
+- `Engine.require_external_income`：开仓和最终发送关口重复核验原来源时钟；原收益证明的 10s TTL 不能延长 FX 的 60s TTL。此处不联网。
+
+对每个币种 `c`：
+
+```text
+x_c = 同一起点后完整外仓净现金_c + U_c(now) - U_c(anchor)
+p_c = median(至少两家不同交易所的 COIN/USDT 现货 (bid+ask)/2)
+L_c = p_c * 0.998; H_c = p_c * 1.002
+C_c_upper = x_c * H_c  (x_c >= 0)
+          = x_c * L_c  (x_c < 0)
+          = x_c*p_c + |x_c|*p_c*0.002
+equity_daily = E_now - E_anchor - sum_c(C_c_upper)
+程序日损益 = min(原已核实程序日损益, equity_daily)
+```
+
+USDT/USD 沿用原报告口径，不加 FX；其他币种只用直接现货币对，不推断 peg、别名或间接路径。`p=1` 时，外仓盈利 `+50` 扣 `+50.1`，外仓亏损 `-50` 扣 `-49.9`；若整户分别变化 `+30/-70`，两者均得程序权益兜底 `-20.1`，比自身 `-20` 更严格。区间内任意 `r` 都满足 `C_upper>=x*r`，因此扣除不会减轻自身亏损。不同币种分别折算；USDC 两家共同报 0.8 时使用 0.8，若一报 0.8、一报 1 则拒绝。
+
+原登记 `symbol_identity` 仍只允许 USDT/USDC；本轮实际新增的登记收益成功路径是 USDC，没有顺手放宽币种身份白名单。通用币种的 FX 函数/离线报价测试不等于其他币种获准登记，USD 也仅为报告单位兼容分支。
+
+该证明限定于 PM 授权的当前公开估值区间，**不是历史结算时点汇率或平台抵押折扣的重建**。没有把 ±0.2% 宣称为真实价格永不越界的保证。原完整流水核实和程序日损益 min 兜底保留，全户总额 600、分所权益回撤、累计亏损、保证金和任何正负债停开继续独立检查；本轮不降低任何阈值，不实现负债豁免，不修改 `limits.py/equity.py/stops.py/execution.py`。
+
+公开文档仅核实 [OKX](https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-ticker)、[Bitget](https://www.bitget.com/legacy-docs/classic/spot/market/Get-Tickers)、[Bybit](https://bybit-exchange.github.io/docs/v5/market/tickers) 的 GET、现货身份、买卖价与时钟字段。实际适配器只通过离线响应和原队列验收，没有联网试账户或声称当前三家均可用。
+
+### TDD 与最终验证
+
+首批 18 项红测实际为 9 failures / 23 errors（含 subTest），原实现无法核实非零 USDC 且无公开 FX 方法。实现后全绿；随后回调迟到反例实际出现 1 error，冻结 lambda 的币种参数后通过。最终共 23 项专项；最后三项是既有恢复路径/代数上界验证，未声称它们修改前失败。两份红灯及专项绿灯日志保留 `%TEMP%`。
+
+| 解释器 | 执行器最终 discover | fill-sim discover | 退出码 |
+|---|---|---|---|
+| Windows Python 3.12.10 / SQLite 3.49.1 | 480 项 / 124.878s / OK | 158 项 / 29.191s / OK | 全部 0 |
+| 指定 Windows Python 3.10.20 / SQLite 3.50.4 | 480 项 / 134.661s / OK | 158 项 / 31.248s / OK | 全部 0 |
+
+两条命令均在两个解释器实际运行。执行器增加最后三项验证后双版本完整重跑；fill-sim 本轮全量结果保留，之后只增加执行器测试和文档，其源码与测试始终未改。
+
+```powershell
+python -m unittest discover -s tools/crossex_exec/tests -v
+python -m unittest discover -s tools/fill_sim/tests -v
+$py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe'
+& $py310 -m unittest discover -s tools/crossex_exec/tests -v
+& $py310 -m unittest discover -s tools/fill_sim/tests -v
+```
+
+两个版本的原模拟器均运行种子 `20261111/20261112/20261113`，每种子仍为 **2,664 = 2,400 + 168 + 96** 回合，N=1，I1a–d/I2–I7 checks 各 2,664、exercised 全部非零，原 96 次外仓检查保留。本轮模拟器和原有测试文件完全未改，没有删改/放宽旧断言或改变种子/回合常量。
+
+[验收 JSON](crossex-exec-r12-validation-2026-11-12.json)记录四套最终结果、六次模拟器计数、TDD 日志 SHA-256、源码/测试指纹、旧文件保持和只追加契约检查。最终 `git diff --check` 与 Python 3.10 AST 语法检查通过；Windows 3.10 结果不替代生产 Linux/systemd 验收。
+
+保留检查以基线 Git 树为准：34 个原执行器 Python 测试文件及整个 fill-sim 共 86 个文件在统一 CRLF 后逐文件相同，67 个执行器 Python 文件通过 3.10 AST 解析。文中三个 Python heredoc 已逐字提取，在 DNS/socket 守护及合成数据库下执行备份/只读检查；HALTED 维护段 mock env、flock、适配器读取、公开目录和时钟，验证三次匹配、零订单、HALTED/日亏/权益锁与外仓基线保留。它证明命令与当前方法兼容，不替代 Linux 权限或线上账户验收。
+
+### Claude 线上操作顺序：登记、对账和旧锁
+
+**以下为待 Claude 在线上执行的操作单，本轮没有执行。**先核对实际 systemd `WorkingDirectory/ExecStart/User` 与已审阅部署 SHA；示例使用当前仓库模板的 `/home/ubuntu/wubin/crossex-exec`、`var/crossex-exec.db`、`crossex-exec.env` 和 `crossex-exec.service`。若实际路径不同，应按受控配置替换，不能操作 taoli1 的 `/data/radar.db` 来解执行器锁。不要把 env/令牌内容打印出来。
+
+1. 核对部署和运行状态，保留执行器数据库备份。SQLite backup 包含已提交 WAL，不用在线 `cp` 单独主文件冒充一致备份。下面生成独立目录，打印备份路径、quick_check 和 SHA-256；若任何检查失败停止后续步骤。
+
+```bash
+systemctl show crossex-exec.service -p WorkingDirectory -p ExecStart -p User -p ActiveState
+cd /home/ubuntu/wubin/crossex-exec
+git rev-parse HEAD
+umask 077
+python3 - var/crossex-exec.db <<'PY'
+import hashlib, pathlib, sqlite3, sys, uuid
+source = pathlib.Path(sys.argv[1]).resolve()
+if not source.is_file():
+    raise SystemExit('database_not_found')
+folder = source.parent / ('r12-backup-' + uuid.uuid4().hex)
+folder.mkdir(mode=0o700)
+target = folder / source.name
+with sqlite3.connect(source.as_uri() + '?mode=ro', uri=True) as src:
+    with sqlite3.connect(target) as dst:
+        src.backup(dst)
+        result = dst.execute('PRAGMA quick_check').fetchall()
+        if result != [('ok',)]:
+            raise SystemExit('backup_check_failed')
+print(target, 'quick_check=ok', hashlib.sha256(target.read_bytes()).hexdigest())
+PY
+```
+
+2. 读取最新登记前提，核对原始 `io:OAI_USDC` 身份与完整目录。已正确登记则跳过写入，不能再次登记来清锁。尚未登记时把本次输出的 **完整 x1:...** 手工填入，运行中 CLI 走 ADMIN API，停止时走原 env/flock 维护路径。409 后重新查看并审阅变化，不自动重试；停止状态首次目录刷新也可能导致 409。
+
+```bash
+python3 -m tools.crossex_exec external-list --db var/crossex-exec.db
+python3 -m tools.crossex_exec external-register --env-file crossex-exec.env \
+  --route crossex --exchange-type HYPERLIQUID --business FUTURE \
+  --symbol HYPERLIQUID_FUTURE_io:OAI_USDC --quote USDC --dex io \
+  --expected-status 'x1:<本次读出并核对的完整64位摘要>' --reason r12_reviewed_external_ownership
+```
+
+登记后原风险基线/daily_loss_day 不会被改写；归属 revision 变化意味着必须在程序空仓等前提满足后显式建立新权益起点。查看锁和证据可使用以下只读命令，账户 ID、余额原始响应无需输出：
+
+```bash
+python3 - var/crossex-exec.db <<'PY'
+import json, pathlib, sqlite3, sys
+path = pathlib.Path(sys.argv[1]).resolve()
+with sqlite3.connect(path.as_uri() + '?mode=ro', uri=True) as db:
+    for key in ('state', 'halt_reason', 'stop_locks', 'daily_loss_day',
+                'position_mismatch', 'position_match_streak', 'external_income'):
+        row = db.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
+        print(key, json.loads(row[0]) if row else None)
+PY
+```
+
+3. 先恢复 `position_mismatch`。若服务仍在运行，保持现有停开条件，等后台至少三次**不同、足够新鲜、无非终态/待记账订单且程序远端等于本地**的匹配快照，核对 `POSITION_MATCH_RECOVERED`、`position_mismatch=false`。登记外仓本身不直接清此锁，同一份缓存反复读不计三次。
+
+若已经 **HALTED 且 mismatch 尚在**，不能直接启动（`assert_startable` 会拒绝），也不能先 release-halt（`local_flat` 会拒绝 position_or_order_lock）。此时执行下方停机维护分支；它只调用现有读取/三次仓位对账方法，所有交易 Transport 强制 `live=False`，不调用 startup/tick/全平、不直接删除或写空任何锁。若有程序仓位、未知单、待记账、目录漂移、负债或不完整/过期证据，则中止，由原恢复流程处理，不能把此命令当作强制解锁。
+
+```bash
+# 仅在已确认 HALTED、程序仓位已收尾的分支执行。
+# 正在运行时 systemctl stop 会进入原 shutdown 收尾，可能减程序仓位；不要强制 kill。
+sudo systemctl stop crossex-exec.service
+python3 - crossex-exec.env <<'PY'
+import sys, time
+from pathlib import Path
+from tools.fill_sim.core import dec
+from tools.crossex_exec.__main__ import maintenance_lock
+from tools.crossex_exec.security import load_env, Credentials
+from tools.crossex_exec.transport import Transport
+from tools.crossex_exec.adapters import CrossEx, Bitget
+from tools.crossex_exec.accounts import Accounts
+from tools.crossex_exec.storage import Store
+from tools.crossex_exec.market import MarketData, RULES_URL
+from tools.crossex_exec.engine import Engine
+from tools.crossex_exec.equity import EquityAdmin
+from tools.crossex_exec.external_accounting import read_snapshot, program_activity
+from tools.crossex_exec.limits import DEFAULT_VAR
+
+config = load_env(sys.argv[1])
+path = Path(config.get('CROSSEX_DB', DEFAULT_VAR + '/crossex-exec.db'))
+if not path.is_file():
+    raise SystemExit('database_not_found')
+with maintenance_lock(path) as acquired:
+    if not acquired:
+        raise SystemExit('service_still_running')
+    with Store(path) as store:
+        if store.meta('state') != 'HALTED':
+            raise SystemExit('use_running_reconciliation')
+        cross = CrossEx(Transport('gate', Credentials(config.get('CROSSEX_API_KEY', ''),
+            config.get('CROSSEX_API_SECRET', '')), live=False), config.get('CROSSEX_POSITION_MODE', 'DUAL'))
+        bitget = Bitget(Transport('bitget', Credentials(config.get('BITGET_API_KEY', ''),
+            config.get('BITGET_API_SECRET', ''), config.get('BITGET_API_PASSPHRASE', '')), live=False),
+            config.get('BITGET_POSITION_MODE', 'hedge_mode'))
+        accounts = Accounts(cross, bitget)
+        market = MarketData(store)
+        engine = Engine(store, market, accounts, live=False, config=config,
+            stop_file=config.get('CROSSEX_STOP_FILE', DEFAULT_VAR + '/STOP'))
+        try:
+            if not engine.external.records():
+                raise SystemExit('register_exact_external_contract_first')
+            rules = market.fetch('gate', RULES_URL, priority=2)
+            if not isinstance(rules, list):
+                raise SystemExit('external_catalog_unavailable')
+            store.set_meta('external_catalog', dict(at=time.time(), rules=rules))
+            for n in range(3):
+                snapshot = read_snapshot(accounts, store, time.time)
+                if snapshot['activity']['complete'] is not True or not 0 <= time.time()-snapshot['captured_at'] <= 10:
+                    raise SystemExit('account_evidence_unavailable')
+                projection = engine.external.split(snapshot)
+                if projection['positions'] or snapshot['liabilities'] or any(m is None or dec(m)<3 for m in snapshot['margins']):
+                    raise SystemExit('program_positions_or_account_risk')
+                program_activity(store, snapshot['activity'], snapshot['accounting_at'])
+                if not 0 <= time.time()-snapshot['captured_at'] <= 10:
+                    raise SystemExit('account_snapshot_stale')
+                if not engine.reconcile_positions(snapshot):
+                    raise SystemExit('position_or_order_recovery_required')
+                if n < 2:
+                    time.sleep(1)
+            EquityAdmin(store, accounts).local_flat()
+            print('position_mismatch', store.meta('position_mismatch'),
+                  'state', store.meta('state'), 'stop_locks', store.meta('stop_locks'))
+        finally:
+            engine.close()
+            market.close()
+PY
+```
+
+该维护步骤仅为已有三次对账方法的调用单，无新产品 CLI 或特殊管理豁免；最终必须仍是 HALTED，且 daily_loss 原样保留。当前流水太多/结算不稳定导致十秒预算耗尽时，应停止操作并排查，不能改脚本跳过检查。
+
+4. 解除权益 HALTED 或建立新归属起点。先复核程序空仓、无未知/待记账/恢复义务、无远端活动订单、无负债、保证金至少 3、正权益及新鲜完整证据。HALTED 服务须停止，`--confirm` 必须是刚才读取的真实 halt_reason；下面 `account_equity_drop` 只是示例，真实为 `total_loss` 等时按原值填写。非 HALTED 情况用 rebaseline，不用 release-halt。
+
+```bash
+# 分支 A：HALTED，先完成上述 mismatch 恢复，再精确确认真实原因。
+python3 -m tools.crossex_exec release-halt --env-file crossex-exec.env \
+  --confirm account_equity_drop --reason r12_reviewed_external_epoch
+# 分支 B：未 HALTED、程序空仓、登记后需要新起点。A/B 只选适用的一条。
+python3 -m tools.crossex_exec rebaseline --env-file crossex-exec.env \
+  --confirm --reason r12_reviewed_external_epoch
+```
+
+成功会写 `HALT_RELEASED/EQUITY_REBASELINED`、保存原/新基线和完整外仓审计。release-halt 只移除原 `account_equity_drop/total_loss` 原因，**不清 daily_loss、不删 STOP、不启动服务**。不要传 `--confirm daily_loss` 试图清当日日亏，也不要 SQL 修改 `stop_locks/daily_loss_day`、删除 DB 或篡改系统时间。
+
+5. **daily_loss 没有同日人工豁免 CLI。**登记、重基线、FX 变成 verified 或权益 HALTED 被解除，都必须保留原当日日亏锁；等待原 UTC 次日成功对账自然进入新日周期，UTC 00:00 为韩国时间 09:00。本轮没有新增“自动清旧锁”逻辑：源代码中原有 UTC 日界线规则不变；若新日 FX/流水核实失败，旧锁仍不清（专项已验证）。若停止时跨日，后续在已授权的原影子配置下启动，让新鲜完整对账处理日界线，不能手改基线日期。
+
+```bash
+date -u
+# 仅在部署/服务启动已获授权、确认仍是计划中的影子配置时执行；不更改 live 开关。
+sudo systemctl start crossex-exec.service
+python3 -m tools.crossex_exec external-list --db var/crossex-exec.db
+journalctl -u crossex-exec.service --since '10 minutes ago' --no-pager
+```
+
+验收以新账户观测对应的 `income.verified`、两家以上源时间 ≤60s、完整原币贡献/上界、`POSITION_MATCH_RECOVERED`、所有独立 stop_locks、负债告警及程序/账户全平区分为准；不以服务 active 或单个 `stop_reason` 消失判断准许开仓。实际解锁记录、备份路径/SHA、部署版本和线上证据由 Claude 回填后续交接，本轮不能预填成功。
+
+### 交付状态与下一任务
+
+本地 test/feat/docs 分组完成；工作区任务文件已显式纳入提交，起始无 WIP、没有删除其他任务文件。新增 Temp 红/绿/全量日志保留；本轮没有读取或复制旧账户数据库，没有新增真实账户数据入仓。原第十一轮副本不受本轮影响。
+
+推送/线上数据库备份/部署版本/容器或服务/API 线上验收均未执行，未读取服务器 HEAD。真实行情可用性、账户流水权限与时延、外仓实际 USD 估值、Linux POSIX/flock/systemd 和持续影子运行仍未验收。源码本地通过不构成实盘授权。
+
+下一模块请新建任务，由 Claude 在已授权的线上任务中按本节验证部署、公开 FX、账户证据和锁恢复；页面/ADMIN 转发仍属 live-exec-page。负债裁决已确定为“任何正负债停开并告警”，不再作为待实现豁免项。

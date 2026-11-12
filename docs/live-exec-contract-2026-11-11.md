@@ -419,3 +419,55 @@ CrossEx account_book/history_trades 与 Bitget financial-records 使用固定毫
 新增 flatten_status：`{program_flat,account_flat,external_positions,captured_at}`。有外仓时 program_flat=true、account_flat=false，写入 `PROGRAM_FLATTENED_EXTERNAL_REMAINS`；HALTED 与正常退出只证明程序仓位处理完成。shutdown 日志显式输出这两个状态和精确外仓快照。身份/目录不能核实时不报告成功全平。
 
 公开接口依据：[CrossEx 文档](https://www.gate.com/docs/developers/crossex/en/)、[Bitget UTA 账务流水](https://www.bitget.com/docs/catalog/account/assets-balance)、[Bitget UTA 枚举](https://www.bitget.com/docs/uta/enum)。本轮只核实公开文档，没有调用真实鉴权接口；真实字段时延、资金费及计价证明仍需另行授权验证。
+
+## 第十二轮增补（2026-11-12）
+
+本节按 PM 裁决追加外仓结算币的公开现货折算，优先于第十一轮“非零 USDC 无历史估值即拒绝”的限制描述。原 API、CLI、请求体、返回键与风控规则均保留；不新增管理豁免或解锁入口。
+
+### 币种、报价和上界公式
+
+- 原始合约/DEX、账本/成交/现金余额/数量连续性仍先按原生币种核实；只改外仓贡献的估值环节。原生 USDT/USD 沿用执行器现有 USD 报告口径；其他结算币仅查直接 `COIN/USDT` 现货，不做 ticker 别名、反向币对或间接路径猜测。
+- 登记身份白名单本轮不扩展，现有 `symbol_identity` 只接收 USDT/USDC 合约，因此本轮新增的实际登记路径为 USDC；通用币种 FX 解析/数学函数不构成允许其他结算币登记的豁免。USD 是报告单位兼容分支，不意味着新增 USD 合约准入。
+- 固定查询 OKX、Bitget、Bybit 三个公开 GET，复用同一个 `MarketData.batch`、RequestQueue、PublicClient、Limiter 和线程池，优先级 0。没有签名、私有 Transport、凭据或新限频通道。每币种正常最多三次请求/30s；失败可能随账户刷新重试，仍受原限频约束。
+- 使用至少两家不同交易所的有效买一/卖一中点；两家时中位数为两者均值，三家时为中间值。精确校验币对、现货类型、成功码、正数、有限数、买价不高于卖价与交易所时间。`0 <= now - source_at <= 60s`，未来时间、过期、报价家数不足或无法解析都不能作为证明。接收时间不能早于源时间或晚于当前时间。
+- 报价中位数为 `p_c`，不确定带固定 `L_c = 0.998*p_c`、`H_c = 1.002*p_c`。所有参与来源的买一/卖一必须落在此带内，超出则整币种不可核实；不删掉极端偏离的有效来源来拼合成功。不会把 USDC 报价钳制为 1；各家一致的脱锚报价按实际中位数计算。
+- 缓存最多 30s，源时间超过 60s 立即失效；失败刷新不续期、不回填旧价或 1。收益证明仍受原账户快照 10s 时限约束，开仓及最终共享发送关口另复查原 FX 证据的 60s 时限，不在发送关口联网。
+
+对币种 `c`，完整同起点外仓原生贡献为：
+
+```text
+x_c = 新增外仓账本净现金_c + 当前外仓浮盈亏_c - 起点外仓浮盈亏_c
+C_c_upper = x_c * H_c  (x_c >= 0)
+          = x_c * L_c  (x_c < 0)
+          = x_c*p_c + abs(x_c)*p_c*0.002
+external_contribution = sum_c C_c_upper
+equity_daily = (当前全户权益 - 同一起点全户权益) - external_contribution
+最终日损益 = min(既有已核实程序日损益, equity_daily)
+```
+
+USDT/USD 的 `C_c_upper=x_c`。不同币种分别折算后才能求和。任一起点/当前浮盈亏或新现金项非零的非 USD 币种都必须有报价，即使同币种净贡献抵消为零；只有所有相关原生项本来就是零才不需要折算证据。
+
+在 PM 指定的当前现货区间内，对任意 `r_c ∈ [L_c,H_c]` 都有 `C_c_upper >= x_c*r_c`，故扣除后的程序损益只会更低、更保守。示例：`p=1`，外仓盈利 `+50` 扣 `50.1`；外仓亏损 `-50` 扣 `-49.9`。若整户变化分别为 `+30/-70`，两种情况的程序权益兜底都为 `-20.1`，不会把原 `-20` 自身亏损变轻。
+
+这是 PM 授权的**当前公开估值模型**，不是交易所历史权益折算/抵押折扣的精确重建，不能解释为区间之外或历史各时点价格的保证。整户累计亏损、分所权益回撤、保证金、总名义额、负债和原程序损益的 min 保护继续独立生效。
+
+### 只追加的收益证据字段
+
+既有 `GET /api/v1/external-positions` / `external-list` 的 `income` 保留所有键，成功结果追加：
+
+| 字段 | 内容 |
+|---|---|
+| `external_cash_by_currency` | 各结算币新增外仓净现金，十进制字符串字典，原生单位 |
+| `external_contribution_by_currency` | 各币种 `x_c`，十进制字符串字典，原生单位 |
+| `external_fx` | 非 USD 币种 → `{median,lower,upper,expires_at,sources}`；每个 source 含 `venue,base,quote,market_type,symbol,bid,ask,at,received_at` |
+| `valuation` | `public_spot_upper_bound` 或 `native_usd` |
+
+原 `external_cash` 和 `external_contribution` 在新支持的币种上为 USD 口径的保守上界；前者单独对现金净额取上界，不能把它和未经折算的浮盈亏直接相加。USDT 旧结果不变。跨 UTC 日的 `carried_interval` 追加原币净现金、贡献及 FX 证据；验证完整旧区间后新起点的现金/贡献字典清空。失败仍是 `verified=false / external_income_unverifiable`，失败快照保留所读公开来源与账户证据。
+
+### 锁与负债保持原规则
+
+任何正负债仍停开并告警，无外仓借款豁免；解除负债原因仍需三次不同的新鲜无负债观测。登记、FX 成功、rebaseline 和 release-halt 均不清当日日亏锁，不删除 STOP 文件。position_mismatch 仅经既有三次不同匹配快照解除；release-halt 仍要求 HALTED、停止服务、精确确认 halt_reason、程序空仓/无单/无恢复义务、无远端订单、无负债、正权益与新鲜证据。仅移除既有权益停机原因，不移除 daily_loss。
+
+原 UTC 次日成功对账的日亏周期规则不变；本轮不补任何即时或自动清旧锁路径。详细线上 CLI 顺序和 HALTED+mismatch 维护分支见[第十二轮交接](task-handoff-2026-11-12-crossex-exec-r8.md#第十二轮)，由 Claude 在服务器执行。
+
+公开文档核实日期 2026-11-12：[OKX ticker](https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-ticker)、[Bitget spot tickers](https://www.bitget.com/legacy-docs/classic/spot/market/Get-Tickers)、[Bybit spot tickers](https://bybit-exchange.github.io/docs/v5/market/tickers)。本轮只联网核实这些公开文档；接口行为用受 DNS/socket 守护的离线响应验证，未调用真实鉴权或宣称线上行情验收。

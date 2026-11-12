@@ -264,3 +264,11 @@ python -m tools.crossex_exec external-register --env-file /private/crossex-exec.
 当前 `io:OAI_USDC` 可以登记和永久禁单，但**非零 USDC 损益缺少可核实的历史整户权益折算证据时仍停开**；没有使用 USDC=USDT=1 的假设。原副本中的 daily_loss 也不会因登记自动清除。此实现不承诺登记后该账户立即恢复交易。
 
 双版本各执行器 457 项、fill-sim 158 项通过，三个种子各 2,664 回合，含外仓亏损、结算、目录变化和保证金/权益硬限制；[验收 JSON](../../docs/crossex-exec-r11-validation-2026-11-12.json)保留详细计数与日志指纹。本轮仅本地提交，没有 push、SSH、WSL、amend、真实鉴权或部署。
+
+## 第十二轮：外仓结算币保守折算
+
+本节取代上节非零 USDC 一律缺少历史估值而拒绝的描述。按 PM 指定的当前公开估值模型，OKX/Bitget/Bybit 的直接 `COIN/USDT` 现货报价经原公开 GET 限频队列获取，至少两家有效、源时间不超过 60s，取买一/卖一中点的中位数 `p`。外仓原币净贡献 `x` 折算为 `x*p + abs(x)*p*0.002` 后从整户同起点日权益差中扣除：盈利用上界、亏损用下界；分别折算币种后求和。报价不齐、过期、极端分歧或任一旧账务证据不足仍停开，最终发送时复查报价年龄。
+
+USDT/USD 保留原报告口径。全户硬风控、任何正负债停开并告警、精确 DEX 永久禁单和旧日亏锁保持；FX 成功不等于准许开仓。此估值不是历史交易所权益/抵押折扣的重建。
+
+公式、证据字段及离线验证见[第十二轮契约](../../docs/live-exec-contract-2026-11-11.md#第十二轮增补2026-11-12)；登记后的三次匹配快照、HALTED 维护、release-halt/rebaseline 和日亏周期操作见[第十二轮交接](../../docs/task-handoff-2026-11-12-crossex-exec-r8.md#第十二轮)。线上操作交由 Claude，本轮仅 test/feat/docs 本地提交，无 push/SSH/WSL/amend/鉴权/部署。
