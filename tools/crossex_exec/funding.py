@@ -64,16 +64,24 @@ def funding_positions(snapshot):
                 if isinstance(raw,bool):
                     raise ValueError('funding_counter_unknown')
                 value=dec(raw)
+                settled=None
+                if route=='crossex' and not closed and 'funding_time' in row:
+                    settled=milliseconds(row['funding_time'])
+                    if settled>cutoff or (settled and settled<created) or (settled==0 and value):
+                        raise ValueError('funding_collection_time_invalid')
                 key=position_key+'|'+token
                 if key in result:
                     raise ValueError('funding_lifetime_duplicate')
                 result[key]=dict(position_key=position_key,contract='|'.join((route,i['symbol'],i['quote'])),
-                                 created_ms=created,closed_ms=end,value=str(value))
+                                 created_ms=created,closed_ms=end,value=str(value),settled_ms=settled)
     return result
 
 
 def funding_continuity(store,anchor,snapshot):
-    before=anchor['funding_positions']  # legacy/missing counter epochs fail closed
+    # Missing legacy collection clocks are UNKNOWN, never a synthetic zero.
+    # Normalize the optional field for immutable finalized-counter comparison.
+    before={k:dict(row,settled_ms=row.get('settled_ms'))
+            for k,row in anchor['funding_positions'].items()}
     after=funding_positions(snapshot)
     activity=snapshot['activity']
     # Local wall clocks have sub-millisecond precision; use the same inclusive
@@ -122,3 +130,63 @@ def funding_continuity(store,anchor,snapshot):
     if {k:v for k,v in expected.items() if v}!={k:v for k,v in actual.items() if v}:
         raise ValueError('funding_counter_ledger_mismatch')
     return after
+
+
+def daily_continuity(store,anchor,snapshot):
+    """Independent cumulative increments must fit ONE UTC day, before netting.
+
+    CrossEx's live collection time bounds the last settlement (0 means none).
+    A snapshot after midnight with collection time before midnight therefore
+    witnesses the boundary counter. A net-zero multi-day gap is NOT evidence.
+    UTA and closed histories have no such clock: their lifetime/observation
+    bounds must fit one day, otherwise retain the old epoch and stop opening.
+    """
+    previous=store.meta('funding_checkpoint')
+    revision=store.meta('equity_baseline_revision',0)
+    if (not previous or previous.get('revision')!=anchor['revision']
+            or previous.get('equity_revision')!=revision
+            or previous['captured_at']<anchor['captured_at']):
+        previous=anchor
+    epoch=int(previous['captured_at']*1000)
+    activity=snapshot['activity']
+    if epoch>activity['to_ms']:
+        raise ValueError('funding_checkpoint_future')
+    after=funding_continuity(store,previous,snapshot)
+    before=previous['funding_positions']
+    expected,actual=defaultdict(lambda:dec(0)),defaultdict(lambda:dec(0))
+    for key,row in after.items():
+        old=before.get(key)
+        delta=dec(row['value'])-dec(old['value'] if old else 0)
+        if old and old['closed_ms'] is not None:
+            continue  # immutable, independently finalized before this checkpoint
+        lower=max(epoch,row['created_ms'])
+        upper=row['closed_ms'] if row['closed_ms'] is not None else activity['to_ms']
+        settled=row.get('settled_ms')
+        if settled is not None:
+            if old and old.get('settled_ms') is not None and settled<old['settled_ms']:
+                raise ValueError('funding_collection_time_revised')
+            upper=settled
+        if upper<lower or settled==0:
+            if delta:
+                raise ValueError('funding_collection_counter_conflict')
+            continue
+        if lower//86400000!=upper//86400000:
+            raise ValueError('funding_utc_boundary_unproven')
+        expected[(row['contract'],upper//86400000)]+=delta
+    for route,name in (('crossex','crossex_book'),('bitget','bitget_book')):
+        for row in activity[name]:
+            if row['id'] in previous['history_index'][name]:
+                continue
+            kind=row['statement_type' if route=='crossex' else 'type']
+            if kind not in ('FUNDING_FEE','CONTRACT_MAIN_SETTLE_FEE_USER_IN','CONTRACT_MAIN_SETTLE_FEE_USER_OUT'):
+                continue
+            at=milliseconds(row['create_time' if route=='crossex' else 'ts'])
+            if at<epoch:
+                raise ValueError('funding_late_checkpoint_history')
+            contract='|'.join((route,row['symbol'],row['coin']))
+            value=dec(row['change']) if route=='crossex' else dec(row['amount'])+dec(row['fee'])
+            actual[(contract,at//86400000)]+=value
+    if {k:v for k,v in expected.items() if v}!={k:v for k,v in actual.items() if v}:
+        raise ValueError('funding_daily_ledger_mismatch')
+    return dict(captured_at=snapshot.get('accounting_at',snapshot['captured_at']),
+        revision=anchor['revision'],equity_revision=revision,funding_positions=after)

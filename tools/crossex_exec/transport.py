@@ -23,10 +23,17 @@ def bitget_sign(secret, method, path, query, body, timestamp):
 
 
 class APIError(Exception):
-    def __init__(self, kind='unknown'):
+    def __init__(self, kind='unknown', *, http_status=None, api_code=None):
         # Never retain response body, request, headers, URL, or original exception.
         self.kind = kind if kind in {'unknown','not_found','duplicate','rejected','rate_limited',
                                     'shadow_write','credentials_missing','invalid_response','forbidden_endpoint'} else 'unknown'
+        self.http_status=http_status if type(http_status) is int and 100<=http_status<=599 else None
+        # Only published status codes, never arbitrary exchange messages.
+        self.api_code=api_code if isinstance(api_code,str) and api_code in {
+            '40009','40012','40014','40018','40036','40037','40040','40041','40042','40043',
+            '40017','40762','40757','429','429000','TOO_MANY_REQUESTS',
+            'INVALID_KEY','INVALID_SIGNATURE','IP_FORBIDDEN','FORBIDDEN','READ_ONLY',
+            'INVALID_PARAM_VALUE','MISSING_REQUIRED_PARAM','INVALID_REQUEST_BODY'} else None
         super().__init__(self.kind)
 
 
@@ -77,6 +84,7 @@ class Transport:
         conn = cls(parsed.hostname, parsed.port, timeout=self.timeout)
         response = None
         error = None
+        status,code=None,None
         try:
             addresses = DNS_RESOLVER.resolve(parsed.hostname, deadline)
             conn._create_connection = lambda address, *args: connect_addresses(addresses, address[1], deadline, self.timeout, time.monotonic)
@@ -100,6 +108,7 @@ class Transport:
             conn.request(method, path+('?' + query if query else ''), body=payload.encode(), headers=headers)
             response = http.client.HTTPResponse(DeadlineSocket(conn.sock,deadline,self.timeout,time.monotonic), method=method)
             response.begin()
+            status=response.status
             raw = response.read(2*1024*1024+1)
             if len(raw) > 2*1024*1024:
                 raise APIError('invalid_response')
@@ -133,4 +142,4 @@ class Transport:
                 self.inflight[group]-=1
                 self.history[group].append(time.monotonic())
         # Raise outside except: no secret-bearing exception __context__ chain.
-        raise APIError(error)
+        raise APIError(error,http_status=status,api_code=code)

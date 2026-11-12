@@ -6,14 +6,14 @@ from tools.fill_sim.core import dec, day
 from .external import ExternalRegistry, plain
 from .external_accounting import anchor_value, read_snapshot, program_activity, verified_history
 from .program_risk import debt_attribution
-from .funding import funding_positions, funding_continuity
+from .funding import funding_positions, funding_continuity, daily_continuity
 
 
 POSITION_LOCKS = frozenset(('position_mismatch','unhedged_position','repair_stopped',
     'unknown_order','unknown_close','fills_pending','accounting_pending','entry_accounting_unknown',
     'negative_local_position','flatten_retry_pending','flatten_snapshot_unavailable'))
 BASELINE_KEYS = ('account_equity_baseline','equity_baseline','daily_equity','daily_upnl','risk_pnl_baseline',
-    'external_equity_anchor','program_daily_upnl','program_last_upnl','external_verified_history',
+    'external_equity_anchor','program_daily_upnl','program_last_upnl','external_verified_history','funding_checkpoint',
     'last_upnl','account_loss_current','external_income')
 ADMIN_REFUSALS = frozenset(('local_orders_pending','position_or_order_lock','local_positions',
     'not_halted','halt_confirmation','confirmation_required','halted_requires_release',
@@ -107,6 +107,7 @@ class EquityAdmin:
                 previous=self.store.meta('external_equity_anchor')
                 if previous and 'funding_positions' in previous:
                     funding_continuity(self.store,previous,snapshot)
+                    daily_continuity(self.store,previous,snapshot)
                 snapshot['program_funding_at_epoch']=str(program_activity(self.store,snapshot['activity'],
                     snapshot.get('accounting_at',started)))
             except (ValueError,KeyError,TypeError,ArithmeticError):
@@ -187,6 +188,9 @@ class EquityAdmin:
                     audit['external_snapshot']=plain(external_projection)
                     new['external_equity_anchor']=anchor_value(store,snapshot,external_projection,captured)
                     new['external_equity_anchor']['program_funding_offset']=snapshot['program_funding_at_epoch']
+                    new['funding_checkpoint']={k:new['external_equity_anchor'][k] for k in
+                        ('captured_at','revision','funding_positions','history_index')}
+                    new['funding_checkpoint']['equity_revision']=revision+1
                     new['program_daily_upnl']=dict(day=day(self.clock()),upnl='0',positions={},captured_at=captured)
                     new['program_last_upnl']=dict(upnl='0',positions={},captured_at=captured)
                     new['daily_upnl']=dict(day=day(self.clock()),upnl=str(snapshot['upnl']),

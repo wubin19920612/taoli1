@@ -12,7 +12,7 @@ from .external import ExternalUnverifiable, plain, route_symbol, digest
 from .external_fx import NATIVE_USD, quote_band, upper_contribution
 from .program_risk import journal_pnl, journal_fingerprint
 from .position_values import key_currency, usd_value
-from .funding import funding_positions, funding_continuity
+from .funding import funding_positions, funding_continuity, daily_continuity
 
 BITGET_FUNDING = frozenset(('CONTRACT_MAIN_SETTLE_FEE_USER_IN','CONTRACT_MAIN_SETTLE_FEE_USER_OUT'))
 BITGET_TRADING = frozenset(('OPEN_LONG','OPEN_SHORT','CLOSE_LONG','CLOSE_SHORT','BUY_DEAL','SELL_DEAL'))
@@ -238,21 +238,44 @@ def settlement_state(snapshot):
 
 
 def read_snapshot(accounts,store,clock):
+    from .history import HistoryError, error_details
     started=clock()
     first=accounts.snapshot()
     cutoff=clock()
     anchor=store.meta('external_equity_anchor') or {}
     start=min(midnight(cutoff),anchor.get('captured_at',cutoff))
+    activity=dict(from_ms=int(start*1000),to_ms=int(cutoff*1000),complete=False)
+    stage='activity'
     try:
         activity=accounts.activity(int(start*1000),int(cutoff*1000))
-        open_orders=dict(crossex=accounts.cross.open_orders(),bitget=accounts.bitget.open_orders())
+        open_orders={}
+        stage='/api/v4/crossex/open_orders'
+        open_orders['crossex']=accounts.cross.open_orders()
+        stage='/api/v3/trade/unfilled-orders'
+        open_orders['bitget']=accounts.bitget.open_orders()
+        stage='closing_account_snapshot'
         last=accounts.snapshot()
-        if (settlement_state(first)!=settlement_state(last) or day(started)!=day(clock())
-                or any(not isinstance(rows,list) or rows for rows in open_orders.values())):
-            activity=dict(activity,complete=False)
+        condition=None
+        if settlement_state(first)!=settlement_state(last):
+            condition='settlement_changed_during_read'
+        elif day(started)!=day(clock()):
+            condition='utc_day_changed_during_read'
+        elif any(not isinstance(rows,list) or rows for rows in open_orders.values()):
+            condition='remote_open_orders_or_invalid_response'
+        elif not 0<=clock()-started<=10:
+            condition='snapshot_stale'
+        elif activity['complete'] is not True:
+            condition='provider_incomplete'
+        if condition:
+            activity=dict(activity,complete=False,failure=activity.get('failure') or
+                dict(stage='snapshot_consistency',condition=condition,from_ms=int(start*1000),
+                     to_ms=int(cutoff*1000),page=None))
         snapshot=dict(last,raw_open_orders=open_orders)
     except Exception as error:
-        activity=dict(from_ms=int(start*1000),to_ms=int(cutoff*1000),complete=False)
+        diagnostic=(error.diagnostic if isinstance(error,HistoryError) else
+            dict(stage=stage,condition='request_failed',from_ms=int(start*1000),to_ms=int(cutoff*1000),
+                 page=None,**error_details(error)))
+        activity=dict(getattr(error,'activity',activity),complete=False,failure=diagnostic)
         if getattr(error,'account_snapshot',None) is not None:
             activity['failed_read']=plain(error.account_snapshot)
         snapshot=first
@@ -271,14 +294,25 @@ class ExternalAccounting:
     def evaluate(self,snapshot,projection):
         try:
             return self._evaluate(snapshot,projection)
-        except (ValueError,KeyError,TypeError,ArithmeticError):
-            raise ExternalUnverifiable('external_income_unverifiable') from None
+        except (ValueError,KeyError,TypeError,ArithmeticError) as error:
+            failure=ExternalUnverifiable('external_income_unverifiable')
+            safe={'funding_utc_boundary_unproven','funding_daily_ledger_mismatch',
+                  'funding_late_checkpoint_history','funding_collection_time_invalid',
+                  'funding_collection_time_revised','funding_collection_counter_conflict',
+                  'funding_counter_ledger_mismatch','funding_lifetime_missing',
+                  'history_coverage','external_baseline_unverifiable','cash_balance_history_mismatch',
+                  'history_revised_or_missing','late_epoch_history','unattributed_cashflow',
+                  'cash_ownership_unknown','trade_ownership_unknown'}
+            failure.diagnostic=dict(stage='income_verification',
+                condition=str(error) if str(error) in safe else 'income_evidence_invalid')
+            raise failure from None
 
     def _evaluate(self,snapshot,projection):
         anchor=self.store.meta('external_equity_anchor')
         original_anchor=anchor
         equity_revision=self.store.meta('equity_baseline_revision',0)
         prior_history=self.store.meta('external_verified_history')
+        prior_checkpoint=self.store.meta('funding_checkpoint')
         original_journal=journal_fingerprint(self.store)
         captured=snapshot['captured_at']
         cutoff=snapshot.get('accounting_at',captured)
@@ -302,6 +336,8 @@ class ExternalAccounting:
         records=self.registry.records()
         cash_continuity(anchor,snapshot)
         funding_continuity(self.store,anchor,snapshot)
+        checkpoint=daily_continuity(self.store,anchor,snapshot)
+        checkpoint['history_index']=history_index(activity)
         history=verified_history(self.store,activity)
         external={r['identity']['symbol']:r['identity'] for r in records.values()}
         # Keep native units through every ledger/quantity check. Never net
@@ -429,7 +465,8 @@ class ExternalAccounting:
             external_fx=fx,valuation='public_spot_upper_bound' if fx else 'native_usd')
         result.update(scope='program',program_daily=str(daily+funding-dec(baseline['upnl'])+floating),
             program_total=str(realized+total_funding+floating),program_funding_total=str(total_funding),
-            program_upnl=str(floating),program_journal=original_journal,funding_verified=True)
+            program_upnl=str(floating),program_journal=original_journal,funding_verified=True,
+            funding_daily_verified=True)
         if anchor['day']!=today:
             # Verify the COMPLETE carried interval first (including settlements
             # while offline), then start today's equity fallback at the same
@@ -453,6 +490,7 @@ class ExternalAccounting:
                     or equity_revision!=self.store.meta('equity_baseline_revision',0)
                     or original_anchor!=self.store.meta('external_equity_anchor')
                     or prior_history!=self.store.meta('external_verified_history')
+                    or prior_checkpoint!=self.store.meta('funding_checkpoint')
                     or result['program_journal']!=journal_fingerprint(self.store)
                     or not 0<=self.clock()-captured<=10):
                 raise ValueError('external_snapshot_superseded')
@@ -460,6 +498,7 @@ class ExternalAccounting:
             self.store.set_meta('external_income',result)
             self.store.set_meta('external_activity',plain(activity))
             self.store.set_meta('external_verified_history',history)
+            self.store.set_meta('funding_checkpoint',checkpoint)
             self.store.set_meta('program_daily_upnl',baseline)
             if not last or captured>=last['captured_at']:
                 self.store.set_meta('program_last_upnl',dict(upnl=str(floating),

@@ -230,12 +230,30 @@ class Accounts:
     def activity(self,start_ms,end_ms):
         # No filters by ticker or active positions: closed external trades and
         # unassigned cash movements are essential to completeness.
-        return dict(from_ms=start_ms,to_ms=end_ms,complete=True,
-            crossex_book=self.cross.history('account_book',start_ms,end_ms),
-            crossex_trades=self.cross.history('history_trades',start_ms,end_ms),
-            bitget_book=self.bitget.financial_records(start_ms,end_ms),
-            crossex_position_history=self.cross.position_history(start_ms,end_ms),
-            bitget_position_history=self.bitget.position_history(start_ms,end_ms))
+        from .history import HistoryError, error_details
+        result=dict(from_ms=start_ms,to_ms=end_ms,complete=False)
+        reads=(('crossex_book','crossex','/api/v4/crossex/account_book',
+                lambda:self.cross.history('account_book',start_ms,end_ms)),
+               ('crossex_trades','crossex','/api/v4/crossex/history_trades',
+                lambda:self.cross.history('history_trades',start_ms,end_ms)),
+               ('bitget_book','bitget','/api/v3/account/financial-records',
+                lambda:self.bitget.financial_records(start_ms,end_ms)),
+               ('crossex_position_history','crossex','/api/v4/crossex/history_positions',
+                lambda:self.cross.position_history(start_ms,end_ms)),
+               ('bitget_position_history','bitget','/api/v3/position/history-position',
+                lambda:self.bitget.position_history(start_ms,end_ms)))
+        for name,route,endpoint,read in reads:
+            try:
+                result[name]=read()
+            except Exception as error:
+                diagnostic=(error.diagnostic if isinstance(error,HistoryError) else
+                    dict(route=route,endpoint=endpoint,from_ms=start_ms,to_ms=end_ms,page=None,
+                         condition='request_failed',**error_details(error)))
+                result['failure']=diagnostic
+                failure=HistoryError(diagnostic)
+                failure.activity=result
+                raise failure from None
+        return dict(result,complete=True)
 
     def check_instruments(self,instruments):
         for i in instruments:

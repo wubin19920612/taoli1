@@ -144,12 +144,21 @@ def finish_shutdown(engine):
         status=engine.flatten_all('shutdown')
     except Exception:
         status=None
+    if isinstance(status,dict):
+        emit('shutdown_positions',**status)
     if (not isinstance(status,dict) or status.get('verified') is not True
             or status.get('program_flat') is not True or engine.store.pairs(active=True)):
         emit('alert',reason='shutdown_residual_exposure')
         return 1
-    emit('shutdown_positions',**status)
     return 0
+
+
+def emit_engine_alert(store,reason):
+    details={}
+    if reason=='external_income_unverifiable':
+        value=store.meta('external_income',{})
+        details={k:value[k] for k in ('activity_failure','income_failure') if k in value}
+    emit('alert',reason=reason,**details)
 
 
 def main(argv=None):
@@ -222,7 +231,7 @@ def main(argv=None):
             market=MarketData(store)
             accounts=Accounts(cross,bitget,risk_confirmed=risk_confirmed)
             engine=Engine(store,market,accounts,live=live,stop_file=config.get('CROSSEX_STOP_FILE',DEFAULT_VAR+'/STOP'),
-                          alert_sink=lambda reason:emit('alert',reason=reason),config=config)
+                          alert_sink=lambda reason:emit_engine_alert(store,reason),config=config)
             shutdown=False
             def stop(signum,frame):
                 nonlocal shutdown

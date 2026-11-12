@@ -83,7 +83,10 @@ class Engine:
                 incident=owner not in self.stops.reasons.get(reason,())
                 self.stops.add(reason,owner)
                 emit(self.store,self.clock,reason,values,event_kind=event_kind,
-                     sink=self.alert_sink,new_incident=incident)
+                     sink=self.alert_sink,new_incident=incident,
+                     status={name:{k:v for k,v in values[name].items() if k in
+                         ('stage','route','endpoint','page','condition','error_kind','http_status','api_code')}
+                         for name in ('activity_failure','income_failure') if name in values} or None)
                 return
             if self.store.meta('state')=='HALTING':
                 changed=reason not in self._halt_alerts or self._halt_alerts[reason]!=values
@@ -802,9 +805,14 @@ class Engine:
         except ExternalUnverifiable as error:
             self.risk='STOP'
             reason='external_identity_unverifiable' if str(error) in ('external_identity_unverifiable','external_catalog_unavailable') else 'external_income_unverifiable'
-            self.store.set_meta('external_income',dict(verified=False,reason=str(error),at=self.clock()))
+            details={}
+            if self.snapshot.get('activity',{}).get('failure'):
+                details['activity_failure']=self.snapshot['activity']['failure']
+            if getattr(error,'diagnostic',None):
+                details['income_failure']=error.diagnostic
+            self.store.set_meta('external_income',dict(verified=False,reason=str(error),at=self.clock(),**details))
             self.store.set_meta('external_failed_snapshot',plain(self.snapshot))
-            self.alert(reason)
+            self.alert(reason,details=details)
             self.enforce_account_protection()
         except Exception as error:
             self.risk='STOP'
@@ -1416,7 +1424,8 @@ class Engine:
                         and next(self.executor.iter_orders(accounting_pending=True),None) is None)
                     status=dict(status,verified=True,program_flat=program_flat,
                         account_flat=program_flat and not bool(raw['positions']),
-                        external_positions=plain(projection['external_positions']),captured_at=captured)
+                        external_positions=plain(projection['external_positions']),captured_at=captured,
+                        remaining_positions=plain(remote),local_active_pairs=len(self.store.pairs(active=True)))
                     self.store.set_meta('flatten_status',status)
                     if program_flat and projection['external_positions']:
                         self.store.event('PROGRAM_FLATTENED_EXTERNAL_REMAINS',status)
