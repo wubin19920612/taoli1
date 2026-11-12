@@ -14,6 +14,25 @@ function visibility(value: "hidden" | "visible") {
   fireEvent(document, new Event("visibilitychange"));
 }
 
+const metricTitles = ["开仓基准（bp）", "开仓超额价差（bp）", "预估两小时资金费成本（bp）",
+  "开仓盘口时间差（毫秒）", "平仓盘口时间差（毫秒）"];
+const snapshotFields = ["baseline_bps", "excess_bps", "funding_cost_bps", "open_book_skew_ms", "close_book_skew_ms"];
+const pairCountLabels = ["基准预热完成数", "结构性拉黑数", "冷却数"];
+const skipLabels = ["盘口不同步", "盘口陈旧", "资金费率检查未通过", "基准不平坦", "非单一交易所异常", "交易所数量不足"];
+
+function descriptionValue(label: string): string | null | undefined {
+  return screen.getByText(label).closest(".ant-descriptions-item")?.querySelector(".ant-descriptions-item-content")?.firstChild?.textContent;
+}
+
+function metricValues(section: string, rowKey: string) {
+  const card = screen.getByText(section).closest<HTMLElement>(".ant-card")!;
+  const row = card.querySelector<HTMLTableRowElement>(`tr[data-row-key="${rowKey}"]`)!;
+  return metricTitles.map(title => {
+    const header = within(card).getByRole("columnheader", { name: title }) as HTMLTableCellElement;
+    return row.cells[header.cellIndex].textContent;
+  });
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-11-11T08:00:00Z"));
@@ -33,6 +52,77 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); visibility("visible"); });
 
 describe("实盘契约页面", () => {
+  it("renders opening snapshots separately from actual PnL and order timing", async () => {
+    render(<LiveExecPage />); await flush();
+    expect(metricValues("当前持仓", "p1")).toEqual(["20.00", "20.10", "1.00", "250", "—"]);
+    expect(metricValues("已平仓记录", "t1")).toEqual(["-7.25", "28.35", "0.00", "0", "2300"]);
+    expect(screen.getByText("0.15 USD / 15.00 bp")).toBeTruthy();
+    expect(screen.getByText("12 / 230")).toBeTruthy();
+    expect(screen.getByText(/开仓超额价差尚未扣除费用/)).toBeTruthy();
+    expect(screen.getByText(/盘口时间差不代表订单发送或成交时间差/)).toBeTruthy();
+  });
+
+  it("renders all pair counts and cumulative skip reasons with Chinese explanations", async () => {
+    render(<LiveExecPage />); await flush();
+    expect(pairCountLabels.map(descriptionValue)).toEqual(["12", "2", "1"]);
+    skipLabels.forEach((label, index) => {
+      expect(descriptionValue(label)).toBe(String([2, 1, 3, 4, 5, 6][index]));
+    });
+    for (const explanation of [
+      "两腿盘口时间差超过开仓允许范围。",
+      "盘口时间信息缺失、无效或已过期。",
+      "资金费率数据无效，或归一化后的费率、费率差超限。",
+      "历史基准偏移或波动过大，未通过平坦性检查。",
+      "价格偏离未能归因于单一交易所，未通过异常模式检查。",
+      "有效且及时的参考交易所不足，无法判断单所异常。",
+    ]) expect(screen.getByText(explanation)).toBeTruthy();
+    expect(screen.getByText(/三项可能重叠，不表示可立即开仓/)).toBeTruthy();
+    expect(screen.getByText(/累计放弃机会数（含影子模式），跨日和重启保留/)).toBeTruthy();
+  });
+
+  it.each(["missing", "null"])("shows dashes for %s new fields from older services", async variant => {
+    fetchMock.mockImplementation(async (input: string) => {
+      const path = new URL(input).pathname.split("/").pop() as keyof typeof liveFixtures;
+      let data: unknown = liveFixtures[path];
+      if (path === "summary") {
+        const row: Record<string, unknown> = { ...liveFixtures.summary };
+        for (const key of ["baseline_ready_pairs", "structural_spread_pairs", "cooldown_pairs", "opening_skip_counts"]) {
+          if (variant === "missing") delete row[key]; else row[key] = null;
+        }
+        data = row;
+      } else if (path === "positions" || path === "trades") {
+        data = liveFixtures[path].map(item => {
+          const row: Record<string, unknown> = { ...item };
+          for (const key of snapshotFields) {
+            if (variant === "missing") delete row[key]; else row[key] = null;
+          }
+          return row;
+        });
+      }
+      return { ok: true, status: 200, json: async () => ({ available: true, data }) };
+    });
+    render(<LiveExecPage />); await flush();
+    expect(pairCountLabels.map(descriptionValue)).toEqual(["—", "—", "—"]);
+    expect(skipLabels.map(descriptionValue)).toEqual(Array(6).fill("—"));
+    expect(metricValues("当前持仓", "p1")).toEqual(Array(5).fill("—"));
+    expect(metricValues("已平仓记录", "t1")).toEqual(Array(5).fill("—"));
+    expect(screen.queryByText(/实盘服务未连接/)).toBeNull();
+    expect(screen.getByText("0.15 USD / 15.00 bp")).toBeTruthy();
+  });
+
+  it("keeps zero counts and handles partially missing skip reasons", async () => {
+    fetchMock.mockImplementation(async (input: string) => {
+      const path = new URL(input).pathname.split("/").pop() as keyof typeof liveFixtures;
+      const data = path === "summary" ? { ...liveFixtures.summary, baseline_ready_pairs: 0,
+        structural_spread_pairs: 0, cooldown_pairs: 0, opening_skip_counts: { book_skew: 0, book_stale: null } }
+        : liveFixtures[path];
+      return { ok: true, status: 200, json: async () => ({ available: true, data }) };
+    });
+    render(<LiveExecPage />); await flush();
+    expect(pairCountLabels.map(descriptionValue)).toEqual(["0", "0", "0"]);
+    expect(skipLabels.map(descriptionValue)).toEqual(["0", "—", "—", "—", "—", "—"]);
+  });
+
   it("renders risk state, both legs, all statistics and histogram bins from contract data", async () => {
     const { unmount } = render(<LiveExecPage />);
     await flush();

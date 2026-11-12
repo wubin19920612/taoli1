@@ -2,6 +2,7 @@
 import json
 import logging
 import re
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 
@@ -79,6 +80,46 @@ def test_passes_contract_examples_unchanged(context, path):
     assert response.json() == {"available": True, "data": PAYLOADS[path]}
     assert calls[0].url.path == f"/api/v1/{path}"
     assert TOKEN not in response.text
+
+
+def test_round_seven_contract_includes_all_added_fields():
+    summary = PAYLOADS["summary"]
+    assert {key: summary[key] for key in (
+        "baseline_ready_pairs", "structural_spread_pairs", "cooldown_pairs",
+    )} == {"baseline_ready_pairs": 12, "structural_spread_pairs": 2, "cooldown_pairs": 1}
+    assert summary["opening_skip_counts"] == {
+        "book_skew": 2, "book_stale": 1, "funding_diff": 3,
+        "baseline_not_flat": 4, "not_single_venue_outlier": 5, "too_few_venues": 6,
+    }
+    for path, close_skew in (("positions", None), ("trades", 2300)):
+        row = PAYLOADS[path][0]
+        assert {key: row[key] for key in (
+            "baseline_bps", "excess_bps", "funding_cost_bps", "open_book_skew_ms", "close_book_skew_ms",
+        )} == {"baseline_bps": 20.0, "excess_bps": 20.1, "funding_cost_bps": 1.0,
+              "open_book_skew_ms": 250, "close_book_skew_ms": close_skew}
+
+
+@pytest.mark.parametrize("path", ("summary", "positions", "trades"))
+@pytest.mark.parametrize("variant", ("zero", "null", "missing"))
+def test_passes_new_fields_and_legacy_responses_unchanged(context, path, variant):
+    _, client, _, install = context
+    payload = deepcopy(PAYLOADS[path])
+    row = payload if path == "summary" else payload[0]
+    fields = ("baseline_ready_pairs", "structural_spread_pairs", "cooldown_pairs", "opening_skip_counts") \
+        if path == "summary" else (
+            "baseline_bps", "excess_bps", "funding_cost_bps", "open_book_skew_ms", "close_book_skew_ms",
+        )
+    for key in fields:
+        if variant == "missing":
+            row.pop(key)
+        elif key == "opening_skip_counts" and variant == "zero":
+            row[key] = {reason: 0 for reason in row[key]}
+        else:
+            row[key] = 0 if variant == "zero" else None
+    install(lambda request: httpx.Response(200, json=payload))
+    response = client.get(f"/api/live-exec/{path}")
+    assert response.status_code == 200
+    assert response.json() == {"available": True, "data": payload}
 
 
 def test_query_whitelist_and_boundary_values(context):
