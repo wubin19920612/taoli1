@@ -267,7 +267,8 @@ class World:
             funding=self.funding,
             open_interests=lambda instruments,books:[dict(market_key=i.market.key,usd='10000000',at=self.now,
                 unit='base',unit_verified=True,source='fixture') for i in instruments],
-            turnovers=lambda instruments:['999999' if self.opening_fault=='volume_too_low' else '10000000']*len(instruments))
+            turnovers=lambda instruments:['999999' if self.opening_fault=='volume_too_low' else '10000000']*len(instruments),
+            cached_turnovers=lambda instruments:['999999' if self.opening_fault=='volume_too_low' else '10000000']*len(instruments))
         if opening_fault=='size_too_small':
             for i in self.instruments:
                 i.spec=replace(i.spec,min_notional='51')

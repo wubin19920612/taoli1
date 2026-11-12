@@ -222,6 +222,7 @@ class CompletionTests(unittest.TestCase):
             funding=lambda instruments:[dict(rate='0',interval=28800,next=now+10000,
                 captured_at=now,history_ok=True,max_abs_24h='0') for _ in instruments],
             turnovers=lambda instruments:['9000000']*len(instruments),
+            cached_turnovers=lambda instruments:['9000000']*len(instruments),
             open_interests=lambda instruments,books:[dict(market_key=i.market.key,usd='1000000',
                 at=now,unit_verified=True) for i in instruments])
         accounts = SimpleNamespace(cross=venues[0],bitget=venues[1],snapshot=snapshot,

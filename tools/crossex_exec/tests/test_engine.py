@@ -45,6 +45,10 @@ class FakeMarket:
     def turnovers(self,instruments):
         return ['5000000']*len(instruments)
 
+    def cached_turnovers(self,instruments):
+        # This fake is entirely in memory; production uses the read-only cache.
+        return self.turnovers(instruments)
+
     def open_interests(self,instruments,books):
         return [dict(market_key=i.market.key,usd='10000000',at=b.received_at,
                      unit='base',unit_verified=True,source='fixture') for i,b in zip(instruments,books)]
