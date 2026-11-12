@@ -1,4 +1,5 @@
 """Round 8 gateway security and contract tests, using only synthetic sessions/tokens."""
+import hashlib
 import json
 import logging
 from dataclasses import replace
@@ -18,7 +19,12 @@ MACHINE_TOKEN = "a" * 64
 MAPPING = "0123456789abcdef01234567"
 UNIVERSE_STATUS = "u1:" + "a" * 64
 MAPPING_EXPECTED = {"expected_status": "pending", "expected_multiplier": "1000"}
-READS = ("config", "config/audit", "universe", "mappings")
+EXTERNAL_STATUS = "x1:" + "a" * 64
+EXTERNAL_IDENTITY = {"route": "crossex", "exchange_type": "HYPERLIQUID", "business": "FUTURE",
+                     "symbol": "HYPERLIQUID_FUTURE_io:OAI_USDC", "quote": "USDC", "dex": "io"}
+EXTERNAL_BODY = {"identity": EXTERNAL_IDENTITY, "expected_status": EXTERNAL_STATUS,
+                 "reason": "人工核对 Astro 外部持仓"}
+READS = ("config", "config/audit", "universe", "mappings", "external-positions")
 WRITES = [
     ("PUT", "config", {"order_usd_max": 30, "expected_version": 2}),
     ("POST", "universe/SKHYNIX/exclude", {"expected_status": UNIVERSE_STATUS}),
@@ -27,6 +33,8 @@ WRITES = [
                                          "markets": ["binance|future|SKHYNIXUSDT"], "expected_status": UNIVERSE_STATUS}),
     ("POST", f"mappings/{MAPPING}/confirm", MAPPING_EXPECTED),
     ("POST", f"mappings/{MAPPING}/reject", MAPPING_EXPECTED),
+    ("POST", "external-positions/register", EXTERNAL_BODY),
+    ("POST", "external-positions/unregister", EXTERNAL_BODY),
 ]
 CSRF = {"Origin": "https://radar.test", "X-Live-Exec-CSRF": "1"}
 REAL_CLIENT = httpx.AsyncClient
@@ -355,7 +363,9 @@ def test_action_preconditions_required_and_conflicts_preserved(context, caplog, 
         missing = {key: value for key, value in body.items() if key != field}
         assert client.request(method, f"/api/live-exec/{path}", json=missing).status_code == 400
     assert not calls
-    if path.startswith("universe/"):
+    if path.startswith("external-positions/"):
+        payload = {"error": "external_conflict", "current_status": "x1:" + "b" * 64}
+    elif path.startswith("universe/"):
         payload = {"error": "status_conflict", "current_status": "u1:" + "b" * 64}
     else:
         payload = {"error": "mapping_conflict", "current_status": "rejected", "current_multiplier": "0.001"}
@@ -396,3 +406,90 @@ def test_mapping_multiplier_is_never_converted_to_number(context, multiplier):
     body = {**MAPPING_EXPECTED, "expected_multiplier": multiplier}
     assert client.post(f"/api/live-exec/mappings/{MAPPING}/confirm", json=body).status_code == 200
     assert json.loads(calls[0].content) == body
+
+
+@pytest.mark.parametrize("action", ["register", "unregister"])
+@pytest.mark.parametrize("headers", [
+    {}, {"Origin": CSRF["Origin"]}, {"X-Live-Exec-CSRF": "1"},
+    {**CSRF, "Origin": "https://radar.test:8443"},
+    {**CSRF, "Origin": "https://evil.test", "X-Forwarded-Host": "evil.test"},
+    {**CSRF, "Sec-Fetch-Site": "cross-site"},
+])
+def test_external_actions_keep_csrf_boundary(context, action, headers):
+    app, _, calls, _ = context
+    client = TestClient(app, base_url="https://radar.test", headers=session_headers("secret"))
+    assert client.post(f"/api/live-exec/external-positions/{action}", json=EXTERNAL_BODY,
+                       headers=headers).status_code == 403
+    assert not calls
+
+
+@pytest.mark.parametrize("action", ["register", "unregister"])
+@pytest.mark.parametrize("body", [
+    {k: v for k, v in EXTERNAL_BODY.items() if k != missing} for missing in EXTERNAL_BODY
+] + [
+    {**EXTERNAL_BODY, "unexpected": 1}, {**EXTERNAL_BODY, "side": "long"},
+    *({**EXTERNAL_BODY, "expected_status": v} for v in
+      (None, True, 2, [], {}, "", "x1:" + "A" * 64, "x1:" + "a" * 63, EXTERNAL_STATUS + "\n")),
+    *({**EXTERNAL_BODY, "reason": v} for v in (None, True, [], {}, "", "   ", "a" * 201, "reason\nnew")),
+    *({**EXTERNAL_BODY, "identity": v} for v in (None, [], True, "OAI", {})),
+    *({**EXTERNAL_BODY, "identity": {k: v for k, v in EXTERNAL_IDENTITY.items() if k != missing}}
+      for missing in EXTERNAL_IDENTITY),
+    *({**EXTERNAL_BODY, "identity": {**EXTERNAL_IDENTITY, k: v}} for k, v in (
+        ("route", "bitget"), ("business", "SPOT"), ("quote", "USDT"), ("dex", "xyz"),
+        ("exchange_type", "BINANCE"), ("symbol", "OAI"), ("symbol", "HYPERLIQUID_FUTURE_io:OAI_USDC\n"),
+        ("symbol", "HYPERLIQUID_FUTURE_io:OAI_USDC/../../config"), ("dex", None), ("dex", []),
+        ("symbol", "HYPERLIQUID_FUTURE_io:" + "A" * 160 + "_USDC"), ("token", ADMIN_TOKEN))),
+])
+def test_external_exact_identity_and_update_whitelist(context, action, body):
+    _, client, calls, _ = context
+    assert client.post(f"/api/live-exec/external-positions/{action}", json=body).status_code == 400
+    assert not calls
+
+
+@pytest.mark.parametrize("identity", [EXTERNAL_IDENTITY,
+    {**EXTERNAL_IDENTITY, "symbol": "HYPERLIQUID_FUTURE_xyz:OAI_USDC", "dex": "xyz"},
+    {**EXTERNAL_IDENTITY, "symbol": "BINANCE_FUTURE_BTC_USDT", "exchange_type": "BINANCE", "quote": "USDT", "dex": ""},
+])
+def test_external_exact_identity_round_trips_without_sensitive_audit_strings(context, caplog, identity):
+    _, client, calls, _ = context
+    body = {**EXTERNAL_BODY, "identity": identity, "reason": "synthetic-private-reason"}
+    response = client.post("/api/live-exec/external-positions/register", json=body)
+    assert response.status_code == 200
+    assert json.loads(calls[0].content) == body
+    fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
+    assert fingerprint in caplog.text
+    assert "POST /external-positions/register" in caplog.text
+    assert "synthetic-private-reason" not in caplog.text
+    assert identity["symbol"] not in caplog.text
+
+
+@pytest.mark.parametrize("action", ["register", "unregister"])
+@pytest.mark.parametrize("error", ["external_conflict", "program_ownership", "external_remote_position",
+    "external_remote_order", "external_identity_unverifiable", "external_catalog_unavailable", "account_snapshot_stale"])
+def test_external_business_409_is_byte_preserved_without_headers_or_retry(context, caplog, action, error):
+    _, client, _, install = context
+    calls = []
+    payload = json.dumps({"error": error, "current_status": "x1:" + "b" * 64}, indent=2).encode()
+
+    def conflict(request):
+        calls.append(request)
+        return httpx.Response(409, content=payload, headers={"Set-Cookie": "unsafe=1", "X-Secret": ADMIN_TOKEN})
+
+    install(conflict)
+    response = client.post(f"/api/live-exec/external-positions/{action}", json=EXTERNAL_BODY)
+    assert response.status_code == 409 and response.content == payload
+    assert "set-cookie" not in response.headers and "x-secret" not in response.headers
+    assert len(calls) == 1
+    assert "status=409" in caplog.text and ADMIN_TOKEN not in caplog.text
+
+
+@pytest.mark.parametrize("action", ["register", "unregister"])
+def test_external_duplicate_nested_keys_and_unsupported_routes(context, action):
+    _, client, calls, _ = context
+    raw = json.dumps(EXTERNAL_BODY).replace('"dex": "io"', '"dex": "io", "dex": "xyz"')
+    assert client.post(f"/api/live-exec/external-positions/{action}", content=raw,
+                       headers={"Content-Type": "application/json"}).status_code == 400
+    assert client.post(f"/api/live-exec/external-positions/{action}?token=anything", json=EXTERNAL_BODY).status_code == 422
+    assert client.put(f"/api/live-exec/external-positions/{action}", json=EXTERNAL_BODY).status_code == 405
+    assert client.post("/api/live-exec/external-positions/unlock", json=EXTERNAL_BODY).status_code in (400, 404)
+    assert not calls
