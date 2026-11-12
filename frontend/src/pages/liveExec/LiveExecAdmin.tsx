@@ -1,6 +1,6 @@
 import { Alert, Button, Card, Checkbox, Input, Modal, Space, Table, Tag, Typography } from "antd";
 import { useRef, useState, type ReactNode } from "react";
-import { liveAdminReadError, writeLiveExecAdmin, type LiveAdminWrite, type LiveCategory,
+import { hasMappingPrecondition, hasUniversePrecondition, LiveAdminConflictError, liveAdminReadError, writeLiveExecAdmin, type LiveAdminWrite, type LiveCategory,
   type LiveMapping, type LiveUniverse } from "../../api/liveExec";
 import { useLiveExecAdmin } from "./useLiveExecAdmin";
 
@@ -64,10 +64,15 @@ export function LiveExecAdmin() {
       if (value !== config.values[key]) changes[key] = value;
     }
     if (!Object.keys(changes).length) { setError("尚未修改参数"); return; }
-    prepare({ update: { resource: "config", changes }, title: "确认参数修改", configVersion: config.version,
+    prepare({ update: { resource: "config", changes, expected_version: config.version }, title: "确认参数修改", configVersion: config.version,
       details: <><p>请核对当前值 → 新值（版本 {config.version}）：</p>
         {Object.entries(changes).map(([key, value]) => <p key={key}>{labels[key] ?? key}（{key}）：{config.values[key]} → {value}</p>)}
         <p>新开仓使用新版本；已有持仓保留开仓版本，账户损失门槛按活动持仓取最严格值。最终以后端校验为准。</p></> });
+  };
+  const conflict = async () => {
+    setPending(null); setClassification(null); setDraft({}); setModalError(null);
+    setSuccess(false); setError(new LiveAdminConflictError().message);
+    await refresh(true);
   };
   const submit = async (update: LiveAdminWrite) => {
     if (writing.current) return;
@@ -78,13 +83,14 @@ export function LiveExecAdmin() {
       setPending(null); setClassification(null); setSuccess(true);
       await refresh(true);
     } catch (failure) {
-      setModalError(failure instanceof Error ? failure.message : "操作失败，请刷新核实操作结果");
+      if (failure instanceof LiveAdminConflictError) await conflict();
+      else setModalError(failure instanceof Error ? failure.message : "操作失败，请刷新核实操作结果");
     } finally { writing.current = false; setBusy(false); }
   };
   const confirmPending = () => {
     if (!pending) return;
     if (pending.configVersion !== undefined && (!config || config.version !== pending.configVersion)) {
-      setModalError("参数版本已变化，请取消并重新核对新旧值"); return;
+      void conflict(); return;
     }
     void submit(pending.update);
   };
@@ -99,6 +105,7 @@ export function LiveExecAdmin() {
     if (category === "listed_equity" && !market) { setModalError("请选择标的市场 US 或 KRX"); return; }
     if (!selected.length) { setModalError("请至少选择一个精确合约"); return; }
     void submit({ resource: "universe", base: classification.base, action: "classify",
+      expected_status: classification.status,
       classification: { category, markets: selected, ...(category === "listed_equity" && market ? { underlying_market: market } : {}) } });
   };
   const readFailure = (resource: keyof typeof data, label: string) => errors[resource]
@@ -127,6 +134,7 @@ export function LiveExecAdmin() {
     </Card>
     <Card title="交易范围">
       {readFailure("universe", "交易范围")}
+      {data.universe?.some(row => !hasUniversePrecondition(row)) && <Alert type="warning" message="交易范围缺少并发校验状态，请更新实盘服务后刷新" />}
       <Typography.Paragraph type="secondary">资格通过仅代表类别与所选择允许参与，仍需满足全部开仓风控。股票须确认同一标的市场及精确合约；取消排除不会自动确认类别或映射。</Typography.Paragraph>
       <Table size="small" rowKey="base" pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 1100 }}
         dataSource={data.universe ?? []} locale={{ emptyText: "暂无交易范围" }} columns={[
@@ -138,26 +146,27 @@ export function LiveExecAdmin() {
             <small>采集时间：{date(item.at)}；{item.selected ? "已人工选择" : "未人工选择"}；{item.eligible ? "类别资格通过" : "类别资格未通过"}{item.needs_classification ? "；待人工判断" : ""}</small>
           </div>)}</Space> },
           { title: "操作", render: (_, row) => <Space direction="vertical">
-            <Button disabled={busy} aria-label={`${row.excluded ? "取消排除" : "排除"} ${row.base}`} onClick={() => prepare({
+            <Button disabled={busy || !hasUniversePrecondition(row)} aria-label={`${row.excluded ? "取消排除" : "排除"} ${row.base}`} onClick={() => prepare({
               title: `确认${row.excluded ? "取消排除" : "排除"} ${row.base}`,
-              update: { resource: "universe", base: row.base, action: row.excluded ? "unexclude" : "exclude" },
+              update: { resource: "universe", base: row.base, action: row.excluded ? "unexclude" : "exclude", expected_status: row.status },
               details: <p>{row.excluded ? "取消排除不会自动确认类别或映射。" : "排除后禁止该币新开仓，已有持仓保留减仓能力。"}</p>,
             })}>{row.excluded ? "取消排除" : "排除"}</Button>
-            <Button disabled={busy} aria-label={`判断类别 ${row.base}`} onClick={() => openClassification(row)}>判断类别</Button>
+            <Button disabled={busy || !hasUniversePrecondition(row)} aria-label={`判断类别 ${row.base}`} onClick={() => openClassification(row)}>判断类别</Button>
           </Space> },
         ]} />
     </Card>
     <Card title="映射确认">
       {readFailure("mappings", "映射")}
+      {data.mappings?.some(row => !hasMappingPrecondition(row)) && <Alert type="warning" message="映射缺少并发校验状态或倍率，请更新实盘服务后刷新" />}
       <Typography.Paragraph type="secondary">公共数量 = 原生数量 × 倍率，公共价格 = 原生价格 ÷ 倍率。价格比是发现时快照，采集超过 5 分钟不可确认；服务端开仓前会用新鲜盘口再次复核。</Typography.Paragraph>
       <Table size="small" rowKey="id" pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 950 }}
         dataSource={data.mappings ?? []} locale={{ emptyText: "暂无映射候选" }} columns={[
           { title: "公共基础币 / 状态", render: (_, row) => <>{row.base}<br /><Tag>{statuses[row.status] ?? "未知状态"}</Tag></> },
           { title: "各所写法 / 数量倍率 / 价格比", render: (_, row) => <MappingDetails mapping={row} /> },
           { title: "操作", render: (_, row) => <Space>{(["confirm", "reject"] as const).map(action => <Button key={action}
-            disabled={busy} danger={action === "reject"} aria-label={`${action === "confirm" ? "确认" : "拒绝"}映射 ${row.base}`}
+            disabled={busy || !hasMappingPrecondition(row)} danger={action === "reject"} aria-label={`${action === "confirm" ? "确认" : "拒绝"}映射 ${row.base}`}
             onClick={() => prepare({ title: `${action === "confirm" ? "确认" : "拒绝"}映射 ${row.base}`,
-              update: { resource: "mappings", id: row.id, action }, details: <><MappingDetails mapping={row} />
+              update: { resource: "mappings", id: row.id, action, expected_status: row.status, expected_multiplier: row.multiplier }, details: <><MappingDetails mapping={row} />
                 <p>{action === "confirm" ? "请确认以上合约确为同一基础币且倍率正确。" : "拒绝后不能用此映射新开仓；已有持仓仍可减仓。"}</p></> })}>
             {action === "confirm" ? "确认" : "拒绝"}</Button>)}</Space> },
         ]} />
@@ -165,11 +174,15 @@ export function LiveExecAdmin() {
     <Card title="参数审计记录">
       {readFailure("config/audit", "参数审计")}
       <Typography.Paragraph type="secondary">最近最多 500 条记录，按时间从旧到新排列。</Typography.Paragraph>
-      <Table size="small" rowKey="version" dataSource={data["config/audit"] ?? []} pagination={{ pageSize: 10, showSizeChanger: false }} scroll={{ x: 650 }}
+      <Table size="small" rowKey="key" dataSource={(data["config/audit"] ?? []).map((row, index) => ({
+        ...row, key: `${row.version}:${row.at}:${index}`,
+      }))} pagination={{ pageSize: 10, showSizeChanger: false }} scroll={{ x: 650 }}
         locale={{ emptyText: "暂无参数审计记录" }} columns={[
           { title: "版本", dataIndex: "version" }, { title: "时间", dataIndex: "at", render: date },
           { title: "来源", dataIndex: "source", render: value => value === "admin_api" ? "管理接口" : value },
-          { title: "旧值 → 新值", render: (_, row) => Object.entries(row.new).map(([key, value]) => <div key={key}>{labels[key] ?? key}：{num(row.old[key])} → {num(value)}</div>) },
+          { title: "旧值 → 新值", render: (_, row) => row.error === "version_conflict"
+            ? `版本冲突，未更新（预期 ${num(row.expected_version)} / 当前 ${num(row.current_version)}）`
+            : Object.entries(row.new).map(([key, value]) => <div key={key}>{labels[key] ?? key}：{num(row.old[key])} → {num(value)}</div>) },
         ]} />
     </Card>
     <Modal open={!!pending} title={pending?.title} okText="确认提交" cancelText="取消" confirmLoading={busy}

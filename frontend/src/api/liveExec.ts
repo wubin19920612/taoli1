@@ -63,6 +63,7 @@ export interface LiveConfig {
 }
 export interface LiveConfigAudit {
   version: number; at: string; source: string; old: Record<string, number>; new: Record<string, number>;
+  error?: "version_conflict"; expected_version?: number; current_version?: number;
 }
 export type LiveCategory = "crypto" | "listed_equity" | "pre_ipo" | "commodity" | "unconfirmed";
 export interface LiveUniverseMarket {
@@ -71,11 +72,11 @@ export interface LiveUniverseMarket {
   volume_usd: Num; volume_basis: Text; at: Text; selected: boolean; eligible: boolean; needs_classification: boolean;
 }
 export interface LiveUniverse {
-  base: string; category: LiveCategory; excluded: boolean; underlying_market: "US" | "KRX" | null;
+  base: string; status: string; category: LiveCategory; excluded: boolean; underlying_market: "US" | "KRX" | null;
   markets: LiveUniverseMarket[];
 }
 export interface LiveMapping {
-  id: string; base: string; status: "pending" | "confirmed" | "rejected"; at: Text; ratio: Num;
+  id: string; base: string; status: "pending" | "confirmed" | "rejected"; multiplier: string; at: Text; ratio: Num;
   legs: { market_key: string; raw_base: string; quantity_multiplier: Num }[];
 }
 export interface LiveAdminResources {
@@ -118,19 +119,35 @@ export async function getLiveExecAdmin<K extends LiveAdminResource>(
 }
 
 export type LiveAdminWrite =
-  | { resource: "config"; changes: Record<string, number> }
-  | { resource: "universe"; base: string; action: "exclude" | "unexclude" }
-  | { resource: "universe"; base: string; action: "classify"; classification: {
+  | { resource: "config"; changes: Record<string, number>; expected_version: number }
+  | { resource: "universe"; base: string; action: "exclude" | "unexclude"; expected_status: string }
+  | { resource: "universe"; base: string; action: "classify"; expected_status: string; classification: {
     category: Exclude<LiveCategory, "unconfirmed">; markets: string[]; underlying_market?: "US" | "KRX";
   } }
-  | { resource: "mappings"; id: string; action: "confirm" | "reject" };
+  | { resource: "mappings"; id: string; action: "confirm" | "reject";
+    expected_status: LiveMapping["status"]; expected_multiplier: string };
+
+export function hasUniversePrecondition(row: LiveUniverse): boolean {
+  return typeof row.status === "string" && row.status.length === 67 && /^u1:[0-9a-f]{64}$/.test(row.status);
+}
+
+export function hasMappingPrecondition(row: LiveMapping): boolean {
+  return ["pending", "confirmed", "rejected"].includes(row.status) && typeof row.multiplier === "string"
+    && row.multiplier.length > 0 && row.multiplier.length <= 80 && !/[^0-9.eE+\-]/.test(row.multiplier);
+}
+
+export class LiveAdminConflictError extends Error {
+  constructor() { super("数据已被其他人修改，请刷新后重新确认"); }
+}
 
 export async function writeLiveExecAdmin(update: LiveAdminWrite): Promise<void> {
   const path = update.resource === "config" ? "config" : update.resource === "universe"
     ? `universe/${encodeURIComponent(update.base)}/${update.action}`
     : `mappings/${encodeURIComponent(update.id)}/${update.action}`;
-  const body = update.resource === "config" ? update.changes
-    : update.resource === "universe" && update.action === "classify" ? update.classification : {};
+  const body = update.resource === "config" ? { ...update.changes, expected_version: update.expected_version }
+    : update.resource === "universe" ? {
+      ...(update.action === "classify" ? update.classification : {}), expected_status: update.expected_status,
+    } : { expected_status: update.expected_status, expected_multiplier: update.expected_multiplier };
   let response: Response;
   try {
     // Browsers supply Origin; never attach either server token. Writes are never retried.
@@ -141,6 +158,7 @@ export async function writeLiveExecAdmin(update: LiveAdminWrite): Promise<void> 
   } catch {
     throw new Error("请求未完成，结果可能已生效，请刷新核实后再操作");
   }
+  if (response.status === 409) throw new LiveAdminConflictError();
   const result = await response.json().catch(() => null);
   if (!response.ok || result?.available !== true) {
     const message = typeof result?.detail === "string" && /[\u4e00-\u9fff]/.test(result.detail) ? result.detail

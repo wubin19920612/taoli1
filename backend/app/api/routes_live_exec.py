@@ -5,11 +5,13 @@ import json
 import logging
 import math
 import re
+import sys
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 
 from app.core.security import require_session
 
@@ -24,7 +26,17 @@ UPSTREAM_PATHS = {
     "universe": "/api/v1/universe",
     "mappings": "/api/v1/mappings",
 }
-logger = logging.getLogger(__name__)
+# Uvicorn's default CLI config only enables its own loggers. Audit records must
+# reach container stdout even when the root logger remains at WARNING.
+logger = logging.getLogger("taoli1.audit.live_exec")
+logger.setLevel(logging.INFO)
+logger.propagate = False
+if not any(handler.name == "live_exec_admin_stdout" for handler in logger.handlers):
+    _audit_handler = logging.StreamHandler(sys.stdout)
+    _audit_handler.name = "live_exec_admin_stdout"
+    _audit_handler.setLevel(logging.INFO)
+    _audit_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    logger.addHandler(_audit_handler)
 # Round 8 whitelist/ranges from codex/crossex-exec-r8 b24f5af settings.py.
 # No executor code is imported. The upstream remains the final authority.
 CONFIG_RULES = {
@@ -232,10 +244,25 @@ async def _body(request: Request) -> dict:
 
 
 def _validate_update(resource: str, action: str, body: dict) -> None:
+    if resource == "universe":
+        expected = body.get("expected_status")
+        if not isinstance(expected, str) or not re.fullmatch(r"u1:[0-9a-f]{64}", expected):
+            raise HTTPException(400, "必须提供交易范围的 expected_status")
+    elif resource == "mappings":
+        multiplier = body.get("expected_multiplier")
+        if (body.keys() != {"expected_status", "expected_multiplier"}
+                or body.get("expected_status") not in ("pending", "confirmed", "rejected")
+                or not isinstance(multiplier, str) or not re.fullmatch(r"[0-9.eE+\-]{1,80}", multiplier)):
+            raise HTTPException(400, "必须提供映射的 expected_status 和原始 expected_multiplier 字符串")
+        return
     if resource == "config":
-        if not body or body.keys() - CONFIG_RULES.keys():
+        if type(body.get("expected_version")) is not int or body["expected_version"] < 0:
+            raise HTTPException(400, "必须提供非负整数 expected_version")
+        changes = body.keys() - {"expected_version"}
+        if not changes or changes - CONFIG_RULES.keys():
             raise HTTPException(400, "参数不能为空且必须在允许的字段白名单内")
-        for key, value in body.items():
+        for key in changes:
+            value = body[key]
             low, high, integer = CONFIG_RULES[key]
             try:
                 valid = (type(value) in (int, float) and math.isfinite(value)
@@ -248,7 +275,7 @@ def _validate_update(resource: str, action: str, body: dict) -> None:
     elif action == "classify":
         category = body.get("category")
         markets = body.get("markets")
-        if (body.keys() - {"category", "markets", "underlying_market"}
+        if (body.keys() - {"category", "markets", "underlying_market", "expected_status"}
                 or category not in ("crypto", "listed_equity", "pre_ipo", "commodity")
                 or not isinstance(markets, list) or not markets
                 or any(not isinstance(key, str) or not 1 <= len(key) <= 256
@@ -261,8 +288,8 @@ def _validate_update(resource: str, action: str, body: dict) -> None:
                 raise HTTPException(400, "股票必须选择 US 或 KRX 标的市场")
         elif "underlying_market" in body:
             raise HTTPException(400, "非股票类别不得提交标的市场")
-    elif body:
-        raise HTTPException(400, "此操作仅接受空 JSON 对象")
+    elif body.keys() != {"expected_status"}:
+        raise HTTPException(400, "此操作仅接受 expected_status")
 
 
 def _audit_parameters(resource: str, identity: str, body: dict) -> str:
@@ -279,7 +306,7 @@ def _audit_parameters(resource: str, identity: str, body: dict) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
-async def admin_proxy(request: Request, resource: str, identity: str = "", action: str = "") -> dict:
+async def admin_proxy(request: Request, resource: str, identity: str = "", action: str = "") -> dict | Response:
     path = f"/api/v1/{resource}" + (f"/{identity}/{action}" if identity else "")
     interface = f"{request.method} /{resource}" + (f"/{{id}}/{action}" if identity else "")
     parameters = '{"validation":"rejected"}'
@@ -307,6 +334,10 @@ async def admin_proxy(request: Request, resource: str, identity: str = "", actio
             async with httpx.AsyncClient(timeout=3.0, trust_env=False, follow_redirects=False) as client:
                 response = await client.request(request.method, settings.crossex_exec_url.rstrip("/") + path,
                                                 headers={"X-Api-Token": token}, json=body)
+        if response.status_code == 409:
+            status = 409
+            # Preserve the upstream concurrency contract, without copying its headers.
+            return Response(content=response.content, status_code=409, media_type="application/json")
         if response.status_code != 200:
             status = response.status_code if 400 <= response.status_code <= 599 else 502
             try:
@@ -335,20 +366,20 @@ async def admin_proxy(request: Request, resource: str, identity: str = "", actio
                     request.state.auth_session_hash[:16], interface, parameters, status)
 
 
-@router.put("/config", dependencies=[Depends(require_admin_session)])
-async def put_config(request: Request) -> dict:
+@router.put("/config", dependencies=[Depends(require_admin_session)], response_model=None)
+async def put_config(request: Request) -> dict | Response:
     return await admin_proxy(request, "config")
 
 
-@router.post("/universe/{base}/{action}", dependencies=[Depends(require_admin_session)])
-async def post_universe(request: Request, base: str, action: str) -> dict:
+@router.post("/universe/{base}/{action}", dependencies=[Depends(require_admin_session)], response_model=None)
+async def post_universe(request: Request, base: str, action: str) -> dict | Response:
     if not re.fullmatch(r"[A-Z0-9]{1,40}", base) or action not in {"exclude", "unexclude", "classify"}:
         raise HTTPException(400, "交易范围操作或币种无效")
     return await admin_proxy(request, "universe", base, action)
 
 
-@router.post("/mappings/{identity}/{action}", dependencies=[Depends(require_admin_session)])
-async def post_mapping(request: Request, identity: str, action: str) -> dict:
+@router.post("/mappings/{identity}/{action}", dependencies=[Depends(require_admin_session)], response_model=None)
+async def post_mapping(request: Request, identity: str, action: str) -> dict | Response:
     if not re.fullmatch(r"[0-9a-f]{24}", identity) or action not in {"confirm", "reject"}:
         raise HTTPException(400, "映射操作或标识无效")
     return await admin_proxy(request, "mappings", identity, action)
