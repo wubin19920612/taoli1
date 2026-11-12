@@ -540,10 +540,23 @@ class PublicBookTests(unittest.TestCase):
             limiter=Limiter()
             market=MarketData(store,clock=lambda:NOW,client=PublicClient(limiter,transport=transport))
             try:
-                result=market.books([instrument(),instrument('bitget')])
+                result=market.opening_books([instrument(),instrument('bitget')])
                 self.assertTrue(all(result))
                 self.assertEqual(len(calls),2)
                 self.assertEqual(limiter.stats['binance']['requests'],1)
                 self.assertEqual(limiter.stats['bitget']['requests'],1)
+            finally:
+                market.close()
+
+    def test_documented_clock_missing_blocks_only_opening_not_close_quotes(self):
+        with tempfile.TemporaryDirectory() as tmp, Store(Path(tmp)/'db') as store:
+            market=MarketData(store,clock=lambda:NOW,client=PublicClient(Limiter(),
+                transport=lambda url:self.payload('bitget' if 'bitget' in url else 'binance',False)))
+            try:
+                instruments=[instrument(),instrument('bitget')]
+                closing=market.books(instruments)
+                self.assertTrue(all(closing))
+                self.assertTrue(all(b.exchange_at is None for b in closing))
+                self.assertEqual(market.opening_books(instruments),[None,None])
             finally:
                 market.close()

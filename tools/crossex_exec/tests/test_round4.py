@@ -5,7 +5,7 @@ from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from tools.fill_sim.core import day, dec
+from tools.fill_sim.core import Book, day, dec
 from tools.crossex_exec.accounts import Accounts
 from tools.crossex_exec.adapters import checked_status
 from tools.crossex_exec.transport import APIError
