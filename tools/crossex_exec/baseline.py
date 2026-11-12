@@ -123,20 +123,17 @@ class Baseline:
                 rows.append((pair_key(base,a,b), int(now//SAMPLE_SECONDS), now, str((mb/ma-1)*10000)))
         self.store.add_baseline_samples(rows, now)
         # Remove observations of a removed whitelist base from the API counts.
-        with self.store.lock:
+        with self.store.transaction():
             # Replace the entire round, including failed/empty venues. Never
             # merge old quotes into evidence of three simultaneously observed venues.
             self.store.set_meta('baseline_quotes', dict(at=now, mids=mids))
-            states = self.store.meta('baseline_status', {})
-            self.store.set_meta('baseline_status', {k:v for k,v in states.items() if k.split('|')[0] in bases})
-        for base in bases:
-            for a, b in combinations(sorted(BATCH_URLS), 2):
-                self.status(base, a, b, now)
+            self.store.prune_baseline_states(bases)
+            for base in bases:
+                for a, b in combinations(sorted(BATCH_URLS), 2):
+                    self.status(base, a, b, now)
 
     def latest(self, base):
-        snapshot = self.store.meta('baseline_quotes', {})
-        return dict(at=snapshot.get('at'), mids={ex:values[base] for ex,values in snapshot.get('mids', {}).items()
-                                                if base in values})
+        return self.store.latest_baseline(base)
 
     def status(self, base, buy, sell, now=None):
         now = self.clock() if now is None else now
@@ -148,8 +145,7 @@ class Baseline:
             mad = median([abs(v-center) for v in values]) if values else None
             latest = rows[-1][0] if rows else None
             ready = bool(len(rows) >= 300 and latest-rows[0][0] >= 10800 and 0 <= now-latest <= FRESH_SECONDS)
-            states = self.store.meta('baseline_status', {})
-            previous = states.get(key, {})
+            previous = self.store.baseline_state(key)
             checked = previous.get('checked_at')
             blocked = previous.get('blocked', False)
             # Missing history never clears a structural latch. Reevaluate once
@@ -161,8 +157,7 @@ class Baseline:
                          mad_bps=str(mad) if mad is not None else None, count=len(rows),
                          first_at=rows[0][0] if rows else None, latest_at=latest,
                          ready=ready, blocked=blocked, checked_at=checked, at=now)
-            states[key] = state
-            self.store.set_meta('baseline_status', states)
+            self.store.save_baseline_state(state)
         if buy > sell and values:
             # Reversing a ratio is not just negating bp; transform observations
             # before the median (including the even-sample case).

@@ -13,7 +13,10 @@ from .limits import HardLimits, DEFAULT_VAR
 from .background import SnapshotCache, PeriodicWorker
 from .stops import StopLocks
 from .baseline import Baseline
-from .admission import OpeningLimits, AdmissionError, BOOK_RETRIES, book_skew_ms
+from .admission import OpeningLimits, AdmissionError, BOOK_RETRIES, book_skew_ms, SKIP_REASONS
+from .settings import Settings, risk_settings
+from .sizing import size_plan
+from .universe import Universe, check_mapping_ratio
 
 
 class DailyBaselinePending(ValueError):
@@ -39,6 +42,9 @@ class Engine:
         self.bases=None
         self.baseline=Baseline(store,clock)
         self.opening_limits=OpeningLimits(config)
+        self.settings=Settings(store,clock)
+        self.universe=Universe(store,clock)
+        self.requested_markets=set()
         self.next_catalog=self.next_fees=0
         self.fee_keys=set()
         self.next_halt=0
@@ -90,24 +96,58 @@ class Engine:
         self.limits.check_order(intent)
 
     def check_pair(self,intents):
+        # The API writer shares this path-scoped lock. One version/decision set
+        # is observed at the shared admission linearization point for BOTH legs.
+        with self.store.lock:
+            try:
+                return self._check_pair(intents)
+            except ValueError as error:
+                reason=error.reason if isinstance(error,AdmissionError) else str(error)
+                if reason in SKIP_REASONS:
+                    pair=next((p for p in self.store.pairs() if p['id']==intents[0]['pair_id']),{})
+                    self.store.skip(pair.get('trigger_id','pair:'+str(pair.get('id'))),reason,
+                                    stage='send',pair_id=pair.get('id'))
+                raise
+
+    def _check_pair(self,intents):
         if len(intents)!=2 or {i['leg'] for i in intents}!={0,1} or len({i['pair_id'] for i in intents})!=1:
             raise ValueError('opening_pair_missing')
         pair=next(p for p in self.store.pairs(active=True) if p['id']==intents[0]['pair_id'])
         orders=sorted(intents,key=lambda o:o['leg'])
         instruments=[Instrument.load(i) for i in pair['instruments']]
+        config=pair.get('config_at_open')
+        limits=self.opening_limits.restricted(config['values']) if config else self.opening_limits
+        if config and self.settings.read()!=config:
+            raise ValueError('config_version_changed')
         if any(i.market.key not in self.market.mapping for i in instruments):
             raise ValueError('send_catalog_unavailable')
+        if config:
+            current=self.universe.resolve([self.market.mapping[i.market.key] for i in instruments])
+            if [i.dump() for i in current]!=[i.dump() for i in instruments]:
+                raise ValueError('send_catalog_changed')
+            self.check_volumes(instruments,config['values'])
         venues=tuple(i.market.exchange for i in instruments)
         for attempt in range(BOOK_RETRIES+1):
             try:
                 state=self.baseline.require(pair['base'],*venues)
-                self.opening_limits.flat(state)
-                self.opening_limits.flat(dict(state,baseline_bps=pair['baseline_at_open']))
+                limits.flat(state)
+                limits.flat(dict(state,baseline_bps=pair['baseline_at_open']))
                 fees=self.fees_for(instruments)
-                skew=self.opening_limits.books(pair['last_books'],self.clock(),send=True)
-                self.opening_limits.funding(pair['funding'])
+                skew=limits.books(pair['last_books'],self.clock(),send=True)
+                limits.funding(pair['funding'])
+                if config:
+                    common_books=[Book(**b) for b in pair['last_books']]
+                    # Books here are common units; reconstruct raw mids only for mapping validation.
+                    check_mapping_ratio(instruments,[Book([[str(dec(b.bids[0][0])*i.multiplier),'1']],
+                        [[str(dec(b.asks[0][0])*i.multiplier),'1']],b.received_at,b.exchange_at) for i,b in zip(instruments,common_books)])
+                    own=sum(dec(o['quantity'])*dec(o['price']) for o in orders)
+                    available=max(dec(0),min(self.limits.total,dec(config['values']['max_total_open_usd']))-
+                                  self.limits.exposure(self.account_cache.read())+own)
+                    plan=size_plan([i.common() for i in instruments],common_books,pair['open_interests'],config['values'],available,self.clock())
+                    if any(dec(o['quantity'])*i.multiplier>dec(plan['quantity']) for o,i in zip(orders,instruments)):
+                        raise ValueError('send_size_changed')
                 pricing=send_review(pair,orders,fees,self.clock())
-                evidence=self.opening_limits.outlier(venues,pair['last_books'],self.baseline.latest(pair['base']),
+                evidence=limits.outlier(venues,pair['last_books'],self.reference_snapshot(instruments),
                                                       pricing['excess_bps'],self.clock())
                 pair.update(open_book_skew_ms=float(skew),outlier_at_open=evidence,
                             excess_at_open=pricing['excess_bps'])
@@ -118,7 +158,9 @@ class Engine:
                 # original hard limits and final book age before releasing BOTH senders.
                 for order in orders:
                     self.check_order(order)
-                self.opening_limits.books(pair['last_books'],self.clock(),send=True)
+                limits.books(pair['last_books'],self.clock(),send=True)
+                if config and self.settings.read()!=config:
+                    raise ValueError('config_version_changed')
                 return
             except AdmissionError as error:
                 if error.reason in ('book_skew','book_stale') and attempt<BOOK_RETRIES:
@@ -133,23 +175,47 @@ class Engine:
         # shared public queue/limiter. Never refresh only the failing leg.
         try:
             fetch=getattr(self.market,'opening_books',self.market.books)
-            return fetch(instruments)
+            return [i.common_book(b) for i,b in zip(instruments,fetch(instruments))]
         except Exception:
             return [None,None]
 
-    def opening_review(self,instruments,fees,funding,turnovers,baseline):
+    def opening_review(self,instruments,fees,funding,turnovers,baseline,config=None):
+        config=config or self.settings.read()
+        values=config['values']
+        limits=self.opening_limits.restricted(values)
+        interests=None
+        common=[i.common() for i in instruments]
         for attempt in range(BOOK_RETRIES+1):
             books=self.fetch_opening_books(instruments)
             try:
-                self.opening_limits.books(books,self.clock())
-                fill=review(instruments,books,fees,funding,turnovers,self.clock(),baseline_bps=baseline['baseline_bps'])
-                evidence=self.opening_limits.outlier(tuple(i.market.exchange for i in instruments),books,
-                    self.baseline.latest(instruments[0].spec.base),fill['excess_bps'],self.clock())
-                self.opening_limits.books(books,self.clock())
+                limits.books(books,self.clock())
+                check_mapping_ratio(common,books)
+                if interests is None:
+                    interests=self.market.open_interests(instruments,books)
+                # Public OI reads also consume the opening book age budget.
+                limits.books(books,self.clock())
+                available=max(dec(0),min(self.limits.total,dec(values['max_total_open_usd']))-
+                              self.limits.exposure(self.account_cache.read()))
+                sizing=size_plan(common,books,interests,values,available,self.clock())
+                fill=review(common,books,fees,funding,turnovers,self.clock(),baseline_bps=baseline['baseline_bps'],
+                            quantity=sizing['quantity'],min_turnover=values['min_quote_volume_usd'],min_excess_bps=values['min_excess_bps'])
+                fill.update(sizing=sizing,open_interests=interests)
+                evidence=limits.outlier(tuple(i.market.exchange for i in instruments),books,
+                    self.reference_snapshot(instruments),fill['excess_bps'],self.clock())
+                limits.books(books,self.clock())
                 return books,fill,evidence
             except AdmissionError as error:
                 if error.reason not in ('book_skew','book_stale') or attempt==BOOK_RETRIES:
                     raise
+
+    def reference_snapshot(self,instruments):
+        snapshot=self.baseline.latest(instruments[0].base)
+        # Equity references must track the selected underlying too. An unselected
+        # ADR/other exchange cannot be the third venue that admits an equity pair.
+        if self.universe.eligibility(instruments[0])[0]=='listed_equity':
+            allowed={i.market.exchange for i in self.universe.compatible_markets(instruments)}
+            snapshot=dict(snapshot,mids={ex:mid for ex,mid in snapshot['mids'].items() if ex in allowed})
+        return snapshot
 
     def refresh_accounts(self):
         started=self.clock()
@@ -178,7 +244,7 @@ class Engine:
                     if not self._closed:
                         self.store.event('CATALOG_REFRESH_FAILED')
         # Empty whitelist means no opening reference reads, never every contract.
-        instruments=tuple(i for i in self.market.mapping.values() if i.spec.base in (self.bases or ()))
+        instruments=tuple(i for i in self.market.mapping.values() if i.spec.base in (self.bases or ()) or i.market.key in self.requested_markets)
         keys={i.market.key for i in instruments}
         if now>=self.next_fees or keys!=self.fee_keys:
             try:
@@ -202,7 +268,7 @@ class Engine:
         bases=self.bases or ()
         started=self.clock()
         try:
-            mids=self.market.baseline_quotes(bases)
+            mids,bases=self.market.sample_quotes(self.settings.read()['values']['sampling_min_quote_volume_usd'])
         except Exception:
             # Even a whole-round failure invalidates the old reference set.
             with self._lifecycle_lock:
@@ -348,7 +414,7 @@ class Engine:
                     positions.pop(key,None)
                     continue
                 entry=entries[n]
-                price=dec(entry.get('vwap') or entry.get('average_price') or entry['price'])
+                price=dec(entry.get('vwap') or entry.get('average_price') or entry['price'])/Instrument.load(entry['instrument']).multiplier
                 mark=dec(walk(books[n].bids if n==0 else books[n].asks,quantity=q)['vwap'])
                 positions[key]=str(q*(mark-price)*(1 if n==0 else -1))
         except (KeyError,ValueError,TypeError):
@@ -438,16 +504,19 @@ class Engine:
                 daily=min(daily,dec(equity)-dec(daily_base['equity']))
             recent=[o for o in self.store.all_orders() if o.get('sent_ms',0)>=self.clock()*1000-3600000]
             rejected=sum(o['state']=='REJECTED' or o.get('rejected',False) for o in recent)
+            settings=self.risk_settings()
+            self.store.set_meta('account_loss_current',dict(daily=str(daily),total=str(total),at=self.clock()))
             self.risk=risk_decision(daily=daily,total=total,margins=self.snapshot['margins'],
-                single_failures=self.store.meta('single_failures',0),rejected=rejected,attempted=len(recent),reconciled=same)
-            if daily<=-20:
+                single_failures=self.store.meta('single_failures',0),rejected=rejected,attempted=len(recent),reconciled=same,
+                daily_limit=settings['daily_loss_stop_usd'],total_limit=settings['total_loss_stop_usd'])
+            if daily<=-dec(settings['daily_loss_stop_usd']):
                 self.store.set_meta('daily_loss_day',current_day)
                 self.alert('daily_loss')
             if self.store.meta('daily_loss_day')==current_day and self.risk=='RUN':
                 self.risk='STOP'
             self.store.event('RECONCILE',dict(matched=same,margins=self.snapshot['margins'],daily=str(daily),total=str(total),risk=self.risk))
             self.stops.discard('account_snapshot_unavailable')
-            if (total<=-100 or equity_halt) and self.store.meta('state')!='HALTED':
+            if (total<=-dec(settings['total_loss_stop_usd']) or equity_halt) and self.store.meta('state')!='HALTED':
                 self.store.set_meta('state','HALTING')
             if self.risk in ('HALTED','FLATTEN') or self.store.meta('state')=='HALTING':
                 self.flatten_all('circuit_breaker')
@@ -456,6 +525,38 @@ class Engine:
         except Exception:
             self.risk='STOP'
             self.alert('account_snapshot_unavailable')
+
+    def risk_settings(self):
+        return risk_settings(self.store)
+
+    def check_new_risk(self,values):
+        # A tighter NEW version can deny entry without liquidating older positions.
+        snapshot=self.account_cache.read()
+        if self.limits.check_equity(snapshot):
+            self.flatten_all('account_equity_drop')
+            raise ValueError('account_equity_halt')
+        loss=self.store.meta('account_loss_current',{})
+        if (dec(loss.get('daily',0))<=-dec(values['daily_loss_stop_usd'])
+                or dec(loss.get('total',0))<=-dec(values['total_loss_stop_usd'])):
+            raise ValueError('runtime_loss_limit')
+        baseline=self.store.meta('account_equity_baseline')
+        if any(dec(baseline[v])-dec(q)>=min(self.limits.drop,dec(values['max_equity_drop_usd']))
+               for v,q in self.limits.equities(snapshot).items()):
+            raise ValueError('runtime_equity_limit')
+
+    def check_volumes(self,instruments,values):
+        turnovers=self.market.turnovers(instruments)
+        try:
+            if len(turnovers)!=2 or any(dec(v)<0 for v in turnovers):
+                raise ValueError('volume_unknown')
+        except (ValueError,TypeError,ArithmeticError):
+            raise ValueError('volume_unknown') from None
+        if any(dec(v)<dec(values['min_quote_volume_usd']) for v in turnovers):
+            raise ValueError('volume_too_low')
+        if values['min_venues_with_volume']>2:
+            if len(self.universe.volume_venues(instruments,values))<values['min_venues_with_volume']:
+                raise ValueError('volume_too_low')
+        return turnovers
 
     def ingest(self,payload):
         now=self.clock()
@@ -471,41 +572,52 @@ class Engine:
         try:
             markets=[Market.from_payload(payload[k]) for k in ('buy_market_key','sell_market_key')]
             instruments=[self.market.mapping[m.key] for m in markets]
+            config=self.settings.read()
+            values=config['values']
+            opening_limits=self.opening_limits.restricted(values)
+            self.check_new_risk(values)
             for m,i in zip(markets,instruments):
                 i.spec.validate(m)
-            base=instruments[0].spec.base
-            if self.bases is not None and base not in self.bases:
+            instruments=self.universe.resolve(instruments)
+            base=instruments[0].base
+            if self.bases and base not in self.bases:
                 raise ValueError('base_not_whitelisted')
             if payload['symbol']!=base:
                 raise ValueError('trigger_base_mismatch')
             active=self.store.pairs(active=True)
-            if len(active)>=3 or any(p['base']==base for p in active):
+            if len(active)>=min(3,values['max_open_pairs']) or any(p['base']==base for p in active):
                 raise ValueError('position_limit')
             if now-self.store.meta('mapping')['at']>21600:
                 raise ValueError('reference_data_stale')
             baseline=self.baseline.require(base,*(i.market.exchange for i in instruments))
-            self.opening_limits.flat(baseline)
+            opening_limits.flat(baseline)
+            self.requested_markets.update(i.market.key for i in instruments)
+            try:
+                fees=self.fees_for(instruments)
+            except ValueError:
+                self.accounts.fees(instruments)
+                fees=self.fees_for(instruments)
             self.accounts.check_instruments(instruments)
-            fees=self.fees_for(instruments)
             try:
                 funding=self.market.funding(instruments)
             except Exception:
                 raise AdmissionError('funding_diff') from None
-            self.opening_limits.funding(funding)
-            turnovers=self.market.turnovers(instruments)
-            books,fill,evidence=self.opening_review(instruments,fees,funding,turnovers,baseline)
+            opening_limits.funding(funding)
+            turnovers=self.check_volumes(instruments,values)
+            books,fill,evidence=self.opening_review(instruments,fees,funding,turnovers,baseline,config)
             if self.clock()-now>120 or not self.can_open():
                 raise ValueError('open_gate_changed')
         except Exception as error:
             reason=(error.reason if isinstance(error,AdmissionError) else str(error)
-                    if isinstance(error,ValueError) and str(error) in (
-                        'baseline_warming','structural_spread','pair_cooldown') else 'review_failed_closed')
+                    if isinstance(error,ValueError) and str(error) in SKIP_REASONS+(
+                        'baseline_warming','structural_spread','pair_cooldown','mapping_unconfirmed','excluded') else 'review_failed_closed')
             self.store.skip(identity,reason,stage='review')
             return
         pair=dict(id=uuid.uuid4().hex,trigger_id=identity,base=base,state='OPENING',opened_at=self.clock(),
                   baseline_at_open=fill['baseline_bps'],excess_at_open=fill['excess_bps'],
                   open_book_skew_ms=float(book_skew_ms(books)),close_book_skew_ms=None,outlier_at_open=evidence,
                   instruments=[i.dump() for i in instruments],fill=fill,funding=funding,turnovers=turnovers,
+                  config_at_open=config,sizing=fill['sizing'],open_interests=fill['open_interests'],
                   remaining=['0','0'],last_books=[b.to_dict() for b in books],last_good=[b.received_at for b in books],
                   next_track=self.clock()+3,single_failure=False,repair_attempts=0,round=0)
         self.store.pair(pair)
@@ -535,8 +647,9 @@ class Engine:
         i=Instrument.load(pair['instruments'][leg])
         side=('sell' if leg==0 else 'buy') if reduce else ('buy' if leg==0 else 'sell')
         return dict(cid='ce-'+uuid.uuid4().hex[:29],pair_id=pair['id'],leg=leg,instrument=i.dump(),
-                    side=side,position_side='long' if leg==0 else 'short',quantity=str(quantity),price=str(price),
-                    reduce_only=reduce,created_at=self.clock(),estimate=estimate if reduce else pair['fill']['buy' if leg==0 else 'sell']['vwap'])
+                    side=side,position_side='long' if leg==0 else 'short',quantity=str(dec(quantity)/i.multiplier),price=str(dec(price)*i.multiplier),
+                    reduce_only=reduce,created_at=self.clock(),estimate=(str(dec(estimate)*i.multiplier) if estimate is not None else None)
+                    if reduce else str(dec(pair['fill']['buy' if leg==0 else 'sell']['vwap'])*i.multiplier))
 
     def refresh_pair(self,pair):
         orders=[o for o in self.executor.orders() if o['pair_id']==pair['id']]
@@ -554,7 +667,7 @@ class Engine:
             if o['state'] in ('SENT','ACK','UNKNOWN','INTENT'):
                 unknown=True
             q=dec(o.get('filled',0))
-            remaining[o['leg']]+=q*(-1 if o['reduce_only'] else 1)
+            remaining[o['leg']]+=q*Instrument.load(o['instrument']).multiplier*(-1 if o['reduce_only'] else 1)
             if o.get('accounting_pending'):
                 pending=True
             if q and o.get('vwap') is not None:
@@ -597,7 +710,7 @@ class Engine:
         return list(map(dec,pair.get('remote_remaining',pair['remaining'])))
 
     def save_remote(self,pair,snapshot):
-        quantities=[str(dec(snapshot['positions'].get(self.position_key(pair,n),0))) for n in (0,1)]
+        quantities=[str(dec(snapshot['positions'].get(self.position_key(pair,n),0))*Instrument.load(pair['instruments'][n]).multiplier) for n in (0,1)]
         if any(dec(q)<0 for q in quantities):
             raise ValueError('negative_remote_position')
         pair.update(remote_remaining=quantities,remote_captured_at=snapshot.get('captured_at',self.clock()),remote_pending=False)
@@ -649,13 +762,14 @@ class Engine:
         return True
 
     def reduction_intent(self,pair,leg,quantity,bps,book=None):
-        i=Instrument.load(pair['instruments'][leg])
+        native=Instrument.load(pair['instruments'][leg])
+        i=native.common()
         step=dec(i.spec.qty_step)
         quantity=(min(dec(quantity),dec(pair['remote_remaining'][leg]),dec(i.spec.max_qty))/step).to_integral_value(rounding=ROUND_FLOOR)*step
         if quantity<=0 or quantity<dec(i.spec.min_qty):
             raise ValueError('reduction_below_min')
         if book is None:
-            book=self.market.books([i])[0]
+            book=native.common_book(self.market.books([native])[0])
         if book:
             pair['last_books'][leg]=book.to_dict()
             pair['last_good'][leg]=book.received_at
@@ -703,7 +817,7 @@ class Engine:
             pass
         # A coarse step may cross zero only if THIS SINGLE order reduces the
         # absolute exposure. Never rely on a future fill on the opposite venue.
-        step=dec(pair['instruments'][leg]['spec']['qty_step'])
+        step=dec(Instrument.load(pair['instruments'][leg]).common().spec.qty_step)
         cut=(diff/step).to_integral_value(rounding=ROUND_CEILING)*step
         if cut<=diff or cut>quantities[leg] or abs(diff-cut)>=diff:
             return []
@@ -819,7 +933,7 @@ class Engine:
                 intents=self.repair_intents(pair,bps)
             else:
                 instruments=[Instrument.load(pair['instruments'][n]) for n in indices]
-                books=self.market.books(instruments)
+                books=[i.common_book(b) for i,b in zip(instruments,self.market.books(instruments))]
                 intents=[]
                 for n,i,b in zip(indices,instruments,books):
                     try:
@@ -830,7 +944,7 @@ class Engine:
                 return
             if len(intents)==1:
                 after=list(quantities)
-                after[intents[0]['leg']]-=dec(intents[0]['quantity'])
+                after[intents[0]['leg']]-=dec(intents[0]['quantity'])*Instrument.load(intents[0]['instrument']).multiplier
                 if abs(after[0]-after[1])>abs(quantities[0]-quantities[1]):
                     self.unhedged(pair)
                     return
@@ -863,7 +977,7 @@ class Engine:
             return
         now=self.clock()
         instruments=[Instrument.load(i) for i in pair['instruments']]
-        books=self.market.books(instruments)
+        books=[i.common_book(b) for i,b in zip(instruments,self.market.books(instruments))]
         self.save_tracking_upnl(pair,books,now)
         for n,b in enumerate(books):
             if b:
@@ -915,7 +1029,7 @@ class Engine:
                 self.alert('entry_accounting_unknown')
                 return
             opens.sort(key=lambda o:o['leg'])
-            entry=[dec(o.get('vwap') or o.get('average_price') or o['price']) for o in opens]
+            entry=[dec(o.get('vwap') or o.get('average_price') or o['price'])/Instrument.load(o['instrument']).multiplier for o in opens]
             entry_spread=(entry[1]/entry[0]-1)*10000
             notional=a*entry[0]
             pnl=a*(dec(sell['vwap'])-entry[0]+entry[1]-dec(buy['vwap']))

@@ -9,11 +9,26 @@ from urllib.parse import parse_qs, urlsplit
 
 from .api_data import JournalView, query_options
 from .security import REDACTOR, Redactor
+from .management import Management, READS, write_route
 
 
 PORT = 8795
 HOSTS = ('127.0.0.1', '172.18.0.1')
 ENDPOINTS = {f'/api/v1/{name}': name for name in ('summary', 'positions', 'trades', 'stats')}
+ENDPOINTS.update({f'/api/v1/{name}': name for name in READS})
+
+
+def strict_object(items):
+    value = {}
+    for key, item in items:
+        if key in value:
+            raise ValueError('duplicate_json_key')
+        value[key] = item
+    return value
+
+
+def reject_constant(value):
+    raise ValueError('nonfinite_json')
 
 
 def parse_bind(value):
@@ -72,6 +87,19 @@ class _Handler(BaseHTTPRequestHandler):
 
     def reply(self, status, value):
         self.close_connection = True
+        # Closing with an unread small body can reset the connection on Windows,
+        # losing a 401/403 response. Drain only a bounded, explicitly framed body;
+        # the accepted socket retains its two-second timeout.
+        if not getattr(self, '_body_read', False):
+            lengths = self.headers.get_all('Content-Length', []) if getattr(self, 'headers', None) else []
+            if (len(lengths) == 1 and lengths[0].isascii() and lengths[0].isdecimal()
+                    and len(lengths[0]) <= 5 and 0 < int(lengths[0]) <= 8193
+                    and not self.headers.get('Transfer-Encoding')):
+                self._body_read = True
+                try:
+                    self.rfile.read(int(lengths[0]))
+                except OSError:
+                    pass
         body = json.dumps(self.server.service.clean(value), ensure_ascii=True,
                           separators=(',', ':'), allow_nan=False).encode('utf-8')
         self.send_response(status)
@@ -96,18 +124,22 @@ class _Handler(BaseHTTPRequestHandler):
         tokens = self.headers.get_all('X-Api-Token', [])
         token = tokens[0] if len(tokens) == 1 else ''
         authenticated = hmac.compare_digest(token.encode('utf-8'), service.token)
-        if not authenticated:
+        admin = bool(service.admin_token) and hmac.compare_digest(token.encode('utf-8'), service.admin_token)
+        if not authenticated and not admin:
             return self.reply(401, {'error': 'unauthorized'})
-        if self.command != 'GET':
-            return self.reply(405, {'error': 'method_not_allowed'})
-        if len(self.path) > 2048 or self.headers.get('Transfer-Encoding') or self.headers.get('Content-Length', '0') != '0':
+        if len(self.path) > 2048 or self.headers.get('Transfer-Encoding'):
             return self.reply(400, {'error': 'invalid_request'})
         try:
             url = urlsplit(self.path)
             if url.scheme or url.netloc or url.fragment:
                 raise ValueError('invalid_request')
             endpoint = ENDPOINTS.get(url.path)
-            if endpoint is None:
+            route = write_route(self.command, url.path)
+            if self.command != 'GET' and route is None:
+                return self.reply(405, {'error': 'method_not_allowed'})
+            if route is not None and not admin:
+                return self.reply(403, {'error': 'admin_required'})
+            if endpoint is None and route is None:
                 return self.reply(404, {'error': 'not_found'})
             values = (parse_qs(url.query, keep_blank_values=True, strict_parsing=True, max_num_fields=4)
                       if url.query else {})
@@ -115,13 +147,40 @@ class _Handler(BaseHTTPRequestHandler):
                 raise ValueError('invalid_request')
             query = {k: v[0] for k, v in values.items()}
             query_options(endpoint, query)
-        except (ValueError, TypeError, OverflowError):
+            lengths = self.headers.get_all('Content-Length', [])
+            if len(lengths) > 1:
+                raise ValueError('invalid_body')
+            length = lengths[0] if lengths else '0'
+            if not length.isascii() or not length.isdecimal() or len(length) > 5:
+                raise ValueError('invalid_body')
+            length = int(length)
+            if route is not None:
+                if not 0 < length <= 8192 or self.headers.get('Content-Type') != 'application/json':
+                    raise ValueError('invalid_body')
+                self._body_read = True
+                raw = self.rfile.read(length)
+                if len(raw) != length:
+                    raise ValueError('invalid_body')
+                body = json.loads(raw.decode('utf-8'), object_pairs_hook=strict_object, parse_constant=reject_constant)
+                if not isinstance(body, dict):
+                    raise ValueError('invalid_body')
+            elif length:
+                raise ValueError('invalid_body')
+        except (ValueError, TypeError, OverflowError, OSError):
             return self.reply(400, {'error': 'invalid_query'})
         if not service.read_slot.acquire(blocking=False):
             return self.reply(503, {'error': 'temporarily_unavailable'})
         try:
             try:
-                value = service.view.get(endpoint, query)
+                if route is not None:
+                    try:
+                        value = service.management.write(route, body)
+                    except ValueError:
+                        return self.reply(400, {'error': 'invalid_update'})
+                elif endpoint in READS:
+                    value = service.management.get(endpoint)
+                else:
+                    value = service.view.get(endpoint, query)
                 # Serialize inside the exception boundary: nonfinite/corrupt DB rows
                 # and redaction failures must never leak a traceback or a partial body.
                 value = service.clean(value)
@@ -137,8 +196,12 @@ class _Handler(BaseHTTPRequestHandler):
 class APIService:
     def __init__(self, config, path, logger):
         self.token = config['CROSSEX_EXEC_API_TOKEN'].encode('utf-8')
+        self.admin_token = config.get('CROSSEX_EXEC_ADMIN_TOKEN', '').encode('utf-8')
+        if self.admin_token and hmac.compare_digest(self.admin_token, self.token):
+            raise ValueError('admin_token_must_differ')
         self.bind = parse_bind(config.get('CROSSEX_EXEC_API_BIND'))
         self.view = JournalView(path, config)
+        self.management = Management(path)
         self.logger = logger
         self.redactor = Redactor()
         self.redactor.register(*(v for k, v in config.items()

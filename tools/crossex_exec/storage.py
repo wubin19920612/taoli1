@@ -3,18 +3,35 @@ import json
 import sqlite3
 import threading
 import time
+from pathlib import Path
+from weakref import WeakValueDictionary
 from contextlib import contextmanager
 from .security import REDACTOR
 from .baseline import cooldown_for, RETENTION_SECONDS
+from .public_store import PublicStore, PUBLIC_KEYS
+
+
+_PATH_LOCKS = WeakValueDictionary()
+_PATH_LOCK_GUARD = threading.Lock()
+
+
+def path_lock(path):
+    with _PATH_LOCK_GUARD:
+        key = str(Path(path).resolve()).casefold() if str(path) != ':memory:' else object()
+        lock = _PATH_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _PATH_LOCKS[key] = lock
+        return lock
 
 
 def encode(value):
     return json.dumps(REDACTOR.clean(value), separators=(',',':'), allow_nan=False)
 
 
-class Store:
+class Store(PublicStore):
     def __init__(self, path):
-        self.lock = threading.RLock()
+        self.lock = path_lock(path)
         self.db = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         self.db.row_factory = sqlite3.Row
         self.db.executescript('''
@@ -31,6 +48,8 @@ class Store:
                 PRIMARY KEY(pair_key,bucket));
             CREATE INDEX IF NOT EXISTS baseline_samples_at ON baseline_samples(at);
         ''')
+        with self.lock:
+            self.initialize_public()
 
     def __enter__(self):
         return self
@@ -53,11 +72,19 @@ class Store:
                 raise
 
     def meta(self, key, default=None):
+        if key in PUBLIC_KEYS:
+            return self.read_public(key,default)
         with self.lock:
             row = self.db.execute('SELECT value FROM meta WHERE key=?',(key,)).fetchone()
             return json.loads(row[0]) if row else default
 
     def set_meta(self, key, value):
+        if key in PUBLIC_KEYS:
+            with self.lock:
+                if self.db.in_transaction:
+                    return self.write_public(key,value)
+                with self.transaction():
+                    return self.write_public(key,value)
         with self.lock:
             self.db.execute('INSERT INTO meta VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(key,encode(value)))
 

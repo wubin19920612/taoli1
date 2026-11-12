@@ -1,5 +1,6 @@
 """Additional opening-only ceilings. No orders, I/O, or relaxed fallbacks."""
 from statistics import median
+from copy import copy
 
 from tools.fill_sim.core import dec
 from .baseline import BATCH_URLS, FRESH_SECONDS
@@ -16,7 +17,8 @@ MIN_OUTLIER_SHARE = dec('0.7')
 MIN_VENUES = 3
 BOOK_RETRIES = 1
 SKIP_REASONS = ('book_skew', 'book_stale', 'funding_diff', 'baseline_not_flat',
-                'not_single_venue_outlier', 'too_few_venues')
+                'not_single_venue_outlier', 'too_few_venues', 'size_too_small', 'oi_missing',
+                'mapping_ratio_mismatch', 'volume_too_low', 'volume_unknown', 'category_unconfirmed')
 
 
 class AdmissionError(ValueError):
@@ -46,6 +48,15 @@ def book_skew_ms(books):
 
 
 class OpeningLimits:
+    def restricted(self, values):
+        result = copy(self)
+        for name in ('book_skew_ms','book_age_seconds','funding_diff_bps_h','funding_rate_8h',
+                     'baseline_bps','baseline_mad_bps','normal_deviation_bps','reference_age_seconds'):
+            setattr(result, name, min(getattr(self, name), dec(values['max_'+name])))
+        result.outlier_share = max(self.outlier_share, dec(values['min_outlier_share']))
+        result.min_venues = max(self.min_venues, dec(values['min_venues']))
+        return result
+
     def __init__(self, config=None):
         config = config or {}
         ceilings = dict(book_skew_ms=MAX_BOOK_SKEW_MS, book_age_seconds=MAX_BOOK_AGE_SECONDS,

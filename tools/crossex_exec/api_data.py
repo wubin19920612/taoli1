@@ -11,6 +11,8 @@ import time
 from tools.fill_sim.core import Market, walk
 from .limits import DEFAULT_VAR, MAX_LEG_USD, MAX_TOTAL_USD, MAX_EQUITY_DROP_USD
 from .admission import SKIP_REASONS
+from .public_store import public_read
+from .settings import SCHEMA, RISK_NAMES
 
 
 TIERS = ('0.5–1%', '1–2%', '2–5%', '>5%')
@@ -170,6 +172,11 @@ def _exchange(instrument):
 
 
 def _symbol(pair):
+    instruments = _instruments(pair)
+    if (all(i.get('mapping_id') and i.get('canonical_base') for i in instruments)
+            and instruments[0]['mapping_id']==instruments[1]['mapping_id']
+            and instruments[0]['canonical_base']==instruments[1]['canonical_base']):
+        return text_field(instruments[0]['canonical_base']+'USDT')
     specs = [i.get('spec', {}) for i in _instruments(pair)]
     if all(s.get('base') and s.get('quote') == 'USDT' for s in specs) and specs[0]['base'] == specs[1]['base']:
         return text_field(specs[0]['base']+'USDT')
@@ -185,19 +192,53 @@ def observations(pair):
                 excess_bps=number(pair.get('excess_at_open')),
                 funding_cost_bps=number(pair.get('fill', {}).get('funding_cost_bps')),
                 open_book_skew_ms=number(pair.get('open_book_skew_ms')),
-                close_book_skew_ms=number(pair.get('close_book_skew_ms')))
+                close_book_skew_ms=number(pair.get('close_book_skew_ms')), **opening_details(pair))
+
+
+def opening_details(pair):
+    config=pair.get('config_at_open') or {}
+    version=config.get('version')
+    size=pair.get('sizing') or {}
+    def pair_numbers(value):
+        return [number(v) for v in value] if isinstance(value,list) and len(value)==2 else [None,None]
+    sizing=None
+    if size:
+        sizing=dict(quantity=number(size.get('quantity')),depth_usd=pair_numbers(size.get('depth_usd')),
+            oi_usd=pair_numbers(size.get('oi_usd')),remaining_total_usd=number(size.get('remaining_total_usd')),
+            budget_usd=number(size.get('budget_usd')),
+            constraints={k:number(size.get('constraints',{}).get(k)) for k in ('order_usd_max','depth','oi','remaining_total')},
+            limiting=size.get('limiting') if size.get('limiting') in ('order_usd_max','depth','oi','remaining_total') else None)
+    return dict(config_version=version if type(version) is int else None,
+                config_at_open={k:number(v) for k,v in config.get('values',{}).items() if k in SCHEMA} or None,
+                sizing=sizing,turnovers_usd=pair_numbers(pair.get('turnovers')))
+
+
+def denomination(instrument):
+    value=number(instrument.get('quantity_multiplier','1'))
+    return value if value is not None and value>0 else None
+
+
+def native_fields(instrument, qty, price):
+    m=denomination(instrument)
+    market=instrument.get('market',{})
+    return dict(raw_symbol=text_field(market.get('raw_symbol')),native_base=text_field(instrument.get('spec',{}).get('base')),
+                quantity_multiplier=m,mapping_id=text_field(instrument.get('mapping_id')),
+                native_qty=qty/m if qty is not None and m else None,
+                native_entry_price=price*m if price is not None and m else None)
 
 
 def position(pair, orders, now):
     legs, prices, quantities = [], [], pair.get('remaining', [None, None])
     for n, instrument in enumerate(_instruments(pair)):
         _, price = _vwap(_entries(orders, n))
+        multiplier=denomination(instrument)
+        price=price/multiplier if price is not None and multiplier else None
         qty = number(quantities[n]) if len(quantities) > n else None
         exchange = _exchange(instrument)
         legs.append(dict(exchange=exchange, route=('bitget' if exchange == 'bitget' else 'crossex') if exchange else None,
                          side='long' if n == 0 else 'short', qty=qty, entry_price=price,
                          notional_usd=qty*price if qty is not None and price is not None else None,
-                         mark_price=None))  # The journal has books, not exchange mark prices.
+                         mark_price=None, **native_fields(instrument,qty,price)))  # Journal books are common units.
         prices.append(price)
     entry, spread, pnl, pnl_bps = _spread(*prices), None, None, None
     try:
@@ -231,8 +272,14 @@ def trade(pair, orders, simulation=None):
     for n, instrument in enumerate(_instruments(pair)):
         qty, entry = _vwap(_entries(orders, n))
         _, exit_price = _vwap(_entries(orders, n, True))
+        multiplier=denomination(instrument)
+        qty=qty*multiplier if qty is not None and multiplier else None
+        entry=entry/multiplier if entry is not None and multiplier else None
+        exit_price=exit_price/multiplier if exit_price is not None and multiplier else None
         legs.append(dict(exchange=_exchange(instrument), side='long' if n == 0 else 'short',
-                         entry_vwap=entry, exit_vwap=exit_price, qty=qty))
+                         entry_vwap=entry, exit_vwap=exit_price, qty=qty,
+                         native_exit_vwap=exit_price*multiplier if exit_price is not None and multiplier else None,
+                         **native_fields(instrument,qty,entry)))
     costs = []
     for order in orders:
         qty = number(order.get('filled'))
@@ -398,7 +445,9 @@ class JournalView:
             if endpoint == 'summary':
                 meta = {key: budget.decode(raw) for key, raw in conn.execute(
                     "SELECT key,value FROM meta WHERE key IN ('state','stop_reason','live_mode','account_equity_baseline',"
-                    "'account_equity_current','actual_fees','flatten_requested','baseline_status','pair_cooldowns','opening_skip_counts')")}
+                    "'account_equity_current','actual_fees','flatten_requested','baseline_status','pair_cooldowns','opening_skip_counts','runtime_config')")}
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='baseline_state'").fetchone():
+                    meta['baseline_status']=public_read(conn,'baseline_status',budget=budget)
                 events = {}
                 for kind in ('RECONCILE', 'ALERT'):
                     row = conn.execute('SELECT at,value FROM events WHERE kind=? ORDER BY id DESC LIMIT 1', (kind,)).fetchone()
@@ -456,13 +505,18 @@ class JournalView:
         blacklisted = sum(s.get('blocked') is True for s in baselines)
         cooling = sum(number(until) is not None and number(until) > now
                       for until in (meta.get('pair_cooldowns') or {}).values())
+        current={k:r['default'] for k,r in SCHEMA.items()} | (meta.get('runtime_config') or {}).get('values',{})
+        frozen=[p.get('config_at_open',{}).get('values',{}) for p in pairs if p.get('state') not in ('CLOSED','SHADOW','SKIPPED')]
+        risk={k:min(v.get(k,SCHEMA[k]['default']) for v in (frozen or [current])) for k in RISK_NAMES}
         return dict(generated_at=utc(now), mode=('live' if meta['live_mode'] else 'shadow')
                     if isinstance(meta.get('live_mode'), bool) else self.mode,
                     halted=halted, halt_reason=halt_reason, stop_file=stop, opening_paused_reason=paused,
                     caps=dict(self.caps, max_pairs=3, open_pairs=len(active),
                               total_open_usd=complete_sum(l['notional_usd'] for p in active for l in p['legs'])),
-                    accounts=accounts, today=dict(_totals(today), daily_loss_limit_usd=20),
-                    total=dict(_totals(closed), total_loss_limit_usd=100), fees=fees,
+                    config_version=(meta.get('runtime_config') or {}).get('version',0),
+                    effective_risk_limits=risk,
+                    accounts=accounts, today=dict(_totals(today), daily_loss_limit_usd=risk['daily_loss_stop_usd']),
+                    total=dict(_totals(closed), total_loss_limit_usd=risk['total_loss_stop_usd']), fees=fees,
                     baseline_ready_pairs=ready,structural_spread_pairs=blacklisted,cooldown_pairs=cooling,
                     opening_skip_counts={r:meta.get('opening_skip_counts',{}).get(r,0) for r in SKIP_REASONS},
                     last_error=reason(events['ALERT'][1].get('reason')))

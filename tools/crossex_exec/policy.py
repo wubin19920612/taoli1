@@ -1,7 +1,7 @@
 """Pure Decimal execution policy. All sizes are base units, all rates fractions."""
 from dataclasses import dataclass, asdict, replace
 from decimal import ROUND_CEILING, ROUND_FLOOR
-from tools.fill_sim.core import Market, Spec, common_step, opening, dec, walk
+from tools.fill_sim.core import Book, Market, Spec, common_step, opening, dec, walk
 
 
 @dataclass
@@ -10,13 +10,42 @@ class Instrument:
     spec: Spec
     symbol: str
     tick: str
+    category: str = 'unconfirmed'
+    canonical_base: str = None
+    quantity_multiplier: str = '1'
+    mapping_id: str = None
+
+    @property
+    def base(self):
+        return self.canonical_base or self.spec.base
+
+    @property
+    def multiplier(self):
+        value = dec(self.quantity_multiplier)
+        if value <= 0:
+            raise ValueError('mapping_multiplier_invalid')
+        return value
+
+    def common(self):
+        m = self.multiplier
+        return replace(self, spec=replace(self.spec, base=self.base, qty_step=str(dec(self.spec.qty_step)*m),
+                       min_qty=str(dec(self.spec.min_qty)*m), max_qty=str(dec(self.spec.max_qty)*m)),
+                       tick=str(dec(self.tick)/m), quantity_multiplier='1')
+
+    def common_book(self, book):
+        if book is None:
+            return None
+        m = self.multiplier
+        return Book(*[[[str(dec(p)/m), str(dec(q)*m)] for p, q in levels]
+                      for levels in (book.bids, book.asks)], book.received_at, book.exchange_at)
 
     def dump(self):
         return asdict(self)
 
     @classmethod
     def load(cls, row):
-        return cls(Market(**row['market']),Spec(**row['spec']),row['symbol'],row['tick'])
+        return cls(Market(**row['market']),Spec(**row['spec']),row['symbol'],row['tick'],
+                   **{k:row[k] for k in ('category','canonical_base','quantity_multiplier','mapping_id') if k in row})
 
 
 def mapped_instrument(market, spec, native_tick, rules):
@@ -72,13 +101,14 @@ def funding_cost_bps(funding):
     return max(dec(0),hourly[0]-hourly[1])*2*10000
 
 
-def review(instruments, books, fees, funding, turnovers, now, *, baseline_bps=None):
+def review(instruments, books, fees, funding, turnovers, now, *, baseline_bps=None,
+           quantity=None, min_turnover=1000000, min_excess_bps=15):
     if len(instruments)!=2 or len(books)!=2 or len(funding)!=2 or len(fees)!=2:
         raise ValueError('two_legs_required')
     if instruments[0].spec.base!=instruments[1].spec.base or instruments[0].market.exchange==instruments[1].market.exchange:
         raise ValueError('identity_mismatch')
-    if any(dec(v)<5000000 for v in turnovers) or len(turnovers)!=2:
-        raise ValueError('turnover_below_minimum')
+    if any(dec(v)<dec(min_turnover) for v in turnovers) or len(turnovers)!=2:
+        raise ValueError('volume_too_low')
     if baseline_bps is None:
         raise ValueError('baseline_warming')
     baseline=dec(baseline_bps)
@@ -96,10 +126,15 @@ def review(instruments, books, fees, funding, turnovers, now, *, baseline_bps=No
             raise ValueError('funding_blacklist')
     # Minimums apply to the final rounded LIMIT, not the preliminary VWAP.
     specs=[replace(i.spec,min_qty='0',min_notional='0') for i in instruments]
-    result=opening(*books,*specs,100,*fees,threshold=15+baseline+funding_cost)
-    if result['status']!='opened':
-        raise ValueError('review_rejected')
-    quantity=dec(result['quantity'])
+    if quantity is None:
+        # Standalone pricing estimation; Engine admission always supplies a size plan.
+        result=opening(*books,*specs,100,*fees,threshold=dec(min_excess_bps)+baseline+funding_cost)
+        if result['status']!='opened':
+            raise ValueError('review_rejected')
+        quantity=dec(result['quantity'])
+    else:
+        result=dict(status='opened',fee_a=fees[0],fee_b=fees[1])
+        quantity=dec(quantity)
     fills=[walk(books[0].asks,quantity=quantity),walk(books[1].bids,quantity=quantity)]
     prices=[limit_price(f['deepest'],side,i.tick) for f,side,i in zip(fills,('buy','sell'),instruments)]
     if any(quantity>dec(i.spec.max_qty) or quantity*dec(p)>150 for i,p in zip(instruments,prices)):
@@ -110,7 +145,7 @@ def review(instruments, books, fees, funding, turnovers, now, *, baseline_bps=No
     gross=(dec(fills[1]['vwap'])/dec(fills[0]['vwap'])-1)*10000
     excess=gross-baseline
     net=excess-2*sum(map(dec,fees))*10000-funding_cost
-    if net<15:
+    if net<dec(min_excess_bps):
         raise ValueError('review_rejected')
     result.update(quantity=str(quantity),buy=fills[0],sell=fills[1],gross_bps=float(gross),net_bps=float(net),
                   baseline_bps=str(baseline),excess_bps=str(excess),funding_cost_bps=str(funding_cost),limits=prices)
@@ -127,8 +162,10 @@ def send_review(pair, orders, fees, now):
             raise ValueError('send_book_stale')
     if any(f is None or not 0<=dec(f)<dec('.02') for f in fees):
         raise ValueError('send_fees_missing')
-    fills=[walk(books[0]['asks'],quantity=orders[0]['quantity']),walk(books[1]['bids'],quantity=orders[1]['quantity'])]
-    if dec(orders[0]['quantity'])!=dec(orders[1]['quantity']):
+    multipliers=[Instrument.load(i).multiplier for i in pair['instruments']]
+    quantities=[dec(o['quantity'])*m for o,m in zip(orders,multipliers)]
+    fills=[walk(books[0]['asks'],quantity=quantities[0]),walk(books[1]['bids'],quantity=quantities[1])]
+    if quantities[0]!=quantities[1]:
         raise ValueError('opening_quantity_mismatch')
     funding=pair['funding']
     if any(not s.get('history_ok') or not 0<=now-s['captured_at']<=300 or s['next']-now<1800 for s in funding):
@@ -137,7 +174,8 @@ def send_review(pair, orders, fees, now):
     gross=(dec(fills[1]['vwap'])/dec(fills[0]['vwap'])-1)*10000
     excess=gross-dec(pair['baseline_at_open'])
     net=excess-2*sum(map(dec,fees))*10000-cost
-    if net<15 or dec(fills[0]['deepest'])>dec(orders[0]['price']) or dec(fills[1]['deepest'])<dec(orders[1]['price']):
+    minimum=dec(pair.get('config_at_open',{}).get('values',{}).get('min_excess_bps',15))
+    if net<minimum or dec(fills[0]['deepest'])>dec(orders[0]['price'])/multipliers[0] or dec(fills[1]['deepest'])<dec(orders[1]['price'])/multipliers[1]:
         raise ValueError('send_spread_or_limit_changed')
     return dict(buy=fills[0],sell=fills[1],gross_bps=float(gross),net_bps=float(net),
                 excess_bps=str(excess),funding_cost_bps=str(cost))
@@ -162,12 +200,13 @@ def exit_reason(*, age, spread, entry_spread, pnl, notional, next_funding, stale
     return None
 
 
-def risk_decision(*, daily, total, margins, single_failures, rejected, attempted, reconciled):
-    if dec(total)<=-100:
+def risk_decision(*, daily, total, margins, single_failures, rejected, attempted, reconciled,
+                  daily_limit=20, total_limit=100):
+    if dec(total)<=-min(dec(total_limit),dec(100)):
         return 'HALTED'
     if any(v is not None and dec(v)<2 for v in margins):
         return 'FLATTEN'
-    if (dec(daily)<=-20 or not reconciled or single_failures>=3
+    if (dec(daily)<=-min(dec(daily_limit),dec(20)) or not reconciled or single_failures>=3
             or any(v is None or dec(v)<3 for v in margins) or len(margins)!=2
             or (attempted and dec(rejected)/dec(attempted)>dec('.3'))):
         return 'STOP'

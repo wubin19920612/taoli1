@@ -8,7 +8,10 @@ from tools.fill_sim.funding import funding_urls, parse_funding
 from tools.fill_sim.network import PublicClient, Limiter
 from tools.fill_sim.scheduler import RequestQueue, DaemonPool
 from .policy import mapped_instrument
-from .baseline import BATCH_URLS, parse_tickers
+from .baseline import BATCH_URLS, FRESH_SECONDS, parse_tickers
+from .liquidity import VOLUME_URLS, parse_batch
+from .universe import Universe, category, alias, PRE_IPO_BASES, COMMODITY_BASES
+from .open_interest import oi_urls, parse_oi
 
 RULES_URL='https://api.gateio.ws/api/v4/crossex/rule/symbols'
 CATALOGS={
@@ -80,7 +83,9 @@ def native_instrument(ex,row,rules):
     expected=(spec.base+'_USDT' if ex=='gate' else spec.base+'-USDT-SWAP' if ex=='okx' else spec.base+'USDT')
     if raw!=expected or dec(tick)<=0:
         raise ValueError('native_identity_mismatch')
-    return mapped_instrument(market,spec,tick,rules)
+    instrument = mapped_instrument(market,spec,tick,rules)
+    instrument.category = category(ex, row)
+    return instrument
 
 
 def history_url(m,now):
@@ -175,7 +180,7 @@ class MarketData:
         self.closed=False
 
     def close(self):
-        with self._mapping_lock:
+        with self.store.lock, self._mapping_lock:
             self.closed=True
             self.store.set_meta('public_limiter',self.client.limiter.snapshot())
         self.queue.close()
@@ -205,14 +210,11 @@ class MarketData:
         return self.batch([(ex,url,None)],priority=priority)[0]
 
     def bootstrap(self,bases=()):
-        if not bases:
-            self.publish_mapping({},{})
-            return self.mapping
         try:
             rules=self.fetch('gate',RULES_URL,priority=2)
         except Exception:
             rules=None
-        mapped={k:i for k,i in self.mapping.items() if i.spec.base in bases}
+        mapped=dict(self.mapping)
         errors={}
         for ex,url in CATALOGS.items():
             if self.closed:
@@ -228,7 +230,7 @@ class MarketData:
                     for row in native_rows(ex,data):
                         try:
                             i=native_instrument(ex,row,rules)
-                            if i.spec.base in bases:
+                            if i.market.market_type == 'future':
                                 if i.market.key in venue or i.market.key in ambiguous:
                                     ambiguous.add(i.market.key)
                                     venue.pop(i.market.key,None)
@@ -252,7 +254,7 @@ class MarketData:
         return mapped
 
     def publish_mapping(self,mapped,errors):
-        with self._mapping_lock:
+        with self.store.lock, self._mapping_lock:
             if not self.closed:
                 self.mapping=dict(mapped)
                 self.catalog_errors=dict(errors)
@@ -296,4 +298,85 @@ class MarketData:
         return results
 
     def turnovers(self,instruments):
-        return self.batch([(i.market.exchange,ticker_url(i.market),lambda d,m=i.market:turnover(m,d)) for i in instruments])
+        rows=self.store.meta('market_tickers',{})
+        if any(i.market.key not in rows or not 0<=self.clock()-rows[i.market.key]['at']<=300 for i in instruments):
+            try:
+                rows=self.refresh_tickers()
+            except Exception:
+                raise ValueError('volume_unknown') from None
+        try:
+            if any(not 0<=self.clock()-rows[i.market.key]['at']<=300 for i in instruments):
+                raise ValueError('volume_unknown')
+            return [rows[i.market.key]['volume'] for i in instruments]
+        except (KeyError,TypeError):
+            raise ValueError('volume_unknown') from None
+
+    def refresh_tickers(self):
+        started=self.clock()
+        items=[(ex,url,None) for ex,url in VOLUME_URLS.items()]
+        items += [(ex,BATCH_URLS[ex],None) for ex in ('binance','aster')]
+        results=self.batch(items,priority=2,partial=True)
+        received=self.clock()
+        volumes=dict(zip(VOLUME_URLS,results[:6]))
+        quotes=dict(zip(('binance','aster'),results[6:]))
+        rows={}
+        for ex,data in volumes.items():
+            if data is None:
+                continue
+            try:
+                rows.update(parse_batch(ex,data,tuple(self.mapping.values()),received,quotes.get(ex)))
+            except (ValueError,KeyError,TypeError):
+                continue
+        if not 0<=self.clock()-started<=20:
+            rows={}
+        self.store.set_meta('market_tickers',rows)
+        Universe(self.store,self.clock).discover()
+        return rows
+
+    def sample_quotes(self,minimum):
+        rows=self.refresh_tickers()
+        universe=Universe(self.store,self.clock)
+        confirmed={}
+        for mapping in universe.mappings():
+            if mapping['status']=='confirmed':
+                for leg in mapping['legs']:
+                    confirmed[leg['market_key']]=(mapping['base'],dec(leg['quantity_multiplier']))
+        candidates={}
+        decisions=universe._decisions()
+        for key,row in rows.items():
+            i=self.mapping.get(key)
+            if (i is None or i.category in ('pre_ipo','commodity')
+                    or alias(i.spec.base)[0] in PRE_IPO_BASES|COMMODITY_BASES
+                    or not 0<=self.clock()-row['at']<=FRESH_SECONDS
+                    or decisions.get(i.spec.base,{}).get('category') in ('pre_ipo','commodity')):
+                continue
+            base,multiplier=confirmed.get(key,(i.spec.base,dec(1)))
+            candidates.setdefault(base,[]).append((i.market.exchange,row,multiplier))
+        bases=tuple(sorted(base for base,values in candidates.items()
+                           if any(dec(row['volume'])>=dec(minimum) for _,row,_ in values)))
+        mids={}
+        for base in bases:
+            seen=set()
+            for ex,row,multiplier in candidates[base]:
+                # Multiple native contracts for one base/venue are ambiguous.
+                if ex in seen:
+                    mids.get(ex,{}).pop(base,None)
+                    continue
+                seen.add(ex)
+                mids.setdefault(ex,{})[base]=str(dec(row['mid'])/multiplier)
+        return mids,bases
+
+    def open_interests(self,instruments,books):
+        results=[]
+        for i,book in zip(instruments,books):
+            try:
+                urls=oi_urls(i.market)
+                if not urls or not book:
+                    raise ValueError('oi_missing')
+                payloads=self.batch([(i.market.exchange,u,None) for u in urls],priority=1)
+                # Engine passes common-unit books; public base OI is native.
+                price=(dec(book.bids[0][0])+dec(book.asks[0][0]))/2*i.multiplier
+                results.append(parse_oi(i.market,payloads,price,self.clock()))
+            except Exception:
+                results.append(None)
+        return results

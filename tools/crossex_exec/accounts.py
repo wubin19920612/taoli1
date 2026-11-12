@@ -69,6 +69,7 @@ def local_positions(pairs):
             if not q:
                 continue
             i=Instrument.load(raw)
+            q/=i.multiplier
             venue='bitget' if i.market.exchange=='bitget' else 'crossex'
             key='|'.join((venue,i.symbol,'long' if idx==0 else 'short'))
             result[key]=result.get(key,dec(0))+q

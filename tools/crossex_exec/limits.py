@@ -2,6 +2,7 @@
 import threading
 from tools.fill_sim.core import dec
 from .stops import StopLocks
+from .settings import risk_settings
 
 
 MAX_LEG_USD = dec('150')
@@ -49,7 +50,8 @@ class HardLimits:
         self.store.set_meta('liabilities',snapshot['liabilities'])
         if snapshot['liabilities']:
             self.store.event('ACCOUNT_LIABILITY',{'assets':snapshot['liabilities']})
-        breached=[v for v in equities if dec(baseline[v])-dec(equities[v])>=min(self.drop,MAX_EQUITY_DROP_USD)]
+        threshold=min(self.drop,MAX_EQUITY_DROP_USD,dec(risk_settings(self.store)['max_equity_drop_usd']))
+        breached=[v for v in equities if dec(baseline[v])-dec(equities[v])>=threshold]
         if breached:
             # The coordinator flattens AFTER concurrent IOC workers join. Never
             # close an in-flight pair recursively from inside a send callback.
@@ -65,9 +67,9 @@ class HardLimits:
                 self.stops.add('account_equity_drop')
         return bool(breached)
 
-    def exposure(self,snapshot,intent):
+    def exposure(self,snapshot,intent=None):
         orders=self.store.all_orders()
-        if not any(o['cid']==intent['cid'] for o in orders):
+        if intent is not None and not any(o['cid']==intent['cid'] for o in orders):
             orders.append(dict(intent,state='INTENT',filled='0'))
         positions,pending={},dec(0)
         for o in orders:
@@ -99,11 +101,13 @@ class HardLimits:
             breached=self.check_equity(snapshot)
             notional=dec(intent['quantity'])*dec(intent['price'])
             total=self.exposure(snapshot,intent)
+            pair=next((p for p in self.store.pairs() if p['id']==intent['pair_id']),{})
+            values=pair.get('config_at_open',{}).get('values',{})
             if breached or self.store.meta('state') in ('HALTING','HALTED'):
                 raise ValueError('account_equity_halt')
-            if notional>min(self.leg,MAX_LEG_USD):
+            if notional>min(self.leg,MAX_LEG_USD,dec(values.get('order_usd_max',MAX_LEG_USD))):
                 raise ValueError('leg_notional_limit')
-            if total>min(self.total,MAX_TOTAL_USD):
+            if total>min(self.total,MAX_TOTAL_USD,dec(values.get('max_total_open_usd',MAX_TOTAL_USD))):
                 raise ValueError('total_notional_limit')
             if any(m is not None and dec(m)<2 for m in snapshot['margins']):
                 self.store.set_meta('flatten_requested',True)
