@@ -1,6 +1,7 @@
 """UTC attribution must be proved by independent position observations."""
 import copy
 import unittest
+from unittest.mock import patch
 
 from tools.fill_sim.core import dec
 from tools.crossex_exec.engine import Engine
@@ -139,6 +140,66 @@ class DailyFundingTests(ExternalFixture, unittest.TestCase):
         self.store.save_order(dict(intent('exit', reduce=True), leg=0, created_at=self.now,
             fill_ms=self.now*1000, state='TERMINAL', filled='1', fee='0', vwap='100', accounting_pending=False))
         with self.assertRaises(ValueError): self.prove()
+
+    def test_separate_lifetimes_bound_to_each_day_detect_missing_offsetting_cash(self):
+        self.opposite_days()
+        boundary=int(self.now)//86400*DAY_MS
+        self.closed=[dict(self.rows[1],funding_fee='25',closed_type='COMPLETE_CLOSED',
+                          update_time=str(boundary-1000))]
+        self.rows[1].update(position_id='new-day-position',create_time=str(boundary+1000),funding_fee='-25')
+        with self.assertRaises(ValueError): self.prove()
+        self.book=copy.deepcopy(self.truth)
+        value=self.prove()
+        self.assertEqual(dec(value['program_daily']),-25)
+        self.assertEqual(dec(value['program_total']),0)
+        self.assertTrue(value['funding_daily_verified'])
+
+    def test_checkpoint_commit_failure_cannot_advance_anchor_or_history(self):
+        before={k:self.store.meta(k) for k in ('funding_checkpoint','external_equity_anchor','external_verified_history')}
+        original=self.store.set_meta
+        def fail(key,value):
+            if key=='funding_checkpoint': raise ValueError('test_write_failure')
+            return original(key,value)
+        self.now+=1
+        with patch.object(self.store,'set_meta',side_effect=fail),self.assertRaises(ValueError):
+            self.prove()
+        self.assertEqual({k:self.store.meta(k) for k in before},before)
+        self.assertFalse(self.engine.can_open())
+
+    def test_current_uta_lifetime_crossing_days_has_no_net_zero_exemption(self):
+        from tools.crossex_exec.funding import daily_continuity, funding_positions
+        from tools.crossex_exec.external_accounting import history_index
+        self.store.set_meta('funding_checkpoint',None)
+        start=int(self.now*1000)
+        def snap(end):
+            return dict(captured_at=end/1000,accounting_at=end/1000,
+                raw_positions=dict(crossex=[],bitget=[dict(symbol='ETHUSDT',total='1',posSide='long',
+                    marginMode='crossed',category='USDT-FUTURES',marginCoin='USDT',
+                    createdTime=str(start-1000),totalFunding='0')]),
+                activity=dict(from_ms=start,to_ms=end,complete=True,crossex_book=[],bitget_book=[],
+                              crossex_trades=[],crossex_position_history=[],bitget_position_history=[]))
+        old=snap(start)
+        anchor=dict(captured_at=self.now,revision=1,funding_positions=funding_positions(old),
+                    history_index=history_index(old['activity']))
+        # No program orders in this synthetic UTA unit probe; live positions are
+        # still independently required to prove every day, even with zero net.
+        with patch.object(self.store,'iter_orders',return_value=iter(())):
+            with self.assertRaisesRegex(ValueError,'funding_utc_boundary_unproven'):
+                daily_continuity(self.store,anchor,snap(start+DAY_MS))
+
+    def test_legacy_finalized_counter_missing_new_optional_clock_can_be_compared(self):
+        from tools.crossex_exec.funding import funding_continuity, funding_positions
+        from tools.crossex_exec.external_accounting import history_index
+        self.now+=1
+        self.closed=[dict(self.rows.pop(),closed_type='COMPLETE_CLOSED',update_time=str(int(self.now*1000)))]
+        snapshot=self.engine.read_account_snapshot()
+        before=funding_positions(snapshot)
+        for row in before.values(): row.pop('settled_ms',None)
+        anchor=dict(captured_at=self.now,funding_positions=before,history_index=history_index(snapshot['activity']))
+        with patch.object(self.store,'iter_orders',return_value=iter(())):
+            value=funding_continuity(self.store,anchor,snapshot)
+        self.assertEqual(set(value),set(before))
+        self.assertEqual([r['value'] for r in value.values()],['0','0'])
 
 
 if __name__ == '__main__': unittest.main()

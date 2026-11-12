@@ -48,14 +48,19 @@ def enrich(owner,snapshot,cross_book=(),bitget_book=(),trades=()):
         route,symbol,side=key.split('|')
         group=(route,symbol)
         old=prior.get(key,{})
+        if old.get('closed') is not None and key not in current:
+            # A finalized synthetic lifetime is immutable. A later settlement
+            # belongs to a separate synthetic settled lifetime below.
+            continue
         created=old.get('created',min(fills.get(key) or times.get(group) or [int(owner.now*1000)]))
         value=funds[group] if group not in assigned else dec(0)
         assigned.add(group)
-        closed=None if key in current else max(fills.get(key,[])+times.get(group,[])+[old.get('closed') or int(owner.now*1000)])
+        closed=None if key in current else max(fills.get(key,[])+times.get(group,[])
+                                                or [int(owner.now*1000)])
         row=current.get(key,{})
         if route=='crossex':
             evidence=dict(symbol=symbol,position_side=side.upper(),position_id=key.replace('|','~'),
-                          create_time=str(created),funding_fee=str(value),funding_time='0')
+                          create_time=str(created),funding_fee=str(value),funding_time=str(max(times.get(group) or [0])))
             if closed is not None:
                 evidence.update(closed_type='COMPLETE_CLOSED',update_time=str(closed))
         else:
@@ -68,7 +73,8 @@ def enrich(owner,snapshot,cross_book=(),bitget_book=(),trades=()):
     owner.fixture_funding_positions=prior
     owner.fixture_synthetic_funding=[]
     for (route,symbol,at),amount in settlements.items():
-        if any(k.split('|')[:2]==[route,symbol] for k in all_keys):
+        if any(k.split('|')[:2]==[route,symbol] and v['created']<=at
+               and (v['closed'] is None or at<=v['closed']) for k,v in prior.items()):
             continue
         if route=='crossex':
             row=dict(symbol=symbol,position_side='LONG',position_id='settled-'+str(at),

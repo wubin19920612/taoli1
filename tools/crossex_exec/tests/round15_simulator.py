@@ -59,6 +59,7 @@ class ProgramVenue(SimVenue):
     def settle(self, value):
         assert self.live_position is not None
         self.live_position['funding'] = str(dec(self.live_position['funding'])+dec(value))
+        self.live_position['settled_at'] = int(self.world.now*1000)
         self.funding_cash += dec(value)
         self.book.append(self.cash_row('funding-'+str(len(self.book)), str(value), funding=True))
 
@@ -66,7 +67,8 @@ class ProgramVenue(SimVenue):
         symbol = self.world.instruments[self.leg].symbol
         if self.leg == 0:
             row = dict(symbol=symbol, position_side='LONG', position_id=value['id'],
-                       create_time=str(value['created']), funding_fee=value['funding'], funding_time='0')
+                       create_time=str(value['created']), funding_fee=value['funding'],
+                       funding_time=str(value.get('settled_at',0)))
             if closed:
                 row.update(closed_type='COMPLETE_CLOSED', update_time=str(value['closed']))
             else:
