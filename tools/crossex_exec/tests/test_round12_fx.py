@@ -68,6 +68,16 @@ class FXMathTests(unittest.TestCase):
             with self.subTest(change=change),self.assertRaises(ValueError):
                 self.band(rows)
 
+    def test_upper_contribution_bounds_every_price_inside_uncertainty_interval(self):
+        from tools.crossex_exec.external_fx import upper_contribution
+        band=self.band(quotes(1000,('.8','.8')))
+        for native in map(dec,('-10000','-50','-.0001','0','.0001','50','10000')):
+            upper=upper_contribution(native,band)
+            for rate in map(dec,('.7984','.7992','.8','.8008','.8016')):
+                with self.subTest(native=native,rate=rate):
+                    self.assertGreaterEqual(upper,native*rate)
+                    self.assertLessEqual(dec('-20')-upper,dec('-20')-native*rate)
+
     def test_parsers_exact_spot_pair_and_exchange_timestamp(self):
         from tools.crossex_exec.external_fx import parse_spot_quote
         for venue in ('okx','bitget','bybit'):
@@ -294,6 +304,51 @@ class FXAccountingTests(ExternalFixture,unittest.TestCase):
             value=accounting.evaluate(snapshot,self.registry().split(snapshot))
             self.assertTrue(value['verified'])
             self.assertEqual(dec(value['equity_daily']),0)
+
+    def test_halted_mismatch_needs_three_snapshots_before_release_preserving_daily_lock(self):
+        from tools.crossex_exec.equity import EquityAdmin
+        self.store.set_meta('state','HALTED')
+        self.store.set_meta('halt_reason','account_equity_drop')
+        self.store.set_meta('position_mismatch',True)
+        self.store.set_meta('daily_loss_day',day(self.now))
+        for reason in ('position_mismatch','daily_loss','account_equity_drop'):
+            self.engine.stops.add(reason)
+        admin=EquityAdmin(self.store,self.accounts,engine=self.engine,clock=lambda:self.now)
+        with self.assertRaisesRegex(ValueError,'position_or_order_lock'):
+            admin.state_check('account_equity_drop',True)
+        # The stopped-service runbook invokes only this existing reconciler;
+        # it never calls startup/tick/reconcile/flatten or edits a lock directly.
+        for n in range(3):
+            self.now+=1
+            snapshot=self.engine.read_account_snapshot()
+            self.assertTrue(snapshot['activity']['complete'])
+            self.assertTrue(self.engine.reconcile_positions(snapshot))
+            self.assertEqual(self.store.meta('position_match_streak'),n+1)
+            self.engine.reconcile_positions(snapshot)
+            self.assertEqual(self.store.meta('position_match_streak'),n+1)
+            self.assertEqual(self.store.meta('position_mismatch'),n<2)
+            self.assertEqual(self.store.meta('state'),'HALTED')
+        self.engine.rebaseline(confirm='account_equity_drop',reason='reviewed_external_epoch',
+                               source='cli',release_halt=True)
+        self.assertEqual(self.store.meta('state'),'RUNNING')
+        self.assertNotIn('position_mismatch',self.store.meta('stop_locks'))
+        self.assertNotIn('account_equity_drop',self.store.meta('stop_locks'))
+        self.assertIn('daily_loss',self.store.meta('stop_locks'))
+        self.assertEqual(self.store.meta('daily_loss_day'),day(self.now))
+        self.assertFalse(self.engine.can_open())
+        self.assertEqual(self.store.all_orders(),[])
+
+    def test_failed_fx_at_midnight_cannot_roll_anchor_or_clear_old_daily_lock(self):
+        self.rows=[position(upnl='-10')]; self.equity='990'
+        self.assertTrue(self.reconcile()['verified'])
+        old_anchor=copy.deepcopy(self.store.meta('external_equity_anchor'))
+        old_day=day(self.now)
+        self.store.set_meta('daily_loss_day',old_day); self.engine.stops.add('daily_loss')
+        self.now+=86400; self.catalog(); self.fx_prices=('1',)
+        self.assertFalse(self.reconcile()['verified'])
+        self.assertEqual(self.store.meta('external_equity_anchor'),old_anchor)
+        self.assertEqual(self.store.meta('daily_loss_day'),old_day)
+        self.assertIn('daily_loss',self.store.meta('stop_locks'))
 
 
 if __name__=='__main__': unittest.main()
