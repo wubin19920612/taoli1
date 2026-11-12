@@ -26,11 +26,16 @@
 - OI 用各所公开接口（核实官方文档字段与单位：张/币/USDT），读不到或超过 5 分钟没更新则放弃，记 `oi_missing`。
 - trades/positions 记录 sizing 明细：depth_usd、oi_usd、各约束值、最终取哪一项。
 
-## 3. 交易范围（白名单）
-- 程序每小时用六所公开批量行情计算候选：达到成交额门槛的家数 ≥ min_venues_with_volume。
-- 分类：币安合约目录 underlyingType=COIN 且不在 RWA/黄金/股票/ETF/商品列表中视为加密币；其他一律“需人工判断”。
-- 状态：`candidate` → 用户确认 `enabled` / 排除 `excluded`。**只有 enabled 的才交易**，候选不会自动启用。已启用的币之后不再满足门槛时停开新仓（不强平），页面标出。
-- 环境变量 CROSSEX_BASES 作为首次启动的初始 enabled 集合，之后以数据库为准。
+## 3. 交易范围（取消固定白名单，开单时实时读成交额 —— 用户 11-12 修订）
+- 不再用固定白名单决定能否开仓。看到价差时，实时读取两腿所在交易所该合约的 24h 成交额（各所公开批量 ticker，缓存 ≤5 分钟，过期/读不到则不开，记 `volume_unknown`），**两腿都**达到 min_quote_volume_usd 才开，否则记 `volume_too_low`。
+- 资格只由类别和人工确认决定，不由名单决定：
+  - `crypto`：程序自动分类（币安合约目录 underlyingType=COIN 且不属 RWA/黄金等；币安没有的币按各所目录类别字段判断，判断不了的归“需人工判断”，人工判定前不交易）。
+  - `listed_equity`：见 3b，需人工确认标的市场。`pre_ipo`、`commodity`：不交易。
+  - 代码不一致的映射：见第 4 节，需人工确认。
+  - 页面保留“排除列表”（用户手动拉黑某币），被排除的不开。
+- 常态价差基准采样不能再只采白名单：每 30s 用各所批量 ticker 采所有“任一所 24h 成交额 ≥ 采样预筛门槛（参数，默认 200,000）”的精确代码合约，样本落 SQLite 而非全驻内存，满足内存上限（服务 MemoryMax 实测后给建议，宿主机可用约 500MB）。新进入采样的币仍需 ≥3h 预热才可开仓。
+- 环境变量 CROSSEX_BASES 废弃（保留兼容：若设置则作为额外限制，仅这些币可开；为空表示不限制）。
+- summary 增加 volume_too_low / volume_unknown / category_unconfirmed 计数；trades/positions 记录开仓时两腿成交额。
 
 ### 3b. 已上市股票/ETF（用户 11-12：上市前的不列，已上市的要纳入）
 - 类别：`crypto` / `listed_equity`（含 ETF）/ `pre_ipo` / `commodity`。pre_ipo（如 ANTHROPIC、OPENAI 及币安 PREMARKET 类）永不进入候选；commodity 本轮不纳入。
@@ -47,7 +52,7 @@
 
 ## 5. 接口（契约文档同步，只加不删）
 - GET /api/v1/config（当前值、默认、下限、上限、版本）；PUT /api/v1/config（部分更新，原子生效）；GET /api/v1/config/audit
-- GET /api/v1/universe；POST /api/v1/universe/{base}/enable|exclude
+- GET /api/v1/universe（各币类别、各所实时成交额、是否被排除、待人工判断项）；POST /api/v1/universe/{base}/exclude|unexclude|classify（classify 用于人工判定类别与股票标的市场）
 - GET /api/v1/mappings；POST /api/v1/mappings/{id}/confirm|reject
 - 写接口用独立令牌 CROSSEX_EXEC_ADMIN_TOKEN（与只读令牌不同），只读令牌调用写接口返回 403。请求体大小限制，参数类型严格校验。
 - summary 增加 size_too_small / oi_missing / mapping_ratio_mismatch 放弃次数。
@@ -55,9 +60,9 @@
 ## 6. 测试
 - 每个参数：边界内生效、越界 400、超过代码上限拒绝、审计记录、只影响新开仓、重启后保留。
 - 定量：深度/OI/单笔/剩余额度四种约束各自成为最小项；低于最小下单额放弃；OI 缺失放弃。
-- 白名单：候选不自动交易；排除后不开；掉出门槛停开不强平。
+- 成交额：两腿任一低于门槛不开；成交额缓存过期不开；门槛运行中调整即时生效；排除列表生效；未分类币不开；采样预筛与内存上限。
 - 映射：未确认不交易；倍数换算两个方向；价格比偏差 1.01% 放弃。
 - 不变量模拟器 3 种子各 ≥2400 回合全过（加入参数运行中变更、映射币种）；两条 unittest 全过。
 
 ## taoli1 侧（另派，worktree live-exec-page）
-“实盘”页加三块：参数（表格，显示默认/范围，提交前确认弹窗）、交易范围（候选列表含各所成交额，勾选启用/排除，可一键启用全部“加密币”候选）、映射确认（显示各所写法、倍数、实时价格比）。后端透传写接口，只允许已登录会话，带 CSRF 防护；taoli1 .env 需新增 CROSSEX_EXEC_ADMIN_TOKEN（改前问用户）。
+“实盘”页加三块：参数（表格，显示默认/范围，提交前确认弹窗）、交易范围（各币类别与各所实时成交额、排除/取消排除、待人工判断的类别与股票标的市场）、映射确认（显示各所写法、倍数、实时价格比）。后端透传写接口，只允许已登录会话，带 CSRF 防护；taoli1 .env 需新增 CROSSEX_EXEC_ADMIN_TOKEN（改前问用户）。
