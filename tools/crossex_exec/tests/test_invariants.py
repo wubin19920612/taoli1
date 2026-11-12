@@ -23,7 +23,7 @@ from baseline_fixtures import seed_baseline
 
 SEEDS = (20261111, 20261112, 20261113)
 RANDOM_ROUNDS = 2400
-ROUNDS = RANDOM_ROUNDS+168
+ROUNDS = RANDOM_ROUNDS+168+96
 RECOVERY_BOUND = 1
 INVARIANTS = ('1a', '1b', '1c', '1d', '2', '3', '4', '5', '6', '7')
 FAULTS = ('partial', 'zero', 'timeout_ack', 'timeout_unknown', 'detail', 'positions',
@@ -465,6 +465,9 @@ class InvariantSimulationTests(unittest.TestCase):
                         world = World(live=index >= RANDOM_ROUNDS or (index//24)%4 != 0,
                                       coverage=coverage, opening_fault=opening_fault,
                                       mapping=0 if tail==72 else 1 if tail==96 else None)
+                        if tail>=168:
+                            from round11_simulator import enable
+                            enable(world,('catastrophe','settlement','margin','catalog')[(tail-168)//24])
                     w = world
                     w.step = index
                     fault = 'none' if episode_step in (1, 21, 22, 23) else rng.choice(FAULTS)
@@ -503,6 +506,9 @@ class InvariantSimulationTests(unittest.TestCase):
                     if fault == 'restart':
                         w.restart()
                     w.references()
+                    if index>=RANDOM_ROUNDS+168:
+                        from round11_simulator import step
+                        step(w,index)
                     skips_before = Counter(w.store.meta('opening_skip_counts', {}))
                     if index >= RANDOM_ROUNDS:
                         if tail == 49:
@@ -626,6 +632,9 @@ class InvariantSimulationTests(unittest.TestCase):
                     if w.store.meta('pair_cooldowns',{}).get('BTC|binance|bitget',0)>w.now:
                         coverage['cooldown_active'] += 1
                     w.store.failures = 0
+                    if index>=RANDOM_ROUNDS+168:
+                        from round11_simulator import check
+                        check(self,w,first_send)
                     for invariant in INVARIANTS:
                         checks[invariant] += 1
             self.assertEqual(set(checks.values()), {ROUNDS})
@@ -636,6 +645,9 @@ class InvariantSimulationTests(unittest.TestCase):
                         'query_failures','position_failures','account_failures','baseline_admission','cooldown_active'):
                 self.assertGreater(coverage[key], 0, 'vacuous fault coverage: '+key)
             self.assertGreater(coverage['opened_pairs'], 0, 'vacuous actual new-position coverage')
+            self.assertEqual(coverage['external_invariant_checks'],96)
+            for key in ('external_catastrophe','external_loss','external_closed','external_margin','external_catalog_changed'):
+                self.assertGreater(coverage[key],0,'vacuous external coverage: '+key)
             for reason in OPENING_FAULTS:
                 self.assertGreater(coverage['skip_'+reason], 0, 'vacuous opening rejection: '+reason)
             for key in ('runtime_config_changed','runtime_config_new_open','mapping_opened','mapping_buy','mapping_sell',
