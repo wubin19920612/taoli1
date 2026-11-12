@@ -80,6 +80,28 @@ class FakeDatabase:
         with self.lock:
             return copy.deepcopy(list(self.data['orders'].values()))
 
+    def iter_orders(self, *, pair_id=None, states=None, exclude_states=(), sent_since=None,
+                    accounting_pending=None, reduce_only=None, page_size=128):
+        for row in self.all_orders():
+            if (pair_id is not None and row.get('pair_id') != pair_id
+                    or states is not None and row.get('state') not in states
+                    or row.get('state') in exclude_states
+                    or sent_since is not None and row.get('sent_ms', 0) < sent_since
+                    or accounting_pending is not None and bool(row.get('accounting_pending')) != accounting_pending
+                    or reduce_only is not None and bool(row.get('reduce_only')) != reduce_only):
+                continue
+            yield row
+
+    def save_orders(self, orders, kind=None):
+        with self.lock:
+            before = copy.deepcopy(self.data)
+            try:
+                for order in orders:
+                    self.save_order(order, kind)
+            except BaseException:
+                self.data = before
+                raise
+
     def save_order(self, order, kind=None):
         with self.lock:
             if self.fail_order and order['leg'] == 0:
@@ -113,6 +135,12 @@ class FakeDatabase:
     def pairs(self, active=False):
         values = copy.deepcopy(list(self.data['pairs'].values()))
         return [p for p in values if p['state'] not in ('CLOSED', 'SHADOW', 'SKIPPED')] if active else values
+
+    def get_pair(self, pair_id):
+        return copy.deepcopy(self.data['pairs'].get(pair_id))
+
+    def iter_pairs(self, active=False, *, exclude_states=(), page_size=64):
+        yield from (p for p in self.pairs(active) if p['state'] not in exclude_states)
 
     def event(self, kind, value=None, cid=None):
         with self.lock:

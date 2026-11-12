@@ -1,6 +1,6 @@
 # crossex-exec 本地实现交接 — 2026-11-11
 
-> **当前状态：第六轮本地验收通过，见文末“第六轮交付”。** 第五轮 PM 补充已完成 1a–1d 的严格验收；第六轮保留全部不变量，三个原种子各 2448 回合通过，执行器 229 项、fill-sim 158 项通过。历史失败及当时的待决状态保留作证据。当前新增常态基准、超额开平仓、小时资金费 ×2h、冷却和观测字段；没有推送、部署、真实行情或鉴权接口调用。
+> **当前状态：第七轮本地验收通过，已采用批准的非零 5bp 基准；最新终审修复见文末“终审修复”。** 第七轮续验收执行器 270 项、fill-sim 158 项及三个原种子各 2448 回合通过。历史失败和当时的待决提案保留作证据，不代表当前待决事项；最新测试数量、原始汇总和内存数据以“终审修复”为准。本任务仅本地交付，没有推送、部署、真实行情或鉴权接口调用。
 
 ## 目标、范围与状态
 
@@ -531,7 +531,7 @@ OK
 
 本模块结束。下一模块请新建任务，从第四轮清单、本节及 feat 提交开始独立复核；C1/C3、Linux/生产动作及开启实盘须另有明确授权。本地回归通过不代表实盘验收通过。
 
-## 第五轮本地修复与待决验收（2026-11-11）
+## 第五轮本地修复与待决验收（2026-11-11，历史记录，后续已验收）
 
 ### 状态、范围与提交
 
@@ -953,7 +953,7 @@ docs hash 仍用 `git log -1 --format=%H -- docs/task-handoff-2026-11-11-crossex
 - API 字段集合只增项；内存数据库补齐 skip 的持久化模型。未改 fill-sim 或私有传输/执行器发送恢复状态机。
 - 对六个变动的原测试文件逐函数比较基线与当前 `assert* / fail / skipTest` 调用的 AST，结果：`Existing test assertion AST audit: 6 files; changes=[]`。没有 skip/xfail 或降低旧覆盖要求。静态语法检查 32 个执行器 Python 文件通过 Python 3.10 AST；CLI `--help`、`git diff --check` 通过。
 
-### 两条完整 unittest 与模拟器原始结果
+### 两条完整 unittest 与模拟器原始结果（历史失败，续验收已通过）
 
 最后一次实现与测试修改之后，实际执行（Windows / Python 3.12.10 / SQLite 3.49.1）：
 
@@ -998,7 +998,7 @@ test_i1c_retry_deadline_starts_after_slow_snapshot_failure
 
 初始诊断另外保留为 `crossex-round7-red.log`、`crossex-round7-first.log`、`crossex-round7-first-suite.log`、`crossex-round7-pricing-red.log`、`crossex-round7-specialist.log`。首次完整 261 项有 13 项失败，后续修正陈旧盘口和基准状态夹具后，减少到上述 8 项；不隐藏历史失败。
 
-### 线上状态、剩余风险与继续步骤
+### 线上状态、剩余风险与继续步骤（历史待决，续验收已解决）
 
 没有 push、生产备份、部署或线上验证；线上版本、实盘开关与真实配置未变。没有额外未跟踪仓库文件需要交接；Python 缓存仍在既有忽略范围，日志只在临时目录。Ubuntu/Python 3.10/SQLite 3.37 实机、systemd/80M、真实账户时序与撮合仍未验收；本轮公共重拉增加的等待时间受原队列限频约束，可能导致更多放弃，这是保守准入的预期结果。
 
@@ -1252,3 +1252,145 @@ OK
 继续实现时发现旧 `test_engine.py::test_actual_fees_missing_or_low_volume_never_sends` 用 `4999999/9000000` 成交额要求零发单，与任务书默认 100 万冲突。已提交具体 PM 方案：该旧测试显式配置 500 万以保留原输入与安全断言，另测默认 100 万；尚未收到批准，旧断言未改。按用户要求暂停依赖该裁决的验收。
 
 本次**有必须保留的未提交实现及六个新增未跟踪模块**，与上一个续跑不同。详细范围、test/feat 提交、两项断言替换前后、OI 证据、Python 3.10 实测、WIP 备份、回归结果和未完成事项全部转入 [2026-11-12 第八轮专用交接](task-handoff-2026-11-12-crossex-exec-r8.md)。下一任务先读新交接，不要只根据 HEAD 还原工作；不 push/SSH/WSL/amend/鉴权、不触碰线上和前端的边界继续有效。
+
+## 终审修复（2026-11-12）
+
+**终审报告列出的 3 项 P1、2 项 P2 已完成本地修复与验收。** 新增 19 项专项；执行器完整 **289 项**、fill-sim **158 项**通过，三个原种子各 **2448 回合（2400 随机 + 48 故障覆盖）**全部严格不变量及非空覆盖通过。第七轮已通过的 5bp 适配继续有效；上文历史失败和待决提案不代表当前状态。
+
+### 范围、基线与本地提交
+
+- worktree：`C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec`；分支 `codex/crossex-exec`；用户指定基线 `cde65ed`。
+- 开始时仅有未跟踪的 `docs/crossex-exec-final-review-2026-11-12.md`，首先将其原文单独提交，没有改写原只读报告。原报告针对 `cde65ed` 的否决结论属于修复前证据。
+- 本轮修改仅限 `tools/crossex_exec` 和该模块交接文档；`tools/fill_sim` 源码和测试未修改。没有新增实际联网、鉴权、交易或部署授权。
+
+| 类型 | 提交 | 内容 |
+|---|---|---|
+| docs | `f36d3df` | 原始终审报告 |
+| test | `18e475c` | 首批失败回归与离线内存探针 |
+| test | `f580331` | 最终 19 项专项、模拟存储原子/筛选接口适配及内存测量 |
+| feat | `dab6d98116df7f9868a7ef21cfda1784a14a34fa` | 执行协调、恢复、SQL/流式读取及 service 布局/内存上限 |
+| docs | 随本节独立提交 | README 当前状态、部署步骤、内存建议和原始验收汇总 |
+
+文档提交用 `git log -1 --format=%H -- docs/task-handoff-2026-11-11-crossex-exec.md` 查询；不硬编码本次文档自身提交号。所有提交均只在本地，无 push、amend、reset 或 force push。
+
+### 修复入口与保持的业务规则
+
+1. **P1-1：`Executor._execute_pair` → `Store.save_orders(SENT)` → `check_order` → `Engine.check_release` → barrier 放行。** 两个线程先完成限频/建连，共享准入仍保留原有一次整对重拉。两条 SENT 及对应事件原子提交完成后再次检查硬上限、账户缓存、权益、停开条件，最后检查 1 秒盘口年龄及时间差；最终检查后没有写库、刷新或单腿独立否决。`can_open(ignore_cids=...)` 只排除本批次已预写 SENT 对自身的非终态阻挡/拒绝率样本，**硬敞口计算仍包含这两条订单**，其他 UNKNOWN、待写集合和停开锁不被忽略。1.01s 慢提交整对零发送，1.00s 等号放行；另一项测试直接在 SQLite `COMMIT` 回调注入 1.01s，仍整对拒发。
+2. **P1-2：两腿 INTENT 和事件同事务准备，任何验证/第二腿写入失败全部回滚。** 所有执行中的 client ID 有进程内 ownership 计数，退出执行路径自动释放；运行期恢复只清理没有执行线程持有且仍为 INTENT 的孤立意图。已有 SENT/ACK/UNKNOWN 即使远端暂时查不到，仍按原编号确认、撤单、再确认，不自动重发或按未发送清理。当前 barrier 从未释放时有明确零发送证据，才允许本批次失败处理写 UNSENT；崩溃重启不保留该证据，已落盘 SENT 始终保守恢复。第二腿 SQLite trigger 失败测试证明订单和 INTENT 事件全部回滚，同一 Engine 无需重启即可 tick 到 HALTED、零活动仓位和零远端数量；另验证运行期孤立 INTENT 及正在等待关口的合法 INTENT。
+3. **P1-3：`deploy/crossex-exec.service` 的 WorkingDirectory 改为 `/home/ubuntu/wubin/crossex-exec`。** `ExecStart` 模块入口、env、SQLite/STOP 默认位置和 `ReadWritePaths` 已逐项核对，均落在独立目录布局。README 增加固定 SHA 的 `git archive`、保留 `tools/` 层级、同时打包 `tools/crossex_exec` 与 `tools/fill_sim`、var/配置权限和以后安装的步骤。不要求启动 fill-sim 服务。
+4. **P2-4：`storage.py` 在 SQL 过滤，历史按 rowid 分页；风险和恢复路径不再调用全量 `all_orders()` 或 `pairs()`。** 仓位页 64 条、订单页 128 条，页内仅逐条解码；固定读取上界且不使用 OFFSET，更新已读订单的状态不会跳过后续记录。支持按 pair ID、状态、最近发送时点和待记账标志过滤，并添加相应索引。空/未知状态不会因 SQL NULL 的 NOT IN 语义被藏掉。`Executor.iter_orders` 先合并未落盘观察再应用等价筛选；历史损益用有界 entry 缓存和 Decimal 累计，超过第一页的亏损/未知敞口有专项覆盖。API 保留只读 authorizer、2 秒/8MiB 预算和原响应字段，逐仓读取相关订单并释放历史对象；summary 不解码 SHADOW/SKIPPED，已关闭记录只保留必要汇总投影。超过预算仍返回不可用，绝不截断后声称统计完整。
+5. **P2-5：README 与本交接顶部统一为第七轮通过。** 旧 40bp/8 项失败、0bp 未采用提案及第五轮待决记录明确标为历史；当前采用已批准的非零 5bp。本轮未改变任何风控阈值或既有断言。
+
+### TDD、原断言与归档检查
+
+先运行新回归再修实现，日志均保留在本机 `%TEMP%`：
+
+```text
+首批终审回归：Ran 13 tests in 0.463s / FAILED (failures=8, errors=4)
+运行路径全量历史读取：Ran 17 tests in 1.666s / FAILED (failures=2)
+API 历史订单同时驻留：Ran 18 tests in 1.761s / FAILED (failures=1)
+SQL NULL 状态遗漏：Ran 19 tests in 1.839s / FAILED (failures=1)
+最终定向回归：Ran 19 tests in 1.915s / OK
+```
+
+首批错误包含尚不存在的分页接口；行为失败分别覆盖慢 SENT 仍发送、第二腿 SENT 失败仍单腿发送、第二腿 INTENT 遗留、提交后风控未复查、运行期孤立意图和活动查询全量解码。API 增补红测观察到 129 个历史订单同时驻留，修复后同一场景最多 4 个；不以降低输入量消除失败。
+
+既有 13 个测试文件的 **866 个** `assert* / fail / skipTest` 调用按 AST 计数与 `cde65ed` 比较，无缺失或改写；没有使用允许的“新增字段精确相等冲突”例外，没有修改旧断言。旧测试改动只有测试执行器补接新的最终关口、内存存储模型增加真实接口所需的原子/筛选行为；原随机序列、种子、回合数、N=1、FAULTS、INVARIANTS 和六类开仓拒绝均不变。
+
+```text
+Existing assertion AST audit: files=13 assertions=866 missing_or_changed=[]
+Invariant seeds, rounds, bounds and definitions: unchanged
+Python 3.10 AST compatibility: 34 files PASS
+```
+
+从 feat 完整 SHA 做真实 `git archive`，在新的临时目录解包，移除 `PYTHONPATH` 后执行独立包的 CLI `--help` 成功；没有运行 `run`。两个模块和全部 service/env 默认路径静态核验通过。`git diff --check` 通过。
+
+```text
+Archive SHA=dab6d98116df7f9868a7ef21cfda1784a14a34fa
+Archive path=C:\Users\wubin\AppData\Local\Temp\crossex-final-archive-ftyzs0gh\crossex-exec.tar
+Archive SHA256=86e570622bda294ca486559218c9592ed14b214a57041bf92b44c988344cd8c9
+Archive modules: tools/crossex_exec + tools/fill_sim PASS
+Isolated archive CLI --help: PASS
+Service/env layout static check: PASS
+Linux/systemd runtime: NOT RUN
+```
+
+### 两条 unittest 与不变量原始汇总
+
+最后一次生产实现修改后实际执行，Windows 11 / Python 3.12.10 / SQLite 3.49.1。三条 INVARIANTS 仅去掉 unittest 同行测试名称前缀，其他字段保持原文：
+
+```text
+python -m unittest discover -s tools/crossex_exec/tests -v
+Ran 289 tests in 109.533s
+OK
+
+python -m unittest discover -s tools/fill_sim/tests -v
+Ran 158 tests in 29.534s
+OK
+
+INVARIANTS seed=20261111 rounds=2448 random_rounds=2400 N=1 checks={'1a': 2448, '1b': 2448, '1c': 2448, '1d': 2448, '2': 2448, '3': 2448, '4': 2448, '5': 2448, '6': 2448, '7': 2448} exercised={'1a': 35, '1b': 60, '1c': 25, '1d': 84, '2': 74, '3': 95, '4': 74, '5': 600, '6': 23, '7': 345} coverage={'account_failures': 151, 'baseline_admission': 74, 'cooldown_active': 167, 'db_failures': 22, 'full_fill': 122, 'halted': 344, 'halting_retry': 1, 'intent_write_abort': 21, 'open': 74, 'opened_pairs': 37, 'partial_fill': 27, 'position_failures': 137, 'position_read': 3257, 'query': 4137, 'query_failures': 1399, 'recovery_obligation': 23, 'reduce': 95, 'restarts': 142, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 458, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'skip_baseline_not_flat': 75, 'skip_book_skew': 28, 'skip_book_stale': 112, 'skip_funding_diff': 56, 'skip_not_single_venue_outlier': 109, 'skip_too_few_venues': 23, 'timeout_ack': 28, 'timeout_unknown': 21, 'zero_fill': 20}
+INVARIANTS seed=20261112 rounds=2448 random_rounds=2400 N=1 checks={'1a': 2448, '1b': 2448, '1c': 2448, '1d': 2448, '2': 2448, '3': 2448, '4': 2448, '5': 2448, '6': 2448, '7': 2448} exercised={'1a': 27, '1b': 56, '1c': 13, '1d': 77, '2': 68, '3': 83, '4': 68, '5': 600, '6': 30, '7': 355} coverage={'account_failures': 116, 'baseline_admission': 68, 'cooldown_active': 24, 'db_failures': 16, 'full_fill': 112, 'halted': 354, 'halting_retry': 1, 'intent_write_abort': 15, 'open': 68, 'opened_pairs': 34, 'partial_fill': 24, 'position_failures': 139, 'position_read': 3275, 'query': 4866, 'query_failures': 625, 'recovery_obligation': 30, 'reduce': 83, 'restarts': 142, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 458, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'skip_baseline_not_flat': 65, 'skip_book_skew': 20, 'skip_book_stale': 86, 'skip_funding_diff': 91, 'skip_not_single_venue_outlier': 139, 'skip_too_few_venues': 42, 'timeout_ack': 22, 'timeout_unknown': 34, 'zero_fill': 15}
+INVARIANTS seed=20261113 rounds=2448 random_rounds=2400 N=1 checks={'1a': 2448, '1b': 2448, '1c': 2448, '1d': 2448, '2': 2448, '3': 2448, '4': 2448, '5': 2448, '6': 2448, '7': 2448} exercised={'1a': 37, '1b': 78, '1c': 27, '1d': 106, '2': 94, '3': 115, '4': 94, '5': 600, '6': 31, '7': 385} coverage={'account_failures': 134, 'baseline_admission': 94, 'cooldown_active': 158, 'db_failures': 20, 'full_fill': 162, 'halted': 384, 'halting_retry': 1, 'intent_write_abort': 20, 'open': 94, 'opened_pairs': 47, 'partial_fill': 27, 'position_failures': 141, 'position_read': 3256, 'query': 5479, 'query_failures': 642, 'recovery_obligation': 31, 'reduce': 115, 'restarts': 114, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 458, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'skip_baseline_not_flat': 43, 'skip_book_skew': 28, 'skip_book_stale': 73, 'skip_funding_diff': 68, 'skip_not_single_venue_outlier': 120, 'skip_too_few_venues': 17, 'timeout_ack': 39, 'timeout_unknown': 37, 'zero_fill': 20}
+```
+
+### 2000 条历史内存实测与 service 建议
+
+命令：`python -m tools.crossex_exec.tests.memory_probe`。固定 2000 条 SHADOW 仓位、4000 订单、每腿每侧 50 档；再添加三条活动仓位测查询/观测接口。下表为同一探针修复前后 **tracemalloc 临时 Python 分配峰值**，不包含全部 native/线程/cgroup 开销。原终审报告的 76.05MiB 使用不同合成字段；本轮 fixture 包含真实 ingest 生成的业务字段，92.0559MiB 是本轮实际修复前结果，不替换或改写旧报告。
+
+| 路径 | 修复前 MiB | 修复后 MiB |
+|---|---:|---:|
+| `pairs(active=True)`，零活动 | 92.0559 | 0.0022 |
+| `can_open` | 105.4587 | 0.0045 |
+| 执行器恢复 | 13.5529 | 0.0062 |
+| 硬敞口读取 | 13.4070 | 0.0042 |
+| `Engine.totals` | 13.5530 | 0.0049 |
+| `Engine.tick` | 92.1064 | 0.0064 |
+| API summary | 74.0691，最终预算拒绝 | 0.0182，正常返回 |
+| 2000 历史 + 3 活动的活动查询 | 92.1939 | 0.1566 |
+| 完整遍历 2000 仓位 / 4000 订单 | 原接口物化全部 | 0.7174 / 0.2015 |
+
+最终探针原文：
+
+```text
+{"platform": "Windows-11-10.0.26200-SP0", "python": "3.12.10", "sqlite": "3.49.1", "pairs": 2000, "orders": 4000, "levels_per_side_per_leg": 50, "metric": "tracemalloc Python allocations, not Linux RSS"}
+{"peak_bytes": 2280, "peak_mib": 0.0022, "probe": "active_pairs_0", "result": 0, "retained_bytes": 1274}
+{"peak_bytes": 6463, "peak_mib": 0.0062, "probe": "executor_recover", "result": null, "retained_bytes": 4381}
+{"peak_bytes": 4677, "peak_mib": 0.0045, "probe": "can_open", "result": true, "retained_bytes": 3049}
+{"peak_bytes": 4403, "peak_mib": 0.0042, "probe": "hard_exposure", "result": "98.02940", "retained_bytes": 2353}
+{"peak_bytes": 5101, "peak_mib": 0.0049, "probe": "engine_totals", "result": ["0", "0"], "retained_bytes": 2530}
+{"peak_bytes": 6716, "peak_mib": 0.0064, "probe": "engine_tick", "result": null, "retained_bytes": 4712}
+{"peak_bytes": 752239, "peak_mib": 0.7174, "probe": "paged_pair_history", "result": 2000, "retained_bytes": 21198}
+{"peak_bytes": 211251, "peak_mib": 0.2015, "probe": "paged_order_history", "result": 4000, "retained_bytes": 17628}
+{"peak_bytes": 19085, "peak_mib": 0.0182, "probe": "api_summary", "result": 1155, "retained_bytes": 6803}
+{"peak_bytes": 5991, "peak_mib": 0.0057, "probe": "api_positions", "result": 2, "retained_bytes": 1952}
+{"peak_bytes": 6163, "peak_mib": 0.0059, "probe": "api_trades", "result": 2, "retained_bytes": 2072}
+{"peak_bytes": 8088, "peak_mib": 0.0077, "probe": "api_stats", "result": 837, "retained_bytes": 5412}
+{"peak_bytes": 164258, "peak_mib": 0.1566, "probe": "active_pairs_3", "result": 3, "retained_bytes": 11864}
+{"peak_bytes": 112898, "peak_mib": 0.1077, "probe": "api_positions_3", "result": 3, "retained_bytes": 11562}
+{"probe": "process_peak_working_set", "peak_bytes": 42696704, "peak_mib": 40.7188, "metric": "Windows process working set including fixture and tracemalloc, not Linux RSS"}
+```
+
+探针进程峰值 **Windows working set 为 40.7188MiB**，包含 fixture 构造和 tracemalloc；这不是 Linux RSS 或服务 24h 峰值。结合用户提供的宿主机 1.9G、约 500MB 可用余量，service 暂建议 **MemoryMax=192M**：相对本地约 41MiB 工作集保留约 4.7 倍余量，同时留下约 300MB 给宿主机与其他服务。该值仅是后续影子测试起点，原 80M 缺乏完整负载依据。并未声称实际白名单、真实账户缓存、后台线程与 API 并发已完成实机资源验收。
+
+### 原始日志校验、线上状态与交接
+
+以下日志保存在本机 `%TEMP%`，未提交到仓库；原先各轮日志没有覆盖。第一批 PowerShell 重定向日志保留了其原始格式，后续通过 subprocess 直接合并原始 stdout/stderr 写入 UTF-8。
+
+| 文件 | SHA-256 |
+|---|---|
+| `crossex-final-review-red.log` | `f0e3f0669f643245db2e2492a8507dc34a39f8ade6116e8b17c226ca5bbd2c4d` |
+| `crossex-final-review-p2-red.log` | `5a37118c0ecf92671fc23e7907c1418de6f8eafce654a54aaa0ddd80f319cf1a` |
+| `crossex-final-review-api-red.log` | `9f00fe07921d4c97136c174e40edd53f880efbea0d27cb1d7f2e043a652ea383` |
+| `crossex-final-review-null-red.log` | `c02b54ac23e9f98de5c9b974ece922beb3077f9f25ce03acb5de9e5ce3a7bca2` |
+| `crossex-final-review-targeted-final.log` | `79470f5843abe99837d8d57e84a6b3739a018f9a03c5de2f4414190b5c74a247` |
+| `crossex-final-review-unittest-first.log` | `af63596189cb203d3823711a2b90f6d3ce81de85aeeaa18e707e58093be96a1b` |
+| `crossex-final-review-unittest.log` | `64b028c4b807de2f4081ae3e795ba4b4db6b70e30c89d0546d39084a854d5e36` |
+| `crossex-final-review-fill-sim-final.log` | `b590bc02269800549617862746aeb46230fae92a4a1f716eca807a6c71757831` |
+| `crossex-final-review-memory-before.log` | `96526f390c859da9fa9da889336009fd18af5d1772f799570d1e16410eb731ae` |
+| `crossex-final-review-memory-accepted.log` | `efc1eddaa7b2a4bb4fab9b53312c036c409d1f69a69ce4a3478570250ca9afc0` |
+| `crossex-final-review-static.log` | `9f3611f3b96e358db37e8acf58fef4a8b437d2565fdc3d3ed7fb238434f379f1` |
+| `crossex-final-review-archive.log` | `feecec50c24761fb671324c06b6076fc274cfd6a6107cbbba32c55a0c12a8c0a` |
+
+所有业务测试为内存交易所/loopback 假服务，保留外网 socket/DNS 守护；内存探针只读写自己的临时 SQLite，API 测量直接调用本地 JournalView。没有读取真实 env/凭据、请求真实行情/鉴权接口、push、SSH、WSL、amend、生产备份、部署或线上验证。线上版本和配置未触碰，无法报告新的线上部署版本或线上验证成功。
+
+交付时只提交上述模块文件和 docs，没有额外未跟踪仓库文件；临时日志、归档包和忽略的 Python 缓存保留。后续新任务从本节开始：使用本次 docs 完成后的完整 SHA 重新归档，在明确授权的 Linux 环境完成 Python 3.10/SQLite 3.37、systemd 权限、实际白名单与 API 查询并发、24h MemoryCurrent/MemoryPeak/OOM/跟踪延迟验收，重新核对主机可用内存；账户验证和启动 `run` 必须属于后续明确范围。自动重启不能替代仓位管理连续性验收，本地通过不构成实盘授权。

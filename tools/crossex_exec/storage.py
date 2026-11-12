@@ -29,6 +29,17 @@ def encode(value):
     return json.dumps(REDACTOR.clean(value), separators=(',',':'), allow_nan=False)
 
 
+def matches_order(order, *, pair_id=None, states=None, exclude_states=(), sent_since=None,
+                  accounting_pending=None, reduce_only=None):
+    """Same predicates as SQL, also applied to not-yet-durable observations."""
+    return ((pair_id is None or order.get('pair_id') == pair_id)
+            and (states is None or order.get('state') in states)
+            and order.get('state') not in exclude_states
+            and (sent_since is None or order.get('sent_ms', 0) >= sent_since)
+            and (accounting_pending is None or bool(order.get('accounting_pending')) == accounting_pending)
+            and (reduce_only is None or bool(order.get('reduce_only')) == reduce_only))
+
+
 class Store(PublicStore):
     def __init__(self, path):
         self.lock = path_lock(path)
@@ -47,6 +58,10 @@ class Store(PublicStore):
                 pair_key TEXT NOT NULL, bucket INTEGER NOT NULL, at REAL NOT NULL, bps TEXT NOT NULL,
                 PRIMARY KEY(pair_key,bucket));
             CREATE INDEX IF NOT EXISTS baseline_samples_at ON baseline_samples(at);
+            CREATE INDEX IF NOT EXISTS orders_pair ON orders(json_extract(value,'$.pair_id'));
+            CREATE INDEX IF NOT EXISTS orders_state ON orders(json_extract(value,'$.state'));
+            CREATE INDEX IF NOT EXISTS orders_sent ON orders(coalesce(json_extract(value,'$.sent_ms'),0));
+            CREATE INDEX IF NOT EXISTS pairs_state ON pairs(json_extract(value,'$.state'));
         ''')
         with self.lock:
             self.initialize_public()
@@ -63,12 +78,18 @@ class Store(PublicStore):
     @contextmanager
     def transaction(self):
         with self.lock:
+            # Nested journal writes participate in the outer atomic batch. The
+            # RLock prevents another thread from borrowing this transaction.
+            if self.db.in_transaction:
+                yield
+                return
             self.db.execute('BEGIN IMMEDIATE')
             try:
                 yield
                 self.db.execute('COMMIT')
             except BaseException:
-                self.db.execute('ROLLBACK')
+                if self.db.in_transaction:
+                    self.db.execute('ROLLBACK')
                 raise
 
     def meta(self, key, default=None):
@@ -111,9 +132,55 @@ class Store(PublicStore):
             if kind:
                 self.event(kind,order,order['cid'])
 
-    def all_orders(self):
+    def save_orders(self, orders, kind=None):
+        """Both records and their audit events commit or roll back together."""
+        with self.transaction():
+            for order in orders:
+                self.save_order(order, kind)
+
+    def _pages(self, table, where, params, page_size):
+        if table not in ('orders', 'pairs') or not 1 <= page_size <= 512:
+            raise ValueError('invalid_journal_page')
+        after = 0
         with self.lock:
-            return [json.loads(r[0]) for r in self.db.execute('SELECT value FROM orders')]
+            ceiling = self.db.execute('SELECT coalesce(max(rowid),0) FROM '+table).fetchone()[0]
+        while after < ceiling:
+            with self.lock:
+                rows = self.db.execute('SELECT rowid,value FROM '+table+
+                    ' WHERE rowid > ? AND rowid <= ? AND '+where+' ORDER BY rowid LIMIT ?',
+                    [after, ceiling, *params, page_size]).fetchall()
+            if not rows:
+                return
+            after = rows[-1][0]
+            # Decode one record at a time, outside the writer lock. A changing
+            # filter cannot shift an OFFSET and silently skip recovery records.
+            for row in rows:
+                yield json.loads(row[1])
+
+    def iter_orders(self, *, pair_id=None, states=None, exclude_states=(), sent_since=None,
+                    accounting_pending=None, reduce_only=None, page_size=128):
+        terms, params = [], []
+        if pair_id is not None:
+            terms.append("json_extract(value,'$.pair_id')=?")
+            params.append(pair_id)
+        for values, negative in ((states, False), (exclude_states, True)):
+            if values is not None and (values or not negative):
+                field = "coalesce(json_extract(value,'$.state'),'')" if negative else "json_extract(value,'$.state')"
+                terms.append(field+' '+('NOT IN' if negative else 'IN')+
+                             '('+','.join('?' for _ in values)+')')
+                params.extend(values)
+        if sent_since is not None:
+            terms.append("coalesce(json_extract(value,'$.sent_ms'),0)>=?")
+            params.append(sent_since)
+        for field, value in (('accounting_pending', accounting_pending), ('reduce_only', reduce_only)):
+            if value is not None:
+                terms.append("coalesce(json_extract(value,'$."+field+"'),0)=?")
+                params.append(int(value))
+        yield from self._pages('orders', ' AND '.join(terms) or '1', params, page_size)
+
+    def all_orders(self, **filters):
+        """Explicit materialized export; runtime consumers use iter_orders."""
+        return list(self.iter_orders(**filters))
 
     def pair(self, value):
         with self.transaction():
@@ -137,10 +204,18 @@ class Store(PublicStore):
                 'SELECT at,bps FROM baseline_samples WHERE pair_key=? AND at>=? AND at<=? ORDER BY bucket',
                 (key,since,until))]
 
-    def pairs(self, active=False):
+    def get_pair(self, pair_id):
         with self.lock:
-            values = [json.loads(r[0]) for r in self.db.execute('SELECT value FROM pairs')]
-        return [p for p in values if p['state'] not in ('CLOSED','SHADOW','SKIPPED')] if active else values
+            row = self.db.execute('SELECT value FROM pairs WHERE id=?', (pair_id,)).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def iter_pairs(self, active=False, *, exclude_states=(), page_size=64):
+        excluded = tuple(set(exclude_states) | ({'CLOSED','SHADOW','SKIPPED'} if active else set()))
+        where = "coalesce(json_extract(value,'$.state'),'') NOT IN ("+','.join('?' for _ in excluded)+')' if excluded else '1'
+        yield from self._pages('pairs', where, excluded, page_size)
+
+    def pairs(self, active=False):
+        return list(self.iter_pairs(active))
 
     def claim(self, identity, value):
         with self.lock:

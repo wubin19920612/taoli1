@@ -421,7 +421,9 @@ class JournalView:
     def get(self, endpoint, query):
         options, now, budget = query_options(endpoint, query), self.clock(), Budget()
         where, params, suffix = '1', [], ''
-        if endpoint == 'positions':
+        if endpoint == 'summary':
+            where = "coalesce(json_extract(value,'$.state'),'') NOT IN ('SHADOW','SKIPPED')"
+        elif endpoint == 'positions':
             where = "json_extract(value,'$.state') NOT IN ('CLOSED','SHADOW','SKIPPED')"
         elif endpoint in ('trades', 'stats'):
             where = "json_extract(value,'$.state')='CLOSED'"
@@ -434,14 +436,26 @@ class JournalView:
             else:
                 where += " AND json_extract(value,'$.closed_at') >= ? AND json_extract(value,'$.closed_at') <= ?"
                 params.extend([now-options['days']*86400, now])
-        selection = 'SELECT id FROM pairs WHERE '+where+suffix
+        rows, active, closed, sim_pairs = [], [], [], []
         with readonly(self.path, budget) as conn:
             conn.execute('BEGIN')
-            pairs = [budget.decode(raw) for (raw,) in conn.execute('SELECT value FROM pairs WHERE '+where+suffix, params)]
-            orders = defaultdict(list)
-            for (raw,) in conn.execute("SELECT value FROM orders WHERE json_extract(value,'$.pair_id') IN ("+selection+')', params):
-                order = budget.decode(raw)
-                orders[order['pair_id']].append(order)
+            # Stream one selected pair and its orders at a time. Keep only the
+            # public projection, never a second full historical journal in RAM.
+            for (raw,) in conn.execute('SELECT value FROM pairs WHERE '+where+suffix, params):
+                pair = budget.decode(raw)
+                orders = [budget.decode(value) for (value,) in conn.execute(
+                    "SELECT value FROM orders WHERE json_extract(value,'$.pair_id')=? ORDER BY rowid", (pair['id'],))]
+                if endpoint == 'summary':
+                    if pair.get('state') == 'CLOSED':
+                        row = trade(pair, orders)
+                        closed.append({k: row[k] for k in ('closed_at','net_usd','fees_usd','funding_usd')})
+                    else:
+                        active.append(position(pair, orders, now))
+                elif endpoint == 'positions':
+                    rows.append(position(pair, orders, now))
+                else:
+                    rows.append(trade(pair, orders))
+                    sim_pairs.append({k: pair.get(k) for k in ('id','trigger_id','instruments')})
             if endpoint == 'summary':
                 meta = {key: budget.decode(raw) for key, raw in conn.execute(
                     "SELECT key,value FROM meta WHERE key IN ('state','stop_reason','live_mode','account_equity_baseline',"
@@ -454,20 +468,22 @@ class JournalView:
                     events[kind] = (row[0], budget.decode(row[1])) if row else (None, {})
         # Release the execution DB snapshot before optional simulation reads / JSON work.
         if endpoint == 'positions':
-            return [position(p, orders[p['id']], now) for p in pairs]
+            return rows
         if endpoint == 'summary':
-            return self.summary(pairs, orders, meta, events, now)
-        sim = simulations(self.sim_path, pairs, budget)
-        rows = [trade(p, orders[p['id']], sim.get(p['id'])) for p in pairs]
+            return self.summary(active, closed, meta, events, now)
+        sim = simulations(self.sim_path, sim_pairs, budget)
+        for row in rows:
+            result = sim.get(row['id'])
+            row['sim'] = result['result'] if result else None
+            if row['net_bps'] is not None and row['sim'] and row['sim']['net_bps'] is not None:
+                row['slippage_bps'] = row['net_bps']-row['sim']['net_bps']
         if endpoint == 'trades':
             return rows
         if endpoint == 'stats':
             return statistics(rows, {key: value['tier'] for key, value in sim.items() if value}, options['days'])
         raise ValueError('unknown_endpoint')
 
-    def summary(self, pairs, orders, meta, events, now):
-        active = [position(p, orders[p['id']], now) for p in pairs if p.get('state') not in ('CLOSED', 'SHADOW', 'SKIPPED')]
-        closed = [trade(p, orders[p['id']]) for p in pairs if p.get('state') == 'CLOSED']
+    def summary(self, active, closed, meta, events, now):
         today = [r for r in closed if r['closed_at'] and r['closed_at'][:10] == utc(now)[:10]]
         at, reconcile = events['RECONCILE']
         fresh = at is not None and 0 <= now-at < 60
@@ -506,7 +522,7 @@ class JournalView:
         cooling = sum(number(until) is not None and number(until) > now
                       for until in (meta.get('pair_cooldowns') or {}).values())
         current={k:r['default'] for k,r in SCHEMA.items()} | (meta.get('runtime_config') or {}).get('values',{})
-        frozen=[p.get('config_at_open',{}).get('values',{}) for p in pairs if p.get('state') not in ('CLOSED','SHADOW','SKIPPED')]
+        frozen=[p.get('config_at_open') or {} for p in active]
         risk={k:min(v.get(k,SCHEMA[k]['default']) for v in (frozen or [current])) for k in RISK_NAMES}
         return dict(generated_at=utc(now), mode=('live' if meta['live_mode'] else 'shadow')
                     if isinstance(meta.get('live_mode'), bool) else self.mode,

@@ -141,6 +141,7 @@ class _Handler(BaseHTTPRequestHandler):
                 return self.reply(403, {'error': 'admin_required'})
             if endpoint is None and route is None:
                 return self.reply(404, {'error': 'not_found'})
+            # Python 3.10 strict parsing rejects an empty query string.
             values = (parse_qs(url.query, keep_blank_values=True, strict_parsing=True, max_num_fields=4)
                       if url.query else {})
             if any(len(v) != 1 for v in values.values()):

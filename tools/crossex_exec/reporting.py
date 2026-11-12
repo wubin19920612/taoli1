@@ -3,10 +3,9 @@ from tools.fill_sim.core import dec
 
 
 def report(store):
-    orders=store.all_orders()
     trades=[]
-    for pair in store.pairs():
-        related=[o for o in orders if o['pair_id']==pair['id']]
+    for pair in store.iter_pairs():
+        related=list(store.iter_orders(pair_id=pair['id']))
         entry=sorted([o for o in related if not o['reduce_only']],key=lambda o:o['leg'])
         timing={}
         for field,name in (('sent_ms','send_delta_ms'),('fill_ms','fill_delta_ms')):

@@ -2,6 +2,8 @@
 import time
 import threading
 import uuid
+from functools import lru_cache
+from itertools import chain
 from decimal import ROUND_FLOOR, ROUND_CEILING
 from pathlib import Path
 from tools.fill_sim.core import Book, Market, dec, walk, closing, track_interval, day
@@ -55,7 +57,7 @@ class Engine:
         self.limits=HardLimits(store,self.account_cache.read,config,alert=self.alert)
         self.executor=Executor(store,{'crossex':accounts.cross,'bitget':accounts.bitget},live=live,
                                can_open=self.can_open,check_order=self.check_order,check_pair=self.check_pair,
-                               alert=self.alert,clock=clock)
+                               check_release=self.check_release,alert=self.alert,clock=clock)
 
     def alert(self,reason,*,details=None,event_kind=None):
         with self._alert_lock:
@@ -104,7 +106,7 @@ class Engine:
             except ValueError as error:
                 reason=error.reason if isinstance(error,AdmissionError) else str(error)
                 if reason in SKIP_REASONS:
-                    pair=next((p for p in self.store.pairs() if p['id']==intents[0]['pair_id']),{})
+                    pair=self.store.get_pair(intents[0]['pair_id']) or {}
                     self.store.skip(pair.get('trigger_id','pair:'+str(pair.get('id'))),reason,
                                     stage='send',pair_id=pair.get('id'))
                 raise
@@ -112,19 +114,15 @@ class Engine:
     def _check_pair(self,intents):
         if len(intents)!=2 or {i['leg'] for i in intents}!={0,1} or len({i['pair_id'] for i in intents})!=1:
             raise ValueError('opening_pair_missing')
-        pair=next(p for p in self.store.pairs(active=True) if p['id']==intents[0]['pair_id'])
+        pair=self.store.get_pair(intents[0]['pair_id'])
+        if pair is None or pair['state'] in ('CLOSED','SHADOW','SKIPPED'):
+            raise ValueError('opening_pair_missing')
         orders=sorted(intents,key=lambda o:o['leg'])
         instruments=[Instrument.load(i) for i in pair['instruments']]
         config=pair.get('config_at_open')
         limits=self.opening_limits.restricted(config['values']) if config else self.opening_limits
-        if config and self.settings.read()!=config:
-            raise ValueError('config_version_changed')
-        if any(i.market.key not in self.market.mapping for i in instruments):
-            raise ValueError('send_catalog_unavailable')
+        self.check_send_config(pair,instruments)
         if config:
-            current=self.universe.resolve([self.market.mapping[i.market.key] for i in instruments])
-            if [i.dump() for i in current]!=[i.dump() for i in instruments]:
-                raise ValueError('send_catalog_changed')
             self.check_volumes(instruments,config['values'])
         venues=tuple(i.market.exchange for i in instruments)
         for attempt in range(BOOK_RETRIES+1):
@@ -135,17 +133,7 @@ class Engine:
                 fees=self.fees_for(instruments)
                 skew=limits.books(pair['last_books'],self.clock(),send=True)
                 limits.funding(pair['funding'])
-                if config:
-                    common_books=[Book(**b) for b in pair['last_books']]
-                    # Books here are common units; reconstruct raw mids only for mapping validation.
-                    check_mapping_ratio(instruments,[Book([[str(dec(b.bids[0][0])*i.multiplier),'1']],
-                        [[str(dec(b.asks[0][0])*i.multiplier),'1']],b.received_at,b.exchange_at) for i,b in zip(instruments,common_books)])
-                    own=sum(dec(o['quantity'])*dec(o['price']) for o in orders)
-                    available=max(dec(0),min(self.limits.total,dec(config['values']['max_total_open_usd']))-
-                                  self.limits.exposure(self.account_cache.read())+own)
-                    plan=size_plan([i.common() for i in instruments],common_books,pair['open_interests'],config['values'],available,self.clock())
-                    if any(dec(o['quantity'])*i.multiplier>dec(plan['quantity']) for o,i in zip(orders,instruments)):
-                        raise ValueError('send_size_changed')
+                self.check_send_size(pair,orders,instruments)
                 pricing=send_review(pair,orders,fees,self.clock())
                 evidence=limits.outlier(venues,pair['last_books'],self.reference_snapshot(instruments),
                                                       pricing['excess_bps'],self.clock())
@@ -169,6 +157,56 @@ class Engine:
                 self.store.skip(pair.get('trigger_id','pair:'+pair['id']),error.reason,
                                 stage='send',pair_id=pair['id'])
                 raise
+
+    def check_release(self,intents):
+        """Final shared decision AFTER durable SENT; never fetch/refresh here."""
+        with self.store.lock:
+            pair=self.store.get_pair(intents[0]['pair_id'])
+            if pair is None or pair['state'] in ('CLOSED','SHADOW','SKIPPED'):
+                raise ValueError('opening_pair_missing')
+            try:
+                instruments=[Instrument.load(i) for i in pair['instruments']]
+                self.check_send_config(pair,instruments)
+                self.check_send_size(pair,sorted(intents,key=lambda o:o['leg']),instruments)
+                if not self.can_open(ignore_cids={i['cid'] for i in intents}):
+                    raise ValueError('open_gate_changed')
+                config=pair.get('config_at_open')
+                limits=self.opening_limits.restricted(config['values']) if config else self.opening_limits
+                # Last check: all preceding reads/commits consume this budget.
+                # Success performs no further I/O before releasing BOTH senders.
+                limits.books(pair['last_books'],self.clock(),send=True)
+            except ValueError as error:
+                reason=error.reason if isinstance(error,AdmissionError) else str(error)
+                if reason in SKIP_REASONS:
+                    self.store.skip(pair.get('trigger_id','pair:'+pair['id']),reason,
+                                    stage='release',pair_id=pair['id'])
+                raise
+
+    def check_send_config(self,pair,instruments):
+        config=pair.get('config_at_open')
+        if config and self.settings.read()!=config:
+            raise ValueError('config_version_changed')
+        if any(i.market.key not in self.market.mapping for i in instruments):
+            raise ValueError('send_catalog_unavailable')
+        if config:
+            current=self.universe.resolve([self.market.mapping[i.market.key] for i in instruments])
+            if [i.dump() for i in current]!=[i.dump() for i in instruments]:
+                raise ValueError('send_catalog_changed')
+
+    def check_send_size(self,pair,orders,instruments):
+        config=pair.get('config_at_open')
+        if not config:
+            return
+        common_books=[Book(**b) for b in pair['last_books']]
+        # Journal books use common units; ratio validation expects native prices.
+        check_mapping_ratio(instruments,[Book([[str(dec(b.bids[0][0])*i.multiplier),'1']],
+            [[str(dec(b.asks[0][0])*i.multiplier),'1']],b.received_at,b.exchange_at) for i,b in zip(instruments,common_books)])
+        own=sum(dec(o['quantity'])*dec(o['price']) for o in orders)
+        available=max(dec(0),min(self.limits.total,dec(config['values']['max_total_open_usd']))-
+                      self.limits.exposure(self.account_cache.read())+own)
+        plan=size_plan([i.common() for i in instruments],common_books,pair['open_interests'],config['values'],available,self.clock())
+        if any(dec(o['quantity'])*i.multiplier>dec(plan['quantity']) for o,i in zip(orders,instruments)):
+            raise ValueError('send_size_changed')
 
     def fetch_opening_books(self,instruments):
         # MarketData submits the whole pair together through the existing
@@ -300,16 +338,19 @@ class Engine:
         for worker in self.workers:
             worker.close()
 
-    def can_open(self):
-        orders=self.executor.orders()
+    def can_open(self,ignore_cids=()):
         exposed=any(p.get('remote_pending') or len(set(map(dec,p.get(field,['0','0']))))>1
                     for p in self.store.pairs(active=True) if p['state'] not in ('SHADOW','SKIPPED')
                     for field in ('remaining','remote_remaining'))
-        recent=[o for o in orders if o.get('sent_ms',0)>=self.clock()*1000-3600000]
-        rejected=sum(o['state']=='REJECTED' or o.get('rejected',False) for o in recent)
-        local_ok=(self.store.meta('single_failures',0)<3 and (not recent or dec(rejected)/len(recent)<=dec('.3')))
+        recent=rejected=0
+        for o in self.executor.iter_orders(sent_since=self.clock()*1000-3600000):
+            if o['cid'] not in ignore_cids:
+                recent+=1
+                rejected+=o['state']=='REJECTED' or o.get('rejected',False)
+        local_ok=(self.store.meta('single_failures',0)<3 and (not recent or dec(rejected)/recent<=dec('.3')))
         return (local_ok and not exposed and self.risk=='RUN' and not self.stop_file.exists() and not self.stops
-                and not self.executor.pending_writes and not any(o['state'] in NONTERMINAL for o in orders)
+                and not self.executor.pending_writes and not any(o['cid'] not in ignore_cids
+                    for o in self.executor.iter_orders(states=NONTERMINAL))
                 and not self.store.meta('position_mismatch')
                 and self.store.meta('daily_loss_day')!=day(self.clock())
                 and not self.store.meta('flatten_requested')
@@ -321,8 +362,8 @@ class Engine:
         if previous is not None and previous!=self.live and self.store.pairs(active=True):
             raise ValueError('mode_change_with_live_positions')
         self.store.set_meta('live_mode',self.live)
-        known={o['cid'] for o in self.executor.orders() if o['state'] in NONTERMINAL
-               and o['instrument']['market']['exchange']=='bitget'}
+        known={o['cid'] for o in self.executor.iter_orders(states=NONTERMINAL)
+               if o['instrument']['market']['exchange']=='bitget'}
         # Even a failed account/mode check cannot strand a durable INTENT or SENT.
         self.executor.recover()
         for pair in self.store.pairs(active=True):
@@ -357,9 +398,10 @@ class Engine:
     def totals(self):
         total=daily=dec(0)
         today=day(self.clock())
-        orders=self.executor.orders()
-        entries={(o['pair_id'],o['leg']):o for o in orders if not o['reduce_only'] and o.get('vwap')}
-        for o in orders:
+        @lru_cache(maxsize=64)
+        def entries(pair_id):
+            return {o['leg']:o for o in self.executor.iter_orders(pair_id=pair_id,reduce_only=False) if o.get('vwap')}
+        for o in self.executor.iter_orders(exclude_states=('SHADOW',)):
             if o['state']=='SHADOW':
                 continue
             if o.get('accounting_pending'):
@@ -367,7 +409,7 @@ class Engine:
                 continue
             realized=-dec(o.get('fee') or 0)
             if o['reduce_only'] and dec(o['filled']):
-                entry=entries.get((o['pair_id'],o['leg']))
+                entry=entries(o['pair_id']).get(o['leg'])
                 if not entry or not o.get('vwap'):
                     self.alert('entry_accounting_unknown')
                     continue
@@ -406,7 +448,7 @@ class Engine:
         if not all(books):
             return
         positions=dict((self.store.meta('last_upnl') or {}).get('positions',{}))
-        entries={o['leg']:o for o in self.executor.orders() if o['pair_id']==pair['id'] and not o['reduce_only']}
+        entries={o['leg']:o for o in self.executor.iter_orders(pair_id=pair['id'],reduce_only=False)}
         try:
             for n,q in enumerate(self.quantities(pair)):
                 key=self.position_key(pair,n)
@@ -423,24 +465,25 @@ class Engine:
 
     def reconcile_positions(self,snapshot):
         captured=snapshot['captured_at']
-        orders=self.executor.orders()
-        if self.executor.pending_writes or any(o['state'] in NONTERMINAL or o.get('accounting_pending') for o in orders):
+        if (self.executor.pending_writes or next(self.executor.iter_orders(states=NONTERMINAL),None) is not None
+                or next(self.executor.iter_orders(accounting_pending=True),None) is not None):
             self.store.set_meta('position_match_streak',0)
             return None
         latest=max((max(float(o.get('fill_observed_at',0)),float(o.get('fill_ms') or 0)/1000,
                         float(o.get('terminal_ms') or 0)/1000)
-                    for o in orders if dec(o.get('filled',0))>0),default=0)
+                    for o in self.executor.iter_orders() if dec(o.get('filled',0))>0),default=0)
         if captured<=latest:
             # The snapshot may have started before an IOC completed. It says
             # nothing about the new position; wait for a later background read.
             return None
-        pairs=self.store.pairs()
-        for pair in pairs:
-            if pair['state'] not in ('SHADOW','SKIPPED','CLOSED'):
-                self.refresh_pair(pair)
-                self.save_remote(pair,snapshot)
-                self.clear_repair_locks(pair)
-        same=snapshot['positions']==local_positions([p for p in pairs if p['state'] not in ('SHADOW','SKIPPED')])
+        def reconciled_pairs():
+            for pair in self.store.iter_pairs(exclude_states=('SHADOW','SKIPPED')):
+                if pair['state']!='CLOSED':
+                    self.refresh_pair(pair)
+                    self.save_remote(pair,snapshot)
+                    self.clear_repair_locks(pair)
+                yield pair
+        same=snapshot['positions']==local_positions(reconciled_pairs())
         previous=self.store.meta('position_snapshot_at',0)
         if captured>previous:
             self.store.set_meta('position_snapshot_at',captured)
@@ -491,7 +534,7 @@ class Engine:
             if equity is not None:
                 baseline=self.store.meta('equity_baseline')
                 if baseline is None:
-                    if self.store.all_orders():
+                    if next(self.store.iter_orders(),None) is not None:
                         raise ValueError('equity_baseline_missing_with_history')
                     baseline=str(equity)
                     self.store.set_meta('equity_baseline',baseline)
@@ -502,12 +545,14 @@ class Engine:
                     self.store.set_meta('daily_equity',daily_base)
                 total=min(total,dec(equity)-dec(baseline))
                 daily=min(daily,dec(equity)-dec(daily_base['equity']))
-            recent=[o for o in self.store.all_orders() if o.get('sent_ms',0)>=self.clock()*1000-3600000]
-            rejected=sum(o['state']=='REJECTED' or o.get('rejected',False) for o in recent)
+            recent=rejected=0
+            for o in self.store.iter_orders(sent_since=self.clock()*1000-3600000):
+                recent+=1
+                rejected+=o['state']=='REJECTED' or o.get('rejected',False)
             settings=self.risk_settings()
             self.store.set_meta('account_loss_current',dict(daily=str(daily),total=str(total),at=self.clock()))
             self.risk=risk_decision(daily=daily,total=total,margins=self.snapshot['margins'],
-                single_failures=self.store.meta('single_failures',0),rejected=rejected,attempted=len(recent),reconciled=same,
+                single_failures=self.store.meta('single_failures',0),rejected=rejected,attempted=recent,reconciled=same,
                 daily_limit=settings['daily_loss_stop_usd'],total_limit=settings['total_loss_stop_usd'])
             if daily<=-dec(settings['daily_loss_stop_usd']):
                 self.store.set_meta('daily_loss_day',current_day)
@@ -625,7 +670,7 @@ class Engine:
         intents=[self.new_intent(pair,n,fill['quantity'],fill['limits'][n],False) for n in (0,1)]
         results=self.executor.execute_pair(intents)
         # The shared gate may have refreshed and committed the opening snapshot.
-        pair=next(p for p in self.store.pairs() if p['id']==pair['id'])
+        pair=self.store.get_pair(pair['id'])
         if not self.live:
             pair['state']='SHADOW'
             self.store.pair(pair)
@@ -652,7 +697,7 @@ class Engine:
                     if reduce else str(dec(pair['fill']['buy' if leg==0 else 'sell']['vwap'])*i.multiplier))
 
     def refresh_pair(self,pair):
-        orders=[o for o in self.executor.orders() if o['pair_id']==pair['id']]
+        orders=self.executor.orders(pair_id=pair['id'])
         entries=sorted([o for o in orders if not o['reduce_only']],key=lambda o:o['leg'])
         for field,name in (('sent_ms','send_delta_ms'),('fill_ms','fill_delta_ms')):
             values=[o.get(field) for o in entries]
@@ -717,7 +762,7 @@ class Engine:
         self.store.pair(pair)
 
     def clear_repair_locks(self,pair):
-        orders=[o for o in self.executor.orders() if o['pair_id']==pair['id']]
+        orders=self.executor.orders(pair_id=pair['id'])
         complete=not self.executor.pending_writes and not any(o['state'] in NONTERMINAL or o.get('accounting_pending') for o in orders)
         if ('remote_remaining' in pair and not pair.get('remote_pending') and complete and pair['id'] not in self._repairing
                 and dec(pair['remote_remaining'][0])==dec(pair['remote_remaining'][1])
@@ -728,7 +773,7 @@ class Engine:
                 self.stops.discard(reason,pair['id'])
 
     def needs_recovery(self,pair):
-        return (any(o['state'] in NONTERMINAL for o in self.executor.orders() if o['pair_id']==pair['id'])
+        return (next(self.executor.iter_orders(pair_id=pair['id'],states=NONTERMINAL),None) is not None
                 or pair['state']=='UNKNOWN' or len(set(self.quantities(pair)))>1
                 or pair.get('remote_pending') or (pair.get('exit_reason') and pair['state']!='CLOSED')
                 or pair.get('repair_stopped',False))
@@ -737,7 +782,7 @@ class Engine:
         self.store.event('RECOVERY_ATTEMPT',dict(pair_id=pair['id']))
         if (pair.get('exit_reason') or self.store.meta('state')=='HALTING'
                 or pair.get('repair_stopped')
-                or any(o['state'] in NONTERMINAL for o in self.executor.orders() if o['pair_id']==pair['id'])):
+                or next(self.executor.iter_orders(pair_id=pair['id'],states=NONTERMINAL),None) is not None):
             self.close_pair(pair,pair.get('exit_reason','repair_failed' if pair.get('repair_stopped') else 'unknown_order'))
         else:
             self.balance(pair)
@@ -755,7 +800,7 @@ class Engine:
             self.alert('unknown_exposure_unavailable')
             return False
         self.store.event('POSITION_RECOVERY',{'pair_id':pair['id'],'remaining':pair['remote_remaining'],
-            'unresolved':[o['cid'] for o in self.executor.orders() if o['pair_id']==pair['id'] and o['state'] in NONTERMINAL]})
+            'unresolved':[o['cid'] for o in self.executor.iter_orders(pair_id=pair['id'],states=NONTERMINAL)]})
         self.refresh_pair(pair)
         self.clear_repair_locks(pair)
         self.stops.discard('unknown_exposure_unavailable')
@@ -1024,7 +1069,7 @@ class Engine:
             sell=walk(books[0].bids,quantity=a)
             buy=walk(books[1].asks,quantity=b)
             spread=(dec(buy['vwap'])/dec(sell['vwap'])-1)*10000
-            opens=[o for o in self.store.all_orders() if o['pair_id']==pair['id'] and not o['reduce_only']]
+            opens=list(self.store.iter_orders(pair_id=pair['id'],reduce_only=False))
             if len(opens)!=2:
                 self.alert('entry_accounting_unknown')
                 return
@@ -1069,7 +1114,7 @@ class Engine:
                     self.alert('flatten_snapshot_unavailable')
                     return
                 if (not self.store.pairs(active=True) and not remote and not self.executor.pending_writes
-                        and not any(o['state'] in NONTERMINAL or o['state']=='INTENT' for o in self.executor.orders())):
+                        and next(self.executor.iter_orders(states=(*NONTERMINAL,'INTENT')),None) is None):
                     self.store.set_meta('state','HALTED')
         finally:
             if halting:
@@ -1080,10 +1125,12 @@ class Engine:
             return
         self.stops.flush()
         self.roll_daily_upnl({},self.clock())
-        pending={o['pair_id'] for o in self.executor.orders() if o['state'] in NONTERMINAL}
+        pending={o['pair_id'] for o in self.executor.iter_orders(states=NONTERMINAL)}
         self.executor.recover(startup=False)
-        for p in self.store.pairs():
-            if p['state'] in ('SHADOW','SKIPPED','CLOSED') and p['id'] not in pending:
+        active=self.store.pairs(active=True)
+        active_ids={p['id'] for p in active}
+        for p in chain(active,(self.store.get_pair(pid) for pid in pending-active_ids)):
+            if p is None:
                 continue
             self.refresh_pair(p)
             if p['id'] in pending or self.needs_recovery(p):
@@ -1096,12 +1143,12 @@ class Engine:
             return
         if self.clock()-self.last_accounting_retry>=60:
             pending_pairs=set()
-            for o in self.store.all_orders():
-                if o['state']=='TERMINAL' and o.get('accounting_pending'):
-                    self.executor.account(o)
-                    pending_pairs.add(o['pair_id'])
-            for p in self.store.pairs():
-                if p['id'] in pending_pairs:
+            for o in self.store.iter_orders(states=('TERMINAL',),accounting_pending=True):
+                self.executor.account(o)
+                pending_pairs.add(o['pair_id'])
+            for pid in pending_pairs:
+                p=self.store.get_pair(pid)
+                if p is not None:
                     self.refresh_pair(p)
             self.last_accounting_retry=self.clock()
         for p in self.store.pairs(active=True):

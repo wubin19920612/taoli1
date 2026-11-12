@@ -8,11 +8,12 @@ StartLimitIntervalSec=0
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=/home/ubuntu/wubin/taoli1
+WorkingDirectory=/home/ubuntu/wubin/crossex-exec
 ExecStart=/usr/bin/python3 -m tools.crossex_exec run --env-file /home/ubuntu/wubin/crossex-exec/crossex-exec.env
 Restart=on-failure
 RestartSec=10
-MemoryMax=80M
+# Provisional shadow cap; see README measurements and Linux acceptance boundary.
+MemoryMax=192M
 TimeoutStopSec=180
 UMask=0077
 NoNewPrivileges=true
