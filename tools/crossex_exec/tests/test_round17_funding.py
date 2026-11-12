@@ -50,8 +50,16 @@ class FundingOriginTests(ExternalFixture, unittest.TestCase):
         module = types.ModuleType('tools.crossex_exec.r15_accounting_fixture')
         module.__package__ = 'tools.crossex_exec'
         exec(compile(source, '<committed-r15-accounting>', 'exec'), module.__dict__)
+        counters = types.ModuleType('tools.crossex_exec.r15_funding_fixture')
+        counters.__package__ = 'tools.crossex_exec'
+        code = subprocess.check_output(['git', 'show',
+            'b61662d:tools/crossex_exec/funding.py'], cwd=root).decode('utf-8')
+        exec(compile(code, '<committed-r15-funding>', 'exec'), counters.__dict__)
+        module.funding_positions = counters.funding_positions
+        module.funding_continuity = counters.funding_continuity
         old = self.store.meta('external_equity_anchor')
         old.pop('funding_daily_proof', None)
+        for row in old['funding_positions'].values(): row.pop('settled_ms', None)
         self.store.set_meta('external_equity_anchor', old)
         self.store.set_meta('funding_checkpoint', None)
         self.opposite_days()

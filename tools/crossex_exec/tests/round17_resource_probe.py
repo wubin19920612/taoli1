@@ -5,9 +5,11 @@ real adapters/pagination, SQLite, ownership and program income checks. Run from
 the repo with PYTHONPATH=tools/crossex_exec/tests;. . JSON goes only to stdout.
 """
 import argparse
+import base64
 import copy
 import cProfile
 import io
+import hashlib
 import json
 import pstats
 import time
@@ -17,6 +19,7 @@ from types import SimpleNamespace
 from tools.crossex_exec.accounts import Accounts
 from tools.crossex_exec.adapters import CrossEx, Bitget
 from tools.crossex_exec.benchmark_sampling import memory
+from tools.crossex_exec.security import REDACTOR
 from test_exec import setUpModule, tearDownModule
 from test_round11_external import ExternalFixture, position, rule, SYMBOL
 
@@ -65,11 +68,16 @@ def main():
     parser.add_argument('--seconds', type=float, default=65)
     parser.add_argument('--rows', type=int, default=2000)
     parser.add_argument('--profile', action='store_true')
+    parser.add_argument('--signatures', type=int, default=0,
+                        help='synthetic signing-ring entries, no authentication')
     args = parser.parse_args()
     setUpModule()
     world = Workload()
     try:
         world.prepare(args.rows)
+        for n in range(args.signatures):
+            token = hashlib.sha512(('offline-signature-'+str(n)).encode()).digest()
+            REDACTOR.signature(token.hex() if n%2 else base64.b64encode(token[:32]).decode())
         world.refresh()
         base = world.now
         profile = cProfile.Profile()
@@ -96,6 +104,7 @@ def main():
             rss_bytes=memory()['rss_bytes'],rss_max_bytes=max(rss),ticks=ticks,account_samples=samples,
             history_requests=world.requests,rows_returned=world.returned,history_rows=args.rows,
             catalog_rules=12863,external_positions=3,program_scope=world.engine.limits.program_scope,
+            synthetic_signatures=args.signatures,
             income_verified=world.store.meta('external_income')['verified'],memory=memory())
         if args.profile:
             stream = io.StringIO()

@@ -66,8 +66,40 @@ class ResourceSafetyTests(ExternalFixture, unittest.TestCase):
         self.assertFalse(self.engine.can_open())
         with self.assertRaises(ValueError): self.anchor()
 
+    def test_unchanged_verified_ledger_is_not_serialized_and_rewritten(self):
+        self.engine.reconcile()
+        before = self.store.meta('external_verified_history')
+        with patch.object(self.store,'set_meta',wraps=self.store.set_meta) as writes:
+            self.now += 1
+            self.engine.reconcile()
+            self.assertTrue(self.store.meta('external_income')['verified'])
+            self.assertFalse(any(c.args[0]=='external_verified_history' for c in writes.call_args_list))
+        self.book.append(dict(self.book[-1],id='new-row',create_time=str(int(self.now*1000))))
+        self.now += 1
+        with patch.object(self.store,'set_meta',wraps=self.store.set_meta) as writes:
+            self.engine.reconcile()
+            self.assertTrue(self.store.meta('external_income')['verified'])
+            self.assertEqual(sum(c.args[0]=='external_verified_history' for c in writes.call_args_list),1)
+        after = self.store.meta('external_verified_history')
+        self.assertEqual({k:after['crossex_book'][k] for k in before['crossex_book']},before['crossex_book'])
+        self.assertIn('new-row',after['crossex_book'])
+
 
 class RedactionCostTests(unittest.TestCase):
+    def test_long_untrusted_string_does_not_allocate_every_substring(self):
+        import random
+        import string
+        import tracemalloc
+        redactor = Redactor()
+        for n in range(2048): redactor.signature(f'{n:064x}')
+        text = ''.join(random.Random(17).choices(string.ascii_letters,k=100000))
+        tracemalloc.start()
+        try:
+            self.assertEqual(redactor.clean(text), text)
+            self.assertLess(tracemalloc.get_traced_memory()[1], 4*1024*1024)
+        finally:
+            tracemalloc.stop()
+
     def test_digest_streams_plain_json_without_building_a_second_object_tree(self):
         import hashlib
         import json
