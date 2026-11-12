@@ -71,9 +71,12 @@ def run_maintenance(config,args):
         raise ValueError('database_not_found')
     with maintenance_lock(path) as acquired:
         if not acquired:
-            if args.command!='rebaseline':
+            if args.command in ('external-register','external-unregister'):
+                result=running_external(config,args)
+            elif args.command!='rebaseline':
                 raise ValueError('release_requires_stopped_service')
-            result=running_rebaseline(config,args.reason)
+            else:
+                result=running_rebaseline(config,args.reason)
         else:
             # Live writes are disabled even when the env is configured for live.
             cross=CrossEx(Transport('gate',Credentials(config.get('CROSSEX_API_KEY',''),config.get('CROSSEX_API_SECRET','')),
@@ -81,10 +84,58 @@ def run_maintenance(config,args):
             bitget=Bitget(Transport('bitget',Credentials(config.get('BITGET_API_KEY',''),config.get('BITGET_API_SECRET',''),
                              config.get('BITGET_API_PASSPHRASE','')),live=False),config.get('BITGET_POSITION_MODE','hedge_mode'))
             with Store(path) as store:
-                result=EquityAdmin(store,Accounts(cross,bitget)).apply(confirm=args.confirm,reason=args.reason,
-                            source='cli',release_halt=args.command=='release-halt')
+                if args.command in ('external-register','external-unregister'):
+                    from .external import ExternalAdmin
+                    from .market import RULES_URL
+                    market=MarketData(store)
+                    try:
+                        rules=market.fetch('gate',RULES_URL,priority=2)
+                        if not isinstance(rules,list):
+                            raise ValueError('external_catalog_unavailable')
+                        store.set_meta('external_catalog',dict(at=time.time(),rules=rules))
+                    finally:
+                        market.close()
+                    result=ExternalAdmin(store,Accounts(cross,bitget)).apply(**external_body(args),
+                        registered=args.command=='external-register',source='cli')
+                else:
+                    result=EquityAdmin(store,Accounts(cross,bitget)).apply(confirm=args.confirm,reason=args.reason,
+                                source='cli',release_halt=args.command=='release-halt')
         emit('maintenance_complete',action=args.command,result=result)
         return 0
+
+
+def external_body(args):
+    from .external import checked_identity
+    return dict(identity=checked_identity(dict(route=args.route,exchange_type=args.exchange_type,
+        business=args.business,symbol=args.symbol,quote=args.quote,dex=args.dex)),
+        expected_status=args.expected_status,reason=args.reason)
+
+
+def running_external(config,args):
+    from .api import parse_bind
+    token=config.get('CROSSEX_EXEC_ADMIN_TOKEN','')
+    if not token or token==config.get('CROSSEX_EXEC_API_TOKEN'):
+        raise ValueError('running_executor_admin_required')
+    addresses=parse_bind(config.get('CROSSEX_EXEC_API_BIND'))
+    address=next((a for a in addresses if a[0]=='127.0.0.1'),addresses[0])
+    conn=http.client.HTTPConnection(*address,timeout=20)
+    try:
+        action='register' if args.command=='external-register' else 'unregister'
+        conn.request('POST','/api/v1/external-positions/'+action,body=json.dumps(external_body(args)),
+            headers={'X-Api-Token':token,'Content-Type':'application/json'})
+        response=conn.getresponse()
+        raw=response.read(131073)
+        if len(raw)>131072:
+            raise ValueError('admin_response_invalid')
+        value=json.loads(raw)
+        if response.status!=200:
+            # Preserve the conflict status, never auto-fetch and retry a write.
+            from .external import REFUSALS
+            reason=value.get('error') if isinstance(value,dict) else None
+            raise ValueError(reason if reason in REFUSALS|{'external_conflict'} else 'external_write_refused')
+        return value
+    finally:
+        conn.close()
 
 
 def main(argv=None):
@@ -100,9 +151,22 @@ def main(argv=None):
             admin.add_argument('--confirm',required=True,help='Exact current halt reason')
         else:
             admin.add_argument('--confirm',required=True,action='store_true')
+    for command in ('external-register','external-unregister'):
+        admin=sub.add_parser(command)
+        admin.add_argument('--env-file',default=DEFAULT_ENV)
+        admin.add_argument('--route',default='crossex',choices=('crossex',))
+        for flag in ('exchange-type','business','symbol','quote','dex','expected-status'):
+            admin.add_argument('--'+flag,required=True)
+        admin.add_argument('--reason',default='manual_external_ownership')
+    external_list=sub.add_parser('external-list')
+    external_list.add_argument('--db',default=DEFAULT_VAR+'/crossex-exec.db')
     reporting=sub.add_parser('report')
     reporting.add_argument('--db',default=DEFAULT_VAR+'/crossex-exec.db')
     args=parser.parse_args(argv)
+    if args.command=='external-list':
+        from .management import Management
+        print(json.dumps(Management(args.db).get('external-positions'),allow_nan=False,indent=2))
+        return 0
     if args.command=='report':
         if not Path(args.db).is_file():
             parser.error('database_not_found')
@@ -111,14 +175,15 @@ def main(argv=None):
         return 0
     # A local development machine cannot satisfy POSIX ownership/mode guarantees.
     config=load_env(args.env_file)
-    if args.command in ('release-halt','rebaseline'):
+    if args.command in ('release-halt','rebaseline','external-register','external-unregister'):
         try:
             return run_maintenance(config,args)
         except ValueError as error:
             # All known refusal messages are local constants; never echo an
             # exchange response, file content, credential or arbitrary exception.
             from .equity import ADMIN_REFUSALS
-            reason=str(error) if str(error) in ADMIN_REFUSALS else 'maintenance_failed_closed'
+            from .external import REFUSALS
+            reason=str(error) if str(error) in ADMIN_REFUSALS|REFUSALS|{'external_conflict'} else 'maintenance_failed_closed'
             emit('maintenance_refused',action=args.command,reason=reason)
             return 1
     if config.get('CROSSEX_LIVE_ENABLED','0') not in ('0','1'):
@@ -155,7 +220,7 @@ def main(argv=None):
             api_service=None
             try:
                 engine.startup(tuple(filter(None,config.get('CROSSEX_BASES','').split(','))))
-                api_service=start_api(config,path,logger=emit,equity_admin=engine.rebaseline)
+                api_service=start_api(config,path,logger=emit,equity_admin=engine.rebaseline,external_admin=engine.external_admin)
                 last_status=0
                 while not shutdown and store.meta('state')!='HALTED':
                     try:
@@ -181,9 +246,11 @@ def main(argv=None):
                     time.sleep(.2)
                 if shutdown:
                     engine.flatten_all('shutdown')
-                    if store.pairs(active=True):
+                    if store.pairs(active=True) or (engine.external.records() and not (store.meta('flatten_status') or {}).get('program_flat')):
                         emit('alert',reason='shutdown_residual_exposure')
                         return 1
+                    if engine.external.records():
+                        emit('shutdown_positions',**store.meta('flatten_status'))
                 return 0
             finally:
                 if api_service is not None:

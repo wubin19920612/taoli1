@@ -151,7 +151,8 @@ class Accounts:
         # Recovery must not depend on balances, margin units, settings or fees.
         started=self.clock()
         gate,bitget=self.cross.positions(),self.bitget.positions()
-        result=dict(positions=remote_positions(gate,bitget),captured_at=started)
+        result=dict(positions=remote_positions(gate,bitget),captured_at=started,
+                    raw_positions=dict(crossex=gate,bitget=bitget))
         floating={}
         try:
             for rows,is_gate in ((gate,True),(bitget,False)):
@@ -164,10 +165,24 @@ class Accounts:
         return dict(result,upnl=str(sum(map(dec,floating.values()),dec(0))),upnl_by_position=floating)
 
     def snapshot(self):
-        a,b=self.cross.account(),self.bitget.account()
+        evidence=dict(captured_at=self.clock())
+        try:
+            return self._snapshot(evidence)
+        except Exception as error:
+            # Preserve what the venue actually returned, including missing or
+            # invalid fields, without changing the original exception type.
+            error.account_snapshot=evidence
+            raise
+
+    def _snapshot(self,evidence):
+        raw_accounts=evidence['raw_accounts']={}
+        a=raw_accounts['crossex']=self.cross.account()
+        b=raw_accounts['bitget']=self.bitget.account()
         bitget_settings(self.bitget.settings(),self.bitget.mode)
         margins=[gate_margin(a,self.cross.mode),bitget_margin(b)]
-        ga,ba=self.cross.positions(),self.bitget.positions()
+        raw_positions=evidence['raw_positions']={}
+        ga=raw_positions['crossex']=self.cross.positions()
+        ba=raw_positions['bitget']=self.bitget.positions()
         positions=remote_positions(ga,ba)
         upnl=sum((dec(r['upnl']) for r in ga),dec(0))+sum((dec(r['unrealisedPnl']) for r in ba),dec(0))
         notionals,upnl_by_position={},{}
@@ -184,7 +199,16 @@ class Accounts:
         liabilities=[{k:r[k] for k in ('coin','exchange_type','liability')} for r in a['assets'] if dec(r['liability'])>0]
         return dict(margins=[str(m) if m is not None else None for m in margins],positions=positions,upnl=str(upnl),
                     equity=str(sum(map(dec,equities.values()))),equity_by_venue=equities,
-                    notionals=notionals,liabilities=liabilities,upnl_by_position=upnl_by_position)
+                    notionals=notionals,liabilities=liabilities,upnl_by_position=upnl_by_position,
+                    raw_positions=dict(crossex=ga,bitget=ba),raw_accounts=dict(crossex=a,bitget=b))
+
+    def activity(self,start_ms,end_ms):
+        # No filters by ticker or active positions: closed external trades and
+        # unassigned cash movements are essential to completeness.
+        return dict(from_ms=start_ms,to_ms=end_ms,complete=True,
+            crossex_book=self.cross.history('account_book',start_ms,end_ms),
+            crossex_trades=self.cross.history('history_trades',start_ms,end_ms),
+            bitget_book=self.bitget.financial_records(start_ms,end_ms))
 
     def check_instruments(self,instruments):
         for i in instruments:

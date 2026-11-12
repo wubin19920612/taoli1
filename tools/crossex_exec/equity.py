@@ -3,6 +3,8 @@ from contextlib import nullcontext
 import time
 
 from tools.fill_sim.core import dec, day
+from .external import ExternalRegistry, plain
+from .external_accounting import anchor_value, read_snapshot, program_activity
 
 
 POSITION_LOCKS = frozenset(('position_mismatch','unhedged_position','repair_stopped',
@@ -14,7 +16,9 @@ ADMIN_REFUSALS = frozenset(('local_orders_pending','position_or_order_lock','loc
     'account_read_unavailable','remote_positions','remote_orders_unavailable','remote_orders',
     'account_snapshot_stale','account_liability','equity_invalid','invalid_admin_reason',
     'equity_revision_changed','database_not_found','release_requires_stopped_service',
-    'running_executor_admin_required','admin_response_invalid','running_rebaseline_refused'))
+    'running_executor_admin_required','admin_response_invalid','running_rebaseline_refused',
+    'external_income_unverifiable','external_identity_unverifiable','external_catalog_unavailable',
+    'margin_open_limit'))
 
 
 def halt_reason(store):
@@ -65,11 +69,13 @@ class EquityAdmin:
 
     def read_flat_accounts(self):
         started=self.clock()
+        registry=ExternalRegistry(self.store,self.clock)
         try:
-            snapshot=self.accounts.snapshot()
+            snapshot=(read_snapshot(self.accounts,self.store,self.clock) if registry.records() else self.accounts.snapshot())
         except Exception:
             raise ValueError('account_read_unavailable') from None
-        if not isinstance(snapshot.get('positions'),dict) or snapshot['positions']:
+        projection=registry.split(snapshot) if registry.records() else snapshot
+        if not isinstance(projection.get('positions'),dict) or projection['positions']:
             raise ValueError('remote_positions')
         for venue in (self.accounts.cross,self.accounts.bitget):
             try:
@@ -82,9 +88,18 @@ class EquityAdmin:
             raise ValueError('account_snapshot_stale')
         if not isinstance(snapshot.get('liabilities'),list) or snapshot['liabilities']:
             raise ValueError('account_liability')
+        if registry.records() and (len(snapshot.get('margins',()))!=2
+                or any(m is None or dec(m)<3 for m in snapshot['margins'])):
+            raise ValueError('margin_open_limit')
+        if registry.records():
+            try:
+                snapshot['program_funding_at_epoch']=str(program_activity(self.store,snapshot['activity'],
+                    snapshot.get('accounting_at',started)))
+            except (ValueError,KeyError,TypeError,ArithmeticError):
+                raise ValueError('external_income_unverifiable') from None
         try:
             equities={v:str(dec(snapshot['equity_by_venue'][v])) for v in ('crossex','bitget')}
-            if any(dec(v)<=0 for v in equities.values()) or dec(snapshot['upnl'])!=0:
+            if any(dec(v)<=0 for v in equities.values()) or dec(projection['upnl'])!=0:
                 raise ValueError('invalid')
         except (ValueError,TypeError,KeyError,ArithmeticError):
             raise ValueError('equity_invalid') from None
@@ -150,6 +165,18 @@ class EquityAdmin:
                         locks.pop(key,None)
                 audit=dict(old=old,new=new,at=self.clock(),captured_at=captured,reason=reason,
                            source=source,halt_reason=cause,revision=revision+1)
+                registry=ExternalRegistry(store,self.clock)
+                external_projection=registry.split(snapshot) if registry.records() else None
+                if external_projection is not None:
+                    # Audit the full account and exact excluded positions. These
+                    # operations reset an explicit epoch, never erase ownership.
+                    audit['external_snapshot']=plain(external_projection)
+                    new['external_equity_anchor']=anchor_value(store,snapshot,external_projection,captured)
+                    new['external_equity_anchor']['program_funding_offset']=snapshot['program_funding_at_epoch']
+                    new['program_daily_upnl']=dict(day=day(self.clock()),upnl='0',positions={},captured_at=captured)
+                    new['program_last_upnl']=dict(upnl='0',positions={},captured_at=captured)
+                    new['daily_upnl']=dict(day=day(self.clock()),upnl=str(snapshot['upnl']),
+                        positions=snapshot['upnl_by_position'],captured_at=captured)
                 if not 0<=self.clock()-captured<=10:
                     raise ValueError('account_snapshot_stale')
                 with store.transaction():
@@ -157,7 +184,8 @@ class EquityAdmin:
                         store.set_meta(key,value)
                     store.set_meta('account_equity_current',equities)
                     store.set_meta('account_loss_current',dict(daily='0',total='0',at=self.clock()))
-                    store.set_meta('last_upnl',dict(upnl='0',positions={},captured_at=captured))
+                    store.set_meta('last_upnl',dict(upnl=str(snapshot['upnl']) if external_projection is not None else '0',
+                        positions=snapshot['upnl_by_position'] if external_projection is not None else {},captured_at=captured))
                     store.set_meta('equity_baseline_revision',revision+1)
                     if release_halt:
                         store.set_meta('state','RUNNING')

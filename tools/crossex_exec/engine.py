@@ -19,6 +19,8 @@ from .admission import OpeningLimits, AdmissionError, BOOK_RETRIES, book_skew_ms
 from .settings import Settings, risk_settings
 from .sizing import size_plan
 from .universe import Universe, check_mapping_ratio
+from .external import ExternalRegistry, ExternalAdmin, ExternalUnverifiable, plain
+from .external_accounting import ExternalAccounting, read_snapshot
 
 
 ACCOUNT_RECOVERY_SNAPSHOTS = 3
@@ -54,6 +56,8 @@ class Engine:
         self.opening_limits=OpeningLimits(config)
         self.settings=Settings(store,clock)
         self.universe=Universe(store,clock)
+        self.external=ExternalRegistry(store,clock)
+        self.external_accounting=ExternalAccounting(store,self.external,clock)
         self.requested_markets=set()
         self.next_catalog=self.next_fees=0
         self.fee_keys=set()
@@ -103,6 +107,10 @@ class Engine:
         return rates
 
     def check_order(self,intent):
+        self.external.check_order(intent)
+        if not intent['reduce_only'] and self.external.records():
+            self.require_external_income()
+            self.external.split(self.account_cache.read())
         self.limits.check_order(intent)
 
     def check_pair(self,intents):
@@ -193,6 +201,8 @@ class Engine:
                 raise
 
     def check_send_config(self,pair,instruments):
+        for i in instruments:
+            self.external.check_order(dict(instrument=i.dump()))
         config=pair.get('config_at_open')
         if config and self.settings.read()!=config:
             raise ValueError('config_version_changed')
@@ -269,21 +279,40 @@ class Engine:
         started=self.clock()
         revision=self.store.meta('equity_baseline_revision',0)
         try:
-            snapshot=self.accounts.snapshot()
+            snapshot=self.read_account_snapshot()
             with self._lifecycle_lock:
                 if not self._closed:
                     if self._equity_admin_active or revision!=self.store.meta('equity_baseline_revision',0):
                         self.store.event('ACCOUNT_REFRESH_SUPERSEDED',dict(started_at=started,revision=revision))
                         return
+                    if self.external.records():
+                        # A certificate belongs to one account observation. The
+                        # coordinator must recompute PnL before this new cache
+                        # can admit either leg, even within the 10-second TTL.
+                        self.risk='STOP'
+                        self.last_reconcile=0
+                        self.store.set_meta('external_income',dict(verified=False,reason='external_refresh_pending',at=started))
+                        self.store.set_meta('account_risk_snapshot',plain(dict(snapshot,captured_at=started)))
                     self.account_cache.publish(snapshot,started)
                     self.limits.check_equity(snapshot)
                     self.roll_daily_upnl(snapshot,started)
                     self.observe_account_snapshot(snapshot,started)
-        except Exception:
+        except Exception as error:
             with self._lifecycle_lock:
                 if not self._closed:
                     self._account_fresh_streak=self._liability_clear_streak=0
+                    self.preserve_account_failure(error)
                     self.store.event('ACCOUNT_REFRESH_FAILED')
+
+    def preserve_account_failure(self,error):
+        evidence=getattr(error,'account_snapshot',None)
+        if evidence is not None:
+            self.store.set_meta('account_risk_snapshot',plain(evidence))
+            if self.external.records():
+                self.risk='STOP'
+                self.store.set_meta('external_failed_snapshot',plain(evidence))
+                self.store.set_meta('external_income',dict(verified=False,reason='external_identity_unverifiable',at=self.clock()))
+                self.alert('external_identity_unverifiable')
 
     def observe_account_snapshot(self,snapshot,captured_at):
         """Only distinct, consecutive, fully fresh reads recover their own lock."""
@@ -319,6 +348,27 @@ class Engine:
         with self._coordinator_lock:
             return EquityAdmin(self.store,self.accounts,engine=self,clock=self.clock).apply(
                 confirm=confirm,reason=reason,source=source,release_halt=release_halt)
+
+    def external_admin(self,**kwargs):
+        with self._coordinator_lock:
+            with self.executor.lock,self.store.lock:
+                self._equity_admin_active=True
+            try:
+                return ExternalAdmin(self.store,self.accounts,engine=self,clock=self.clock).apply(**kwargs)
+            finally:
+                with self.store.lock:
+                    self._equity_admin_active=False
+
+    def read_account_snapshot(self):
+        if not self.external.records():
+            return self.accounts.snapshot()
+        return read_snapshot(self.accounts,self.store,self.clock)
+
+    def require_external_income(self):
+        value=self.store.meta('external_income',{})
+        if (value.get('verified') is not True or value.get('revision')!=self.store.meta('external_attribution_revision',0)
+                or value.get('day')!=day(self.clock()) or not 0<=self.clock()-value.get('captured_at',0)<=10):
+            raise ExternalUnverifiable('external_income_unverifiable')
 
     def refresh_reference(self):
         now=self.clock()
@@ -390,6 +440,11 @@ class Engine:
             worker.close()
 
     def can_open(self,ignore_cids=()):
+        try:
+            if self.external.records():
+                self.require_external_income()
+        except (ValueError,TypeError,KeyError):
+            return False
         exposed=any(p.get('remote_pending') or len(set(map(dec,p.get(field,['0','0']))))>1
                     for p in self.store.pairs(active=True) if p['state'] not in ('SHADOW','SKIPPED')
                     for field in ('remaining','remote_remaining'))
@@ -446,7 +501,7 @@ class Engine:
         if self.store.meta('state') not in ('HALTING','HALTED'):
             self.start_background(bases)
 
-    def totals(self):
+    def totals(self,*,program=True):
         total=daily=dec(0)
         today=day(self.clock())
         @lru_cache(maxsize=64)
@@ -469,14 +524,36 @@ class Engine:
             if day((o.get('fill_ms') or o['created_at']*1000)/1000)==today:
                 daily+=realized
         floating=dec(self.snapshot['upnl']) if self.snapshot else dec(0)
+        program_floating=floating
+        external=bool(self.external.records()) and program
+        if external:
+            projection=self.external.split(self.snapshot)
+            program_floating=dec(projection['upnl'])
+            daily+=dec(self.store.meta('external_income',{})['program_funding'])
         offset=self.store.meta('risk_pnl_baseline',{})
         total-=dec(offset.get('total',0))
         if offset.get('day')==today:
             daily-=dec(offset.get('daily',0))
         baseline=self.roll_daily_upnl(self.snapshot or {},(self.snapshot or {}).get('captured_at',self.clock()))
+        if external:
+            baseline=self.roll_program_upnl(projection,self.snapshot['captured_at'])
         if not baseline or baseline['day']!=today:
             raise DailyBaselinePending('daily_baseline_pending')
-        return daily+floating-dec(baseline['upnl']),total+floating
+        return daily+program_floating-dec(baseline['upnl']),total+floating
+
+    def roll_program_upnl(self,projection,captured):
+        today=day(self.clock())
+        baseline=self.store.meta('program_daily_upnl')
+        last=self.store.meta('program_last_upnl')
+        observation=dict(upnl=projection['upnl'],positions=projection['upnl_by_position'],captured_at=captured)
+        if not baseline or baseline['day']!=today:
+            if not last:
+                raise ExternalUnverifiable('external_baseline_unverifiable')
+            baseline=dict(last,day=today)
+            self.store.set_meta('program_daily_upnl',baseline)
+        if not last or captured>=last['captured_at']:
+            self.store.set_meta('program_last_upnl',observation)
+        return baseline
 
     def roll_daily_upnl(self,snapshot,captured_at):
         with self._lifecycle_lock:
@@ -517,8 +594,17 @@ class Engine:
         except (KeyError,ValueError,TypeError):
             return
         self.roll_daily_upnl(dict(upnl=str(sum(map(dec,positions.values()),dec(0))),upnl_by_position=positions),now)
+        if self.external.records():
+            program={k:v for k,v in positions.items() if not self.external.forbidden(*k.split('|')[:2])}
+            try:
+                self.roll_program_upnl(dict(upnl=str(sum(map(dec,program.values()),dec(0))),upnl_by_position=program),now)
+            except ExternalUnverifiable:
+                # Missing administrative epochs block opening, never reduction.
+                self.alert('external_income_unverifiable')
 
     def reconcile_positions(self,snapshot):
+        if self.external.records():
+            snapshot=self.external.split(snapshot)
         captured=snapshot['captured_at']
         if (self.executor.pending_writes or next(self.executor.iter_orders(states=NONTERMINAL),None) is not None
                 or next(self.executor.iter_orders(accounting_pending=True),None) is not None):
@@ -566,9 +652,11 @@ class Engine:
                 self.snapshot=self.account_cache.read()
             else:
                 started=self.clock()
-                self.snapshot=self.accounts.snapshot()
+                self.snapshot=self.read_account_snapshot()
                 self.account_cache.publish(self.snapshot,started)
                 self.snapshot=self.account_cache.read()
+            if self.external.records():
+                self.store.set_meta('account_risk_snapshot',plain(self.snapshot))
             equity_halt=self.limits.check_equity(self.snapshot)
             self.roll_daily_upnl(self.snapshot,self.snapshot['captured_at'])
             self.observe_account_snapshot(self.snapshot,self.snapshot['captured_at'])
@@ -579,6 +667,16 @@ class Engine:
                 return
             same=self.reconcile_positions(self.snapshot)
             self.last_reconcile=self.clock()
+            income=None
+            if self.external.records():
+                projection=self.external.split(self.snapshot)
+                income=self.external_accounting.evaluate(self.snapshot,projection)
+                self.store.set_meta('program_projection',plain({k:projection[k] for k in
+                    ('positions','upnl','upnl_by_position','external_positions','captured_at')}))
+                self.stops.recovered('external_identity_unverifiable','EXTERNAL_IDENTITY_RECOVERED',
+                    dict(captured_at=self.snapshot['captured_at']))
+                self.stops.recovered('external_income_unverifiable','EXTERNAL_INCOME_RECOVERED',
+                    dict(captured_at=self.snapshot['captured_at']))
             daily,total=self.totals()
             current_day=day(self.clock())
             if self.store.meta('daily_loss_day') not in (None,current_day):
@@ -600,7 +698,7 @@ class Engine:
                     daily_base=dict(day=current_day,equity=str(equity))
                     self.store.set_meta('daily_equity',daily_base)
                 total=min(total,dec(equity)-dec(baseline))
-                daily=min(daily,dec(equity)-dec(daily_base['equity']))
+                daily=min(daily,dec(income['equity_daily']) if income else dec(equity)-dec(daily_base['equity']))
             recent=rejected=0
             for o in self.store.iter_orders(sent_since=self.clock()*1000-3600000):
                 recent+=1
@@ -624,10 +722,40 @@ class Engine:
                 self.flatten_all('circuit_breaker')
         except DailyBaselinePending:
             self.risk='STOP'
-        except Exception:
+        except ExternalUnverifiable as error:
+            self.risk='STOP'
+            reason='external_identity_unverifiable' if str(error) in ('external_identity_unverifiable','external_catalog_unavailable') else 'external_income_unverifiable'
+            self.store.set_meta('external_income',dict(verified=False,reason=str(error),at=self.clock()))
+            self.store.set_meta('external_failed_snapshot',plain(self.snapshot))
+            self.alert(reason)
+            self.enforce_account_protection()
+        except Exception as error:
             self.risk='STOP'
             self._account_fresh_streak=self._liability_clear_streak=0
+            self.preserve_account_failure(error)
             self.alert('account_snapshot_unavailable')
+            self.enforce_account_protection()
+
+    def enforce_account_protection(self):
+        """Attribution/read failure must never suppress full-account hard exits."""
+        snapshot=self.snapshot or {}
+        if not snapshot:
+            return
+        equity_halt=self.limits.check_equity(snapshot)
+        baseline=self.store.meta('equity_baseline')
+        loss=dec(snapshot['equity'])-dec(baseline) if baseline is not None and snapshot.get('equity') is not None else dec(0)
+        try:
+            _,total=self.totals(program=False)
+            loss=min(loss,total)
+        except (ValueError,KeyError,TypeError):
+            pass
+        total_halt=loss<=-dec(self.risk_settings()['total_loss_stop_usd'])
+        margin=any(m is not None and dec(m)<2 for m in snapshot.get('margins',()))
+        if total_halt and self.store.meta('state') not in ('HALTING','HALTED'):
+            self.store.set_meta('state','HALTING')
+            self.store.set_meta('halt_reason','total_loss')
+        if equity_halt or total_halt or margin:
+            self.flatten_all('circuit_breaker')
 
     def risk_settings(self):
         return risk_settings(self.store)
@@ -686,6 +814,8 @@ class Engine:
         try:
             markets=[Market.from_payload(payload[k]) for k in ('buy_market_key','sell_market_key')]
             instruments=[self.market.mapping[m.key] for m in markets]
+            for i in instruments:
+                self.external.check_order(dict(instrument=i.dump()))
             config=self.settings.read()
             values=config['values']
             opening_limits=self.opening_limits.restricted(values)
@@ -724,7 +854,8 @@ class Engine:
         except Exception as error:
             reason=(error.reason if isinstance(error,AdmissionError) else str(error)
                     if isinstance(error,ValueError) and str(error) in SKIP_REASONS+(
-                        'baseline_warming','structural_spread','pair_cooldown','mapping_unconfirmed','excluded') else 'review_failed_closed')
+                        'baseline_warming','structural_spread','pair_cooldown','mapping_unconfirmed','excluded',
+                        'external_contract_forbidden') else 'review_failed_closed')
             self.store.skip(identity,reason,stage='review')
             return
         pair=dict(id=uuid.uuid4().hex,trigger_id=identity,base=base,state='OPENING',opened_at=self.clock(),
@@ -1175,15 +1306,24 @@ class Engine:
                     self.close_pair(p,reason)
                 except Exception:
                     self.alert('flatten_retry_pending')
-            if self.store.meta('state')=='HALTING':
-                # A process must not exit successfully with residual or unknown exposure.
+            if self.store.meta('state')=='HALTING' or self.external.records():
+                # A process must not exit successfully with residual or unknown program exposure.
                 try:
-                    remote=self.accounts.position_snapshot()['positions']
+                    raw=self.accounts.position_snapshot()
+                    projection=self.external.split(raw,pnl=False)
+                    remote=projection['positions']
+                    program_flat=(not self.store.pairs(active=True) and not remote and not self.executor.pending_writes
+                        and next(self.executor.iter_orders(states=(*NONTERMINAL,'INTENT')),None) is None
+                        and next(self.executor.iter_orders(accounting_pending=True),None) is None)
+                    status=dict(program_flat=program_flat,account_flat=program_flat and not bool(raw['positions']),
+                        external_positions=plain(projection['external_positions']),captured_at=self.clock())
+                    self.store.set_meta('flatten_status',status)
+                    if program_flat and projection['external_positions']:
+                        self.store.event('PROGRAM_FLATTENED_EXTERNAL_REMAINS',status)
                 except Exception:
                     self.alert('flatten_snapshot_unavailable')
                     return
-                if (not self.store.pairs(active=True) and not remote and not self.executor.pending_writes
-                        and next(self.executor.iter_orders(states=(*NONTERMINAL,'INTENT')),None) is None):
+                if program_flat and self.store.meta('state')=='HALTING':
                     self.store.set_meta('state','HALTED')
         finally:
             if halting:

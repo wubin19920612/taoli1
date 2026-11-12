@@ -120,6 +120,25 @@ class CrossEx:
     def account(self):
         return self.http.request('GET','/api/v4/crossex/accounts',group='account')
 
+    def history(self,kind,start_ms,end_ms):
+        if kind not in ('account_book','history_trades') or not 0<=start_ms<=end_ms:
+            raise ValueError('invalid_history_request')
+        rows,seen=[],set()
+        key='id' if kind=='account_book' else 'transaction_id'
+        for page in range(1,21):
+            batch=self.http.request('GET','/api/v4/crossex/'+kind,
+                {'from':start_ms,'to':end_ms,'page':page,'limit':1000},group='account')
+            if not isinstance(batch,list) or len(batch)>1000:
+                raise APIError('invalid_response')
+            for row in batch:
+                if not isinstance(row,dict) or not row.get(key) or row[key] in seen:
+                    raise APIError('invalid_response')
+                seen.add(row[key])
+            rows.extend(batch)
+            if len(batch)<1000:
+                return rows
+        raise APIError('invalid_response')
+
     def positions(self):
         return self.http.request('GET','/api/v4/crossex/positions',group='position')
 
@@ -198,6 +217,13 @@ class Bitget:
 
     def account(self):
         return self.http.request('GET','/api/v3/account/assets',group='account')
+
+    def financial_records(self,start_ms,end_ms):
+        if not 0<=start_ms<=end_ms or end_ms-start_ms>30*86400000:
+            raise ValueError('invalid_history_request')
+        # Do not filter funding only: unknown cash flows must remain visible.
+        return self.paged('/api/v3/account/financial-records',dict(category='USDT-FUTURES',
+            startTime=str(start_ms),endTime=str(end_ms)))
 
     def settings(self):
         return self.http.request('GET','/api/v3/account/settings',group='account')

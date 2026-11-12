@@ -11,7 +11,7 @@ from .universe import Universe
 from .public_store import PUBLIC_KEYS, public_read
 
 
-READS = {'config', 'config/audit', 'universe', 'mappings'}
+READS = {'config', 'config/audit', 'universe', 'mappings', 'external-positions'}
 
 
 class WriteConflict(ValueError):
@@ -71,6 +71,8 @@ def write_route(method, path):
     if method == 'PUT' and path == '/api/v1/config':
         return ('config',)
     if method == 'POST':
+        if path in ('/api/v1/external-positions/register','/api/v1/external-positions/unregister'):
+            return ('external-positions',path.rsplit('/',1)[1])
         if path == '/api/v1/equity/rebaseline':
             return ('equity','rebaseline')
         match = re.fullmatch('/api/v1/universe/([A-Z0-9]{1,40})/(exclude|unexclude|classify)', path)
@@ -101,15 +103,20 @@ class ReadStore:
 
 
 class Management:
-    def __init__(self, path, equity_admin=None):
+    def __init__(self, path, equity_admin=None, external_admin=None):
         self.path = Path(path)
         self.equity_admin=equity_admin
+        self.external_admin=external_admin
 
     def get(self, endpoint):
         budget = Budget()
         with readonly(self.path, budget) as conn:
             conn.execute('BEGIN')
             store = ReadStore(conn, budget)
+            if endpoint == 'external-positions':
+                from .external import ExternalRegistry
+                return dict(ExternalRegistry(store).describe(),income=store.meta('external_income'),
+                    flatten_status=store.meta('flatten_status'),projection=store.meta('program_projection'))
             if endpoint == 'config':
                 return Settings(store).describe()
             if endpoint == 'config/audit':
@@ -128,6 +135,14 @@ class Management:
             raise OSError('database_unavailable')
         if not isinstance(body, dict):
             raise ValueError('invalid_body')
+        if route[0]=='external-positions':
+            from .external import checked_identity
+            if set(body)!={'identity','expected_status','reason'} or route[1] not in ('register','unregister'):
+                raise ValueError('invalid_body')
+            checked_identity(body['identity'])
+            if self.external_admin is None:
+                raise OSError('running_executor_required')
+            return self.external_admin(**body,registered=route[1]=='register',source='admin_api')
         if route==('equity','rebaseline'):
             reason=body.get('reason')
             if (set(body)!={'confirm','reason'} or body['confirm'] is not True

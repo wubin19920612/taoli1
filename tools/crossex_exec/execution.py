@@ -10,6 +10,7 @@ from .adapters import validate_intent
 from .transport import APIError
 from .stops import StopLocks
 from .storage import matches_order
+from .external import ExternalRegistry
 
 
 NONTERMINAL = frozenset(('SENT', 'ACK', 'UNKNOWN'))
@@ -18,6 +19,7 @@ NONTERMINAL = frozenset(('SENT', 'ACK', 'UNKNOWN'))
 class Executor:
     def __init__(self, store, adapters, *, live=False, poll_interval=.2, confirm_timeout=10, can_open=lambda: True, check_order=None, check_pair=None, check_release=None, alert=None, clock=time.time):
         self.store,self.adapters,self.live=store,adapters,live
+        self.external=ExternalRegistry(store,clock)
         self.poll_interval,self.confirm_timeout=poll_interval,confirm_timeout
         self.can_open=can_open
         self.check_order=check_order
@@ -89,6 +91,7 @@ class Executor:
         with self.lock:
             fresh=[]
             for i in intents:
+                self.external.check_order(i)
                 validate_intent(i)
                 if self.order(i['cid']) is None:
                     fresh.append(dict(i,state='INTENT',filled='0',oid=None,accounting_pending=True))
@@ -116,6 +119,8 @@ class Executor:
                 # Management writers cannot split this batch between versions.
                 # Match save/flush/recover: executor lock precedes journal lock.
                 with self.lock, self.store.lock:
+                    for i in intents:
+                        self.external.check_order(i)
                     if self.check_order:
                         for i in intents:
                             self.check_order(i)
@@ -148,6 +153,7 @@ class Executor:
             return [job.result() if job else i for i,job in zip(dispatched,jobs)]
 
     def prepare(self,i):
+        self.external.check_order(i)
         validate_intent(i)
         with self.lock:
             existing=self.order(i['cid'])
@@ -190,6 +196,7 @@ class Executor:
                     i.update(send_gate.sent_rows[i['cid']])
                     return
                 else:
+                    self.external.check_order(i)
                     if self.check_order:
                         self.check_order(i)
                     if not i['reduce_only']:

@@ -217,6 +217,12 @@ class MarketData:
             rules=self.fetch('gate',RULES_URL,priority=2)
         except Exception:
             rules=None
+        if isinstance(rules,list):
+            # Preserve the full raw CrossEx directory, including non-tradable
+            # Hyperliquid DEX contracts used only for external ownership.
+            with self.store.lock:
+                if not self.closed:
+                    self.store.set_meta('external_catalog',dict(at=self.clock(),rules=rules))
         mapped=dict(self.mapping)
         errors={}
         for ex,url in CATALOGS.items():

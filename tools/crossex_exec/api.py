@@ -179,6 +179,10 @@ class _Handler(BaseHTTPRequestHandler):
                     except WriteConflict as error:
                         return self.reply(409, service.clean(error.response))
                     except ValueError as error:
+                        if route[0]=='external-positions':
+                            from .external import REFUSALS
+                            if str(error) in REFUSALS:
+                                return self.reply(409,{'error':str(error)})
                         if route==('equity','rebaseline'):
                             from .equity import ADMIN_REFUSALS
                             if str(error) in ADMIN_REFUSALS:
@@ -201,14 +205,14 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 class APIService:
-    def __init__(self, config, path, logger, equity_admin=None):
+    def __init__(self, config, path, logger, equity_admin=None, external_admin=None):
         self.token = config['CROSSEX_EXEC_API_TOKEN'].encode('utf-8')
         self.admin_token = config.get('CROSSEX_EXEC_ADMIN_TOKEN', '').encode('utf-8')
         if self.admin_token and hmac.compare_digest(self.admin_token, self.token):
             raise ValueError('admin_token_must_differ')
         self.bind = parse_bind(config.get('CROSSEX_EXEC_API_BIND'))
         self.view = JournalView(path, config)
-        self.management = Management(path,equity_admin)
+        self.management = Management(path,equity_admin,external_admin)
         self.logger = logger
         self.redactor = Redactor()
         self.redactor.register(*(v for k, v in config.items()
@@ -286,14 +290,14 @@ class APIService:
             self.log('api_close_failed')
 
 
-def start_api(config, path, *, logger=None, equity_admin=None):
+def start_api(config, path, *, logger=None, equity_admin=None, external_admin=None):
     token = config.get('CROSSEX_EXEC_API_TOKEN', '')
     if not token.strip():
         _log(logger, 'api_disabled_no_token')
         return None
     service = None
     try:
-        service = APIService(config, path, logger,equity_admin)
+        service = APIService(config, path, logger,equity_admin,external_admin)
         service.start()
         return service
     except BaseException:
