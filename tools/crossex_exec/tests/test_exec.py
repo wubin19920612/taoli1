@@ -49,7 +49,7 @@ def tearDownModule():
 def instrument(ex='binance'):
     m = Market(ex, 'future', 'BTCUSDT')
     return Instrument(m, Spec('BTC', 'USDT', '1', '.001', '.001', '5'),
-                      'BTCUSDT' if ex == 'bitget' else 'BINANCE_FUTURE_BTC_USDT', '.01')
+                      'BTCUSDT' if ex == 'bitget' else 'BINANCE_FUTURE_BTC_USDT', '.01', category='crypto')
 
 
 def intent(cid='ce-test', ex='binance', side='buy', reduce=False, quantity='1'):
