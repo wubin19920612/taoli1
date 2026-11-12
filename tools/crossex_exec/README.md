@@ -6,6 +6,8 @@
 
 第六轮已完成本地验收：增加持久化常态价差基准、超额开平仓、每小时资金费 ×2h、亏损退出冷却及只读观测字段。执行器 229 项、fill-sim 158 项测试通过；三个原种子各 2448 回合保留全部严格不变量，并实际覆盖基准准入和冷却。当前规则与证据见交接文档“第六轮交付”。仅核实官方公开文档，没有请求真实行情或账户接口，没有部署。
 
+第七轮增加两腿盘口同时性与 v1“乌龙指”开仓准入，以及时间差、放弃原因计数。**整体验收尚未完成**：41 项新增测试通过，执行器全套 270 项有 8 项因旧模拟器 40bp 基准夹具被新上限 10bp 拒绝而失败；fill-sim 158 项通过。用户禁止修改旧断言，现保留 `baseline_at_open == 40`，等待允许将该夹具和对应期望改为 0；未绕过新准入条件。原始证据及下一步见交接文档“第七轮交付”。
+
 ## 入口
 
 在仓库根目录运行：
@@ -29,6 +31,7 @@ python3 -m tools.crossex_exec run --env-file /home/ubuntu/wubin/crossex-exec/cro
 | 文件 | 责任 |
 |---|---|
 | `market.py` | 公开目录、精确映射、50 档盘口、成交额、当前/24h 历史资金费 |
+| `admission.py` | 第七轮开仓专用时间/资金费/平坦基准/单所异常门槛与不可放松的配置 |
 | `baseline.py` | 六所批量买卖报价解析、6h 中位数/MAD、预热/结构性拉黑、无方向组合键和冷却条件 |
 | `policy.py` | Decimal 步长公倍数、100 USDT 复核、15bp 门槛、退出与熔断规则 |
 | `adapters.py` / `transport.py` | 两家签名、IOC、查单、撤单、分页成交、账户只读接口、限频与总超时 |
@@ -59,6 +62,16 @@ python3 -m tools.crossex_exec run --env-file /home/ubuntu/wubin/crossex-exec/cro
 | `CROSSEX_MAX_LEG_USD` | `150`；只可调低，必须为正数 |
 | `CROSSEX_MAX_TOTAL_USD` | `600`；只可调低，两腿总和，不取对冲净额 |
 | `CROSSEX_MAX_EQUITY_DROP_USD` | `150`；只可调低，任一账户独立触发 |
+| `CROSSEX_MAX_BOOK_SKEW_MS` | `300`；两腿交易所盘口时间戳绝对差，毫秒，只可调低 |
+| `CROSSEX_MAX_BOOK_AGE_SECONDS` | `1`；每腿交易所时间及收到时间最大年龄，秒，只可调低 |
+| `CROSSEX_MAX_FUNDING_DIFF_BPS_H` | `0.5`；两腿每小时资金费率差的绝对值，bp/h，只可调低 |
+| `CROSSEX_MAX_FUNDING_RATE_8H` | `0.0005`；每腿折合 8 小时资金费率绝对值，比例（0.05%），只可调低 |
+| `CROSSEX_MAX_BASELINE_BPS` | `10`；方向基准绝对值，bp，只可调低 |
+| `CROSSEX_MAX_BASELINE_MAD_BPS` | `10`；方向基准 MAD，bp，只可调低 |
+| `CROSSEX_MAX_NORMAL_DEVIATION_BPS` | `10`；正常腿及独立参考所中间价对 M 的最大偏离，bp，只可调低 |
+| `CROSSEX_MAX_REFERENCE_AGE_SECONDS` | `90`；最新批量报价轮次的最大年龄，秒，只可调低 |
+| `CROSSEX_MIN_OUTLIER_SHARE` | `0.7`；异常腿偏离至少占开仓超额的比例，只可在 `[0.7,1]` 内调高 |
+| `CROSSEX_MIN_VENUES` | `3`；同币有效行情所数，只可设为 3–6 的整数，必须包含两腿及至少一家其他所 |
 | `CROSSEX_BASES` | 明确的基础币白名单，以逗号分隔；空表示不开新仓、不拉合约费率，已有仓位仍管理 |
 | `TAOLI_BASE_URL` | `http://127.0.0.1:8000`，按实际服务端口配置 |
 | `TAOLI_API_TOKEN` | 空；如 taoli1 需要认证则由用户在私有文件中配置 |
@@ -69,6 +82,8 @@ python3 -m tools.crossex_exec run --env-file /home/ubuntu/wubin/crossex-exec/cro
 | `FILL_SIM_DB` | 空；可选 fill-sim 主数据库路径，同时只读检索其同目录日期归档；未配置或无法匹配时 `sim=null` |
 
 应用不修改账户模式、杠杆、资产模式或权限。CrossEx 必须为 `CROSS_EXCHANGE`，各目标合约杠杆必须已经是 3；Bitget 必须为 `accountMode=unified`、`assetMode=multi_assets` 和配置的 `holdMode`。逐合约 `symbolConfigList` 必须为 crossed、3 倍杠杆。模式检查失败直接拒绝启动，不用空仓推断模式。旧 `GATE_API_*` 配置会被拒绝。
+
+第七轮所有 `MAX_*` 上限来自 `admission.py` 常量；配置只接受有限、非负且不高于默认值的数字，调松直接拒绝启动。两个 `MIN_*` 下限也由常量约束，不能调低；负数、NaN/Inf、无效文字均拒绝。配置仍只来自用户指定私有文件。重拉次数固定为一次，不提供调大或跳过校验的开关。
 
 ## 只读数据接口
 
@@ -93,6 +108,7 @@ python3 -m tools.crossex_exec run --env-file /home/ubuntu/wubin/crossex-exec/cro
 - `today/total` 为已平仓交易的汇总，今日按 UTC 关闭日期划分；不包含未平仓费用和浮盈亏，不替代执行器的日亏/累计亏风控计算。任一成员记账未知时，相应合计及胜数为 `null`。跨资金费结算尚未确认的资金费和净收益保持未知；确认未跨期的资金费是 0。
 - `entry_vwap/exit_vwap` 来自真实成交，平仓多笔按数量加权；不使用意图限价。`net_bps` 分母为多头开仓实际名义额；两腿时间差来自开仓订单 `sent_ms/fill_ms`。
 - `baseline_bps/excess_bps/funding_cost_bps` 是开仓复核时的估算快照，关闭后继续保留；旧记录为 null。summary 增加 `baseline_ready_pairs/structural_spread_pairs/cooldown_pairs`，按无方向组合计数，详见接口约定。
+- 第七轮 positions/trades 增加 `open_book_skew_ms/close_book_skew_ms`，旧记录为 null；summary 增加持久化 `opening_skip_counts`，六类原因按机会 ID 各计一次，重拉成功不计数。字段含义及平仓缓存盘口的时间差口径见接口约定。
 - `caps.total_open_usd` 是本地剩余量 × 开仓成交均价的两腿名义额之和，不含未确认订单预留及交易所未入本地的仓位，不等同于发送前硬风控总敞口。账户 `drop_usd=max(0,baseline-current)`，两边独立。`HALTING/HALTED` 均令 `halted=true`，此字段不证明已经全部平仓。
 - 账户 `ok` 表示最近对账数据是否可用，不表示可开仓；对账超过 60 秒或失败时不报告健康。原执行器无保证金占用的 `1e30` 哨兵投影为 `margin_multiple=null`。多市场费率一致且 1 小时内刷新成功才给单个 route 的 taker 值；不一致返回 `null`，不掩盖 special 费率。
 - 库里未保存真实标记价格，因此 `mark_price=null`。当前价差和浮动毛收益按两腿各自 60 秒内的缓存盘口、剩余量和深度 VWAP 计算，盘口不足/过期则为 `null`；不是即时交易所标记收益，未扣未实现平仓费和资金费。`stop_distance_bps` 是距离“开仓价差 +50bp”价差止损的距离；独立的浮亏 1% 止损规则未改变。
@@ -109,6 +125,9 @@ python3 -m tools.crossex_exec run --env-file /home/ubuntu/wubin/crossex-exec/cro
 - SQLite 新增 `baseline_samples`，按币种及字典序交易所组合每 30 秒桶最多一条，以 `(mid_b/mid_a-1)*10000` 采样，保留 24h。最近 6h 中位数为基准，MAD 为绝对偏差中位数；至少 300 点且跨度 ≥3h 才预热完成。最新点超过 90 秒拒绝开仓，断网不补造样本。反向基准先对每个样本做倒数变换再取中位数。
 - 预热未完成拒绝原因为 `baseline_warming`；结构性拉黑为 `structural_spread`（规范方向 `abs(baseline) ≥80bp` 或 `MAD ≥40bp`），每 10 分钟重新评估，可自动恢复，缺数据不解除旧拉黑。拉黑状态及样本均跨重启保留。
 - 按 100 USDT 和最终合法数量的 50 档 VWAP 求开仓价差 `S`。`excess=S-baseline`；净超额门槛为 `excess−2*(taker_long+taker_short)*10000−funding_cost_bps ≥15bp`。资金费成本为 `max(0,rate_long*3600/interval_long_seconds−rate_short*3600/interval_short_seconds)*2*10000`。周期来自公开接口，缺费率或周期拒绝；收款合计按零，不补贴收益。保存周期和预估标记，不假设 8 小时。两个准入检查都使用这套公式，缺基准不回退到 0。
+- 第七轮在初始复核和共享发送前复核都增加：两腿交易所时间戳差 ≤300ms、每腿年龄 ≤1 秒，收到时间也须在 1 秒内；负年龄/缺失或非有限时间不放行。时间检查失败立即通过既有公开队列并发重拉**两腿**一次，再检查；仍失败放弃并记 `book_skew/book_stale`。定价、基准读取、限频、写库耗时均计入复核年龄；重拉后仍检查原限价、净超额、最新真实费率和原硬风控。当前六所永续深度均提供交易所时间戳；缺字段只阻止开仓，不给平仓添加新限制，详见交接的官方字段表。
+- v1 仅接受资金费差绝对值 ≤0.5bp/h 且每腿折合 8h 的绝对费率 ≤0.05%，读不到记 `funding_diff`；方向基准绝对值和 MAD 均 ≤10bp，否则 `baseline_not_flat`。原 24h 历史完整性、0.5% 黑名单、近结算禁开等条件继续保留。
+- 基准模块每轮保存完整报价集合，失败/空轮替换旧集合，不跨轮拼接。至少三家白名单所且包含两腿与外部参考，轮次年龄 ≤90 秒，否则 `too_few_venues`。用该轮所有有效所中间价的中位数 M，对照当前两腿深度中间价：只能买被砸低的一腿或卖被拉高的一腿，异常幅度 ≥净扣费前开仓超额的 70%，正常腿偏离 M ≤10bp，所有外部参考所也须在 M 的 10bp 内，否则 `not_single_venue_outlier`。M 可包含两腿，但至少有一家独立参考。30 秒参考采样与上述形态判定不能证明报价异常的实际成因。
 - 开仓冻结 `baseline_at_open/excess_at_open`；止盈阈值为当前可平仓价差 `≤baseline_at_open+excess_at_open/2`，持有中不追随新基准。反向 50bp、浮亏 1%、2h、结算前 5 分钟、陈旧盘口退出规则保留。升级前缺快照的旧持仓保留原来半价差退出规则，API 不伪造历史基准。
 - `stop_loss/max_hold/pre_funding/stale/one_leg` 退出且完整已知净收益 <0 时，按无方向币种/交易所组合冷却至 `closed_at+24h`。关闭记录与冷却在同一个 SQLite 事务落盘；重复刷新、延迟记账和重启不延长截止时间。盈利、零收益、正常止盈及熔断退出不触发；收益未知时继续由既有记账停开锁保护，确认后再写冷却。冷却在复核前及共享发送关口均检查，拒绝原因为 `pair_cooldown`。
 - 不足 24h 资金费历史覆盖、历史有缺口、资料过期或倍率/代码不一致都不交易。OKX 成交额使用基础币成交量 × 24h 最低价的保守下界。
@@ -126,7 +145,7 @@ python3 -m tools.crossex_exec run --env-file /home/ubuntu/wubin/crossex-exec/cro
 - Bitget 私有接口只有 UTA v3，签名传输层拒绝非 v3 路径。公开深度/资金费沿用 v2 market，新增基准批量 ticker 使用 v3。双向开平仓由实际 `side` + `posSide` 表达；`reduceOnly=yes` 仅用于单向模式。clientOid 最长 32 字符。
 - CrossEx 保证金率使用 `maintenance_margin_rate` 并核对余额/维持保证金口径；Bitget 使用账户 `effEquity / mmr`，分母为 0 视为安全。两者 <3 停开、<2 全平。
 - `HardLimits.check_order` 统一校验三项硬上限：整对进入适配器前预检，限频和建连后的共享发送关口再检查两腿；单笔入口也保留适配器前和实际发送前检查。总额度按远端标记名义额与本地确认敞口逐市场取较大值，再计入待发及未知订单剩余量。减仓不受单腿及总额上限限制，也不因风险读取失败而被阻断。
-- 账户后台任务按 5 秒周期刷新，发送路径只读缓存；按读取开始时刻计龄，超过 10 秒不开仓。两个开仓工作线程都通过限频/建连后，在同一个关口用同一个时刻只复核一次两腿盘口 ≤2 秒、净价差 ≥15bp、限价和资金费/费率有效性；统一通过后并发发送，不再各自否决。任一线程在关口前失败，两腿都不发送；统一放行后的网络/撮合失败仍需实际敞口恢复。
+- 账户后台任务按 5 秒周期刷新，发送路径只读账户缓存；按读取开始时刻计龄，超过 10 秒不开仓。两个开仓工作线程都通过限频/建连后，在同一个关口复核两腿盘口 ≤1 秒、时间差 ≤300ms、v1 模式、净超额 ≥15bp、限价和资金费/费率有效性。时间检查不合格允许一次公共盘口并发重拉；完整复核统一通过后并发发送，不再各自否决。任一线程在关口前失败，两腿都不发送；统一放行后的网络/撮合失败仍需实际敞口恢复。
 - 最小数量和最小名义额按最终的 `quantity × limit_price` 检查；不足时只上调一个两腿公倍数步长，重新计算深度/限价/净价差并校验数量与名义额上限，仍不合格即拒绝。
 - 首次启动保存 CrossEx `margin_balance` 和 Bitget `usdtEquity` 的独立基线；重启记录当前值并保留原基线，避免清除损失。任一边下降达到限额即进入 HALTING，全平确认后 HALTED。存在实盘历史而缺少独立基线时拒绝启动，需要人工核对迁移。
 - CrossEx 任意正 liability 写入事件日志和每 300 秒状态 JSON。费率刷新失败会清除对应旧费率，读不到就不允许该市场开仓。

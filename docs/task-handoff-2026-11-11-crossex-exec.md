@@ -876,3 +876,128 @@ INVARIANTS seed=20261113 rounds=2448 random_rounds=2400 N=1 checks={'1a': 2448, 
 执行中出现非本任务创建的未跟踪文件 `docs/crossex-exec-round7-pending-2026-11-11.md`，只记录路径，未读取、修改或暂存，保留原样。因而交付工作区不标为完全干净；本轮代码/测试/文档均分组提交，其余产物是既有忽略范围内的日志和Python缓存。
 
 第六轮本地交付完成。下一模块请新建任务，从本节、当前契约和对应待办文档继续；真实接口、账户、Linux/C3或上线验收需后续任务明确授权。
+
+## 第七轮交付（2026-11-12，整体验收待用户确认旧夹具适配）
+
+### 当前状态与待决冲突
+
+**A/B 实现、41 项新增专项和契约字段已完成，本轮整体验收尚未通过。** 最新执行器全套为 270 项，262 项通过、8 项失败；fill-sim 158 项通过。不宣称不变量模拟器通过，不将该结果作为实盘授权。
+
+唯一需要用户决定的旧断言冲突：`tests/test_invariants.py::run_seed` 对每笔实际新开仓断言 `baseline_at_open == 40`，对应 `World` 的合成历史也是 40bp；第七轮新规则要求 `|baseline_bps| <= 10`。用户同时要求“不得删改或放宽已有测试断言”，两者无法同时满足。已发出异步确认：是否允许**仅将这项基准夹具和对应期望值由 40 改为 0，并新增 <=10 校验**，1a–1d、2–7 的所有风控断言及非空覆盖要求保持原样。此时尚未收到答复，不能将等待时间当作授权。
+
+当前仍保留该 40bp 断言和夹具，因此所有模拟开仓都被 `baseline_not_flat` 拒绝，三个种子虽各运行 2448 回合，却在非空覆盖断言失败；依赖同一 `World` 开仓的 5 项 PM 恢复定向测试也无法建立仓位。没有跳过这些测试、捕获后算通过、删除覆盖检查或给模拟器绕过 v1 门禁。
+
+### 范围、分支与提交
+
+- worktree：`C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec`；分支 `codex/crossex-exec`；基线 `7646e883a42d30339b00521d92323686d4d884e7`（第七轮任务书），开始时工作区干净。
+- 先读 AGENTS、第五/六轮交接、接口契约，再读第七轮任务书。修改仅限 `tools/crossex_exec` 及本任务 docs；**本轮没有修改 `tools/fill_sim`**。
+- 仅联网读取官方盘口时间戳文档，没有请求实际公开行情或鉴权 API，没有读取真实 env/凭据、启动服务 run、push、SSH、WSL、amend、生产备份或部署。所有交易调用均为原有 loopback 假服务/内存交易所，外网 socket/DNS 守护保留。
+- Git 索引在父仓库可写根之外，初次写索引被文件沙箱拒绝后，按用户已授权的本地提交范围通过自动审批写入；没有自动审批拒绝待处理。提交均禁用 hooks/GPG，只暂存本任务文件。
+
+| 类型 | 完整 hash | 内容 |
+|---|---|---|
+| test | `43039b7fb0a59ca8c78e19e45d0b047242e8c668` | 首批 32 项，先运行得到预期失败 |
+| test | `044fd982570f56ad640c22dd910f00cf6267d7b5` | 扩展为 40 项，慢定价红测、共享门禁、原子计数及旧夹具适配 |
+| test | `fcffc2ee79d2941ec7166f5c638a302bbb570eeb` | 缺时钟只限制开仓的先失败测试；陈旧盘口夹具补齐 Book 导入 |
+| feat | `8d92d812bdb40c4927a567331d7ef4b87b5f2f5f` | 同时性、v1 准入、最新报价轮次、观测和持久化计数 |
+| docs | 随本节、契约和 README 独立提交 | 真实验收状态、原始失败证据及待决事项 |
+
+docs hash 仍用 `git log -1 --format=%H -- docs/task-handoff-2026-11-11-crossex-exec.md` 取得，不硬编码自身 hash。
+
+### 实现入口与业务规则
+
+| 文件（相对 tools/crossex_exec） | 入口与变更 |
+|---|---|
+| `admission.py`（新增） | `OpeningLimits.books/funding/flat/outlier`、阈值常量、`AdmissionError.reason`、只观测不抛错的 `book_skew_ms` |
+| `engine.py` | `opening_review` 初始全复核；`check_pair` 共享发送前全复核；`fetch_opening_books` 成对重拉；减仓记录时间差 |
+| `market.py` | `opening_books/parse_execution_book` 要求官方有时钟的深度字段；普通 `books` 保持原平仓解析路径 |
+| `baseline.py` | `record/latest` 持久化完整最新报价轮次，成功、部分失败和空轮都整体替换 |
+| `policy.py` | 原 `send_review` 校验通过后返回重算的 VWAP、超额及资金费估算；原公式和门槛不放松 |
+| `storage.py` | `skip` 将触发 ID 去重标记、六类计数、SKIP 事件放在同一事务中 |
+| `api_data.py` | positions/trades 两个时间差、summary `opening_skip_counts`；原字段全部保留 |
+
+1. **时间门禁**：默认两腿交易所时间戳绝对差 <=300ms；每腿交易所时间年龄及收到时间年龄均在 [0,1] 秒。不存在交易所时钟的 Book 结构才使用收到时间；实际六所开仓深度响应缺应有时钟字段时解析失败，不伪装为回退。未来时间、NaN/Inf、缺腿均拒绝。陈旧与不同步同时存在时优先 `book_stale`。
+2. **重拉预算**：初始复核与共享发送前复核各最多一次；每次整体提交两腿到原公共队列，保留每所 2/s、全局 8/s、429 退避和请求总时限，不增加平行请求通道。重拉失败不复用其中一条旧腿。定价/基准读取/限频/共享复核写库耗时均纳入年龄检查；最后仍满足原限价、净超额、资金费/费率和账户缓存硬风控才能同时放行。发送后不独立取消一腿。
+3. **资金费**：分别以实际周期秒数折算每小时。两腿差的绝对值 <=0.5bp/h；每腿小时率绝对值乘 8 <=0.0005（0.05%）。任一腿率/周期未知、非有限或周期非正均 `funding_diff`。原历史完整性、绝对费率黑名单、近结算禁开以及 2h 成本公式继续保留。
+4. **平坦基准**：初始及共享关口均要求方向基准绝对值 <=10bp、MAD <=10bp；缺值也拒绝，原因 `baseline_not_flat`。原预热、80/40 结构性锁存、冷却继续适用；不会将尚未 ready 的历史当作 0。
+5. **一家异常**：最新一轮至少 3 家白名单所报价，包含交易两腿和至少一家外部参考，默认轮次年龄 <=90s。M 为该轮有效中间价的中位数；用实际当前两腿深度中间价对照 M，异常腿正确方向偏离 >=当次扣费前超额的 70%，另一腿偏离 <=10bp；外部参考也须全部落在 M 的 10bp 内。买低/卖高，不能反向；两腿都异常或参考意见不一致时 `not_single_venue_outlier`；缺所、非白名单所不能凑数、参考轮次过期或缺失时 `too_few_venues`。完整失败轮次会清空参考集合，不跨轮合并。
+6. **阈值**：`admission.py` 常量固定上/下界；10 项可选配置详见 README，只能调严。所有 MAX 配置须有限、非负且 <=常量；MIN_OUTLIER_SHARE 只接受 [0.7,1]，MIN_VENUES 只接受 3–6 整数；调松/无效值在 Engine 构造时直接拒绝。重拉次数常量为 1，不提供放宽开关。
+7. **观测**：开仓时间差取最终获准盘口；共享关口重拉后重算超额及预估成本并持久化，协调器重读以免旧局部对象覆盖。平仓不运行上述时间或 v1 门禁；最近减仓定价使用两腿盘口的时间差会保存，可能包含自身缓存盘口，未知为 null。时间差不替代订单发送/成交延时。所有六类放弃次数按 trigger ID 去重，跨日/重启保留，重拉成功不计数，计数写失败整笔事务回滚。
+
+契约仅增加 7 行，未删除或改写既有字段。其历史 20bp 基准示例保留，并注明只用于兼容历史仓位，不是第七轮新开仓的合法例子。JSON meta/pairs/triggers 为追加字段，无破坏性 schema 迁移。
+
+### 官方盘口时间戳核实
+
+仅阅读下列官方文档，未执行示例和实际行情请求。**当前六所使用的永续深度接口均提供交易所时间戳，不提供时间戳的交易所名单为空。** 不把 Gate 批量 ticker 的接收时间口径误套到 Gate 深度。
+
+| 交易所 | 当前深度路径及时间字段 | 官方出处 |
+|---|---|---|
+| Binance | `/fapi/v1/depth`；`T` 优先，`E` 后备；毫秒 | [USD-M Order Book](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data#order-book) |
+| Bybit | `/v5/market/orderbook`；`result.cts` 撮合引擎时间优先，`result.ts` 后备；毫秒；开仓不能用外层响应 time 代替缺失的盘口时钟 | [Get Orderbook](https://bybit-exchange.github.io/docs/v5/market/orderbook) |
+| OKX | `/api/v5/market/books`；`data[0].ts` 盘口生成时间；毫秒 | [Order book](https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-order-book) |
+| Gate | `/api/v4/futures/usdt/order_book`；`update` 优先，`current` 后备；官方示例为带小数秒 | [Futures order book](https://www.gate.com/docs/developers/apiv4/en/futures/#futuresorderbook) |
+| Bitget | `/api/v2/mix/market/merge-depth`；`data.ts` 撮合引擎时间；毫秒（公开深度沿用 v2，不改变私有 UTA v3） | [Get Merge Market Depth](https://www.bitget.com/docs/catalog/classic-contract-market/classic-contract-market#get-merge-market-depth) |
+| Aster | `/fapi/v3/depth`；`T` 交易时间优先，`E` 输出时间后备；毫秒 | [Futures V3 官方文档](https://github.com/asterdex/api-docs/blob/master/V3%28Recommended%29/EN/aster-finance-futures-api-v3.md#order-book) |
+
+时间字段、优先级、秒/毫秒换算均有离线测试。文档核实不证明真实接口当前可用、时钟同步或市场流动性。
+
+### TDD 与旧测试保护
+
+- 首批实现前红测：`Ran 32 tests in 0.503s / FAILED (failures=18, errors=59)`，其中参数化子测试分别报告错误；随后 32 项通过。
+- 慢定价新边界先失败：`Ran 40 tests in 0.958s / FAILED (failures=1)`，修复后 `Ran 40 tests in 0.916s / OK`。
+- 缺时间戳不能额外阻止平仓先复现：`Ran 3 tests in 0.043s / FAILED (failures=1, errors=1)`；随后拆分开仓/普通读取路径。最终新增 41 项在下面完整回归中全部通过。
+- 旧拒绝陈旧盘口场景只调整市场夹具：一次重拉仍返回原陈旧数据；原 `UNSENT/零发单` 断言全部保留。新增专项独立覆盖重拉变好后放行。
+- 原第六轮“冻结 40bp 基准止盈”场景改为升级前已开仓夹具，所有 40/160/收敛平仓断言保留；新开仓非零合法 5bp/195bp 冻结由新增专项验证。纯定价公式测试、历史统计测试和 API 历史值断言继续保留 40bp。
+- API 字段集合只增项；内存数据库补齐 skip 的持久化模型。未改 fill-sim 或私有传输/执行器发送恢复状态机。
+- 对六个变动的原测试文件逐函数比较基线与当前 `assert* / fail / skipTest` 调用的 AST，结果：`Existing test assertion AST audit: 6 files; changes=[]`。没有 skip/xfail 或降低旧覆盖要求。静态语法检查 32 个执行器 Python 文件通过 Python 3.10 AST；CLI `--help`、`git diff --check` 通过。
+
+### 两条完整 unittest 与模拟器原始结果
+
+最后一次实现与测试修改之后，实际执行（Windows / Python 3.12.10 / SQLite 3.49.1）：
+
+```text
+python -m unittest discover -s tools/crossex_exec/tests -v
+----------------------------------------------------------------------
+Ran 270 tests in 84.865s
+
+FAILED (failures=8)
+
+python -m unittest discover -s tools/fill_sim/tests -v
+----------------------------------------------------------------------
+Ran 158 tests in 29.962s
+
+OK
+```
+
+模拟器实际失败原文（不是 INVARIANTS 成功行；成功输出在非空覆盖断言之后，当前未到达）：
+
+```text
+AssertionError: seed=20261111 checked_rounds=2448 error=0 not greater than 0 : vacuous invariant: 1a
+AssertionError: seed=20261112 checked_rounds=2448 error=0 not greater than 0 : vacuous invariant: 1a
+AssertionError: seed=20261113 checked_rounds=2448 error=0 not greater than 0 : vacuous invariant: 1a
+```
+
+其他 5 项失败均在 `test_pm_invariants.PMInvariantTests.world` 的原断言 `len(world.store.pairs(active=True)) == 1`：
+
+```text
+test_i1a_one_untradable_close_leg_cannot_turn_pair_into_unsafe_single
+test_i1c_close_retry_survives_restart_and_backs_off_from_completion
+test_i1c_incomplete_close_locks_alerts_and_retries_to_flat
+test_i1c_post_close_snapshot_failure_latches_uncertain_exposure
+test_i1c_retry_deadline_starts_after_slow_snapshot_failure
+```
+
+所有原始日志在本机 `%TEMP%`，不入库；完整步骤序列保留在执行器日志内：
+
+| 文件 | SHA-256 |
+|---|---|
+| `crossex-round7-pending-unittest.log` | `27bdcaab7bdaa97c2c8d0fda4de530adc67cce04b9fc0a8b6417b3bbbeea1a5d` |
+| `crossex-round7-fill-sim.log` | `2c6bc0ee870fa83bb8bb5c17636a10b4f0e00b65ffb7cd21c3d8e55c37d667d7` |
+
+初始诊断另外保留为 `crossex-round7-red.log`、`crossex-round7-first.log`、`crossex-round7-first-suite.log`、`crossex-round7-pricing-red.log`、`crossex-round7-specialist.log`。首次完整 261 项有 13 项失败，后续修正陈旧盘口和基准状态夹具后，减少到上述 8 项；不隐藏历史失败。
+
+### 线上状态、剩余风险与继续步骤
+
+没有 push、生产备份、部署或线上验证；线上版本、实盘开关与真实配置未变。没有额外未跟踪仓库文件需要交接；Python 缓存仍在既有忽略范围，日志只在临时目录。Ubuntu/Python 3.10/SQLite 3.37 实机、systemd/80M、真实账户时序与撮合仍未验收；本轮公共重拉增加的等待时间受原队列限频约束，可能导致更多放弃，这是保守准入的预期结果。
+
+当前留在本模块，不转入下个模块。收到用户对上述唯一断言适配的明确许可后：先以独立 test 提交把模拟器历史/对应期望 40 改为 0，最新轮报价补齐第三家独立参考，并增加新门槛的非空覆盖检查；保留原随机种子/2400 随机回合及 48 故障回合、1a–1d/2–7 全部原风控断言。随后重跑完整执行器套件，贴真实 INVARIANTS 三行和汇总，补充本节验收结论；若发现实现问题，继续先红测后 feat。fill-sim 本轮完全未改，以上 158 项结果仍有效。未经该许可不能以测试专用绕过、改计量单位或放宽生产条件来消除冲突。
