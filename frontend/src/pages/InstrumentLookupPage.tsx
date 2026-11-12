@@ -1,3 +1,4 @@
+import { AstroCardCreateModal, type AstroSizingFormValues } from "../components/astroCard/AstroCardCreateModal";
 import { getArbMvpStatus } from "../api/client";
 import {
   BellOutlined,
@@ -18,14 +19,12 @@ import {
   AutoComplete,
   Button,
   Checkbox,
-  Descriptions,
   Empty,
   Form,
   Input,
   InputNumber,
   Modal,
   Popover,
-  Radio,
   Segmented,
   Select,
   Space,
@@ -58,7 +57,6 @@ import type {
   ArbMvpStatus,
   CardTarget,
   AstroActionResult,
-  AstroCardCreateRequest,
   AstroCardVariant,
   AstroInstrumentRouteRequest,
   AstroPairPlan,
@@ -77,7 +75,6 @@ import type {
   TradeAvailabilityResult,
   TradeAvailabilityWatch
 } from "../api/types";
-import { AstroCardVariantSelector, selectedAstroRoutes, supportsAstroCardVariant } from "../components/AstroCardVariantSelector";
 import { resolveHistoryIntervalSeconds } from "../constants/queryLimits";
 import { addFloatingWatchSymbol } from "../utils/floatingWatch";
 
@@ -157,9 +154,7 @@ type PriceSeries = {
   points: Array<{ bucketAt: string; price: number }>;
 };
 
-type AstroSizingFormValues = Required<Omit<AstroCardCreateRequest, "save_as_default" | "target">> & {
-  save_as_default: boolean;
-};
+
 
 type SpreadTypeFilter = "FF" | "SF" | "SS" | "reverse_sf";
 type SpreadSortKey = "opportunity_type" | "buy_market" | "sell_market" | "executable_spread_pct" | "close_spread_pct" | "max_spread_24h";
@@ -2524,114 +2519,25 @@ export function InstrumentLookupPage() {
         </section>
       ) : null}
 
-      <Modal
-        open={astroSpread !== null}
-        title={astroReversed ? "反向创建 Astro 卡片" : "创建 Astro 卡片"}
-        width={760}
-        onCancel={closeAstroPreview}
-        closable={!astroSubmitLoading}
-        keyboard={!astroSubmitLoading}
-        maskClosable={!astroSubmitLoading}
-        footer={[
-          <Button key="close" disabled={astroSubmitLoading} onClick={closeAstroPreview}>关闭</Button>,
-          <Button
-            key="submit"
-            type="primary"
-            loading={astroSubmitLoading}
-            disabled={readyPreviewTarget !== cardTarget || astroPreviewLoading || astroSubmitLoading || !astroPlan?.pair || !astroPlan.can_submit
-              || (cardTarget === "astro" && !supportsAstroCardVariant(astroPlan.route_variants, selectedCardVariant))}
-            onClick={() => void submitAstroCard()}
-          >
-            确认创建
-          </Button>
-        ]}
-        destroyOnHidden
-      >
-        {astroSpread && astroSymbol ? (
-          <Space direction="vertical" size={12} className="astro-preview-panel">
-            <div>
-              <Typography.Text>建卡目标</Typography.Text>{" "}
-              <Radio.Group value={cardTarget} disabled={astroSubmitLoading} onChange={(event) => void changeCardTarget(event.target.value)}>
-                <Radio value="astro">Astro</Radio>
-                <Radio value="arb_paper" disabled={!arbStatus?.paper?.configured}>arb-mvp 模拟盘</Radio>
-                <Radio value="arb_live" disabled={!arbStatus?.live?.configured}>arb-mvp live</Radio>
-              </Radio.Group>
-            </div>
-            {cardTarget !== "astro" ? <Alert type="info" showIcon message="arb-mvp 卡片建好后是 STOPPED、禁止开仓，需要在 arb-mvp 界面手动开始交易" /> : null}
-
-            <Descriptions bordered size="small" column={2}>
-              <Descriptions.Item label="标的">{astroSymbol}</Descriptions.Item>
-              <Descriptions.Item label="卡片名称">{String(astroPlan?.pair?.name ?? "-")}</Descriptions.Item>
-              <Descriptions.Item label="卡片类型">{String(astroPlan?.pair?.type ?? astroSpread.opportunity_type ?? "-")}</Descriptions.Item>
-              {cardTarget === "astro" ? (<Descriptions.Item label="Astro 路线">
-                {selectedAstroRoutes(astroPlan?.route_variants, selectedCardVariant)}
-              </Descriptions.Item>) : null}
-              <Descriptions.Item label="买入">
-                {exchangeLabels[astroSpread.buy_exchange] ?? astroSpread.buy_exchange} · {marketTypeLabel(astroSpread.buy_market_type)} · Ask {price(astroSpread.buy_ask)}
-              </Descriptions.Item>
-              <Descriptions.Item label="卖出">
-                {exchangeLabels[astroSpread.sell_exchange] ?? astroSpread.sell_exchange} · {marketTypeLabel(astroSpread.sell_market_type)} · Bid {price(astroSpread.sell_bid)}
-              </Descriptions.Item>
-              <Descriptions.Item label="预览可成交差价">{signedPct(astroPlan?.source_open_spread_pct)}</Descriptions.Item>
-              <Descriptions.Item label={cardTarget === "astro" ? "Astro 开仓阈值" : "开仓阈值"}>{String(astroPlan?.pair?.[cardTarget === "astro" ? "openPosition" : "openSpread"] ?? "-")}</Descriptions.Item>
-              <Descriptions.Item label="允许提交">{astroPlan?.can_submit ? "是" : "否"}</Descriptions.Item>
-            </Descriptions>
-            {astroPreviewLoading ? <Alert type="info" showIcon message="正在按最新行情生成卡片预览" /> : null}
-            {astroReversed ? (
-              <Alert
-                type="warning"
-                showIcon
-                message="当前为反向建卡"
-                description={astroPlan?.pair?.type === "FS"
-                  ? "将使用 FS 类型买入永续、卖出现货，并主动承受当前可成交价差；请确认现货侧有可卖余额或借币能力。"
-                  : "将交换买卖方向并主动承受当前可成交价差；请核对开平仓阈值和资金费率。"}
-              />
-            ) : null}
-            {astroPreviewError ? <Alert type="error" showIcon message={astroPreviewError} /> : null}
-            {astroSubmitError ? <Alert type="error" showIcon message={astroSubmitError} /> : null}
-            {astroSubmitResult ? (
-              <Alert
-                type={astroSubmitResult.status === "created" || astroSubmitResult.status === "updated" ? "success" : astroSubmitResult.status === "failed" ? "error" : "warning"}
-                showIcon
-                message={astroSubmitResult.message}
-              />
-            ) : null}
-            {astroSubmitResult?.warnings?.length ? (
-              <Alert type="warning" showIcon message={astroSubmitResult.warnings.join("；")} />
-            ) : null}
-            {astroPlan?.blockers.length ? <Alert type="error" showIcon message="当前不能创建" description={astroPlan.blockers.join("；")} /> : null}
-            {astroPlan?.warnings.length ? <Alert type="warning" showIcon message={astroPlan.warnings.join("；")} /> : null}
-            {cardTarget !== "astro" && astroPlan?.pair ? <pre className="astro-preview-json">{JSON.stringify(astroPlan.pair, null, 2)}</pre> : null}
-            {astroPlan?.pair ? (
-              <Form form={astroSizingForm} layout="vertical" className="astro-sizing-form">
-                <div className="form-grid">
-                  <Form.Item label={cardTarget === "astro" ? "单笔金额 USDT" : "最大持仓 (USD)"} name="max_trade_usdt" rules={[{ required: true }]}>
-                    <InputNumber min={0.01} step={1} className="wide-input" />
-                  </Form.Item>
-                  <Form.Item label="杠杆" name="leverage" rules={[{ required: true }]}>
-                    <InputNumber min={1} step={1} className="wide-input" />
-                  </Form.Item>
-                  <Form.Item label="最小名义金额 USDT" name="min_notional" rules={[{ required: true }]}>
-                    <InputNumber min={0} step={1} className="wide-input" />
-                  </Form.Item>
-                  <Form.Item label="最大名义金额 USDT" name="max_notional" rules={[{ required: true }]}>
-                    <InputNumber min={0.01} step={1} className="wide-input" />
-                  </Form.Item>
-                  {cardTarget === "astro" ? (<Form.Item label="创建后允许开仓" name="open_enabled" valuePropName="checked">
-                    <Switch checkedChildren="开启" unCheckedChildren="关闭" />
-                  </Form.Item>) : null}
-                </div>
-                {cardTarget === "astro" ? (<Form.Item label="建卡路线" name="card_variant" rules={[{ required: true }]}>
-                  <AstroCardVariantSelector routes={astroPlan.route_variants} />
-                </Form.Item>) : null}
-                <Form.Item name="save_as_default" valuePropName="checked">
-                  <Checkbox>保存为全局建卡默认值</Checkbox>
-                </Form.Item>
-              </Form>
-            ) : null}
-          </Space>
-        ) : null}
-      </Modal>
+      <AstroCardCreateModal
+        astroSpread={astroSpread}
+        astroSymbol={astroSymbol}
+        astroReversed={astroReversed}
+        astroPlan={astroPlan}
+        astroPreviewLoading={astroPreviewLoading}
+        astroPreviewError={astroPreviewError}
+        astroSubmitLoading={astroSubmitLoading}
+        astroSubmitResult={astroSubmitResult}
+        astroSubmitError={astroSubmitError}
+        astroSizingForm={astroSizingForm}
+        cardTarget={cardTarget}
+        arbStatus={arbStatus}
+        readyPreviewTarget={readyPreviewTarget}
+        selectedCardVariant={selectedCardVariant}
+        closeAstroPreview={closeAstroPreview}
+        submitAstroCard={submitAstroCard}
+        changeCardTarget={changeCardTarget}
+      />
     </div>
   );
 }

@@ -174,6 +174,9 @@ class AstroAlertService:
         )
 
 
+    def pair_lock(self, pair_name: str) -> asyncio.Lock:
+        return self._pair_locks.setdefault(pair_name, asyncio.Lock())
+
     async def handle_manual_create(
         self,
         opportunity: Opportunity,
@@ -343,12 +346,13 @@ class AstroAlertService:
             opportunity,
             allow_manual_override=manual_override,
             allow_negative_open=allow_reverse_entry,
+            **({"thresholds": card_request} if card_request and card_request.open_spread_pct is not None else {}),
         )
         if manual_override:
             manual_warnings.extend(
                 warning
                 for warning in plan.warnings
-                if warning.startswith("人工建卡风险提示：")
+                if warning.startswith(("人工建卡风险提示：", "当前价差已达到开仓线"))
             )
         if not plan.can_submit or plan.pair is None:
             reason = "；".join(plan.blockers) if plan.blockers else "当前机会无法提交 Astro"
@@ -389,7 +393,7 @@ class AstroAlertService:
         pair_name = str(pair.get("name", ""))
         pair_type = str(pair.get("type", ""))
 
-        async with self._pair_locks.setdefault(pair_name, asyncio.Lock()):
+        async with self.pair_lock(pair_name):
             if self.attempts is None:
                 return AstroAlertActionResult(
                     enabled=True, status="failed", action="add",

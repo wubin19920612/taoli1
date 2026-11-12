@@ -53,7 +53,20 @@ class AstroSdkStatus(BaseModel):
     message: str | None = None
 
 
-class AstroCardCreateRequest(BaseModel):
+class AstroThresholdOverrides(BaseModel):
+    open_spread_pct: float | None = Field(default=None, ge=-50, le=50, allow_inf_nan=False)
+    close_spread_pct: float | None = Field(default=None, ge=-50, le=50, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_thresholds(self):
+        if (self.open_spread_pct is None) != (self.close_spread_pct is None):
+            raise ValueError("开仓和平仓阈值必须同时提供")
+        if self.open_spread_pct is not None and self.open_spread_pct <= self.close_spread_pct:
+            raise ValueError("开仓阈值必须大于平仓阈值")
+        return self
+
+
+class AstroCardCreateRequest(AstroThresholdOverrides):
     target: CardTarget = "astro"
     max_trade_usdt: float | None = Field(default=None, gt=0)
     leverage: int | None = Field(default=None, ge=1)
@@ -87,6 +100,18 @@ class AstroInstrumentCardCreateRequest(BaseModel):
     route: AstroInstrumentRouteRequest
     card: AstroCardCreateRequest = Field(default_factory=AstroCardCreateRequest)
     expected_open_spread_pct: float
+
+
+class AstroInstrumentPreviewRequest(AstroInstrumentRouteRequest, AstroThresholdOverrides):
+    pass
+
+
+class AstroInstrumentCardUpdateRequest(AstroThresholdOverrides):
+    route: AstroInstrumentRouteRequest
+    open_spread_pct: float = Field(ge=-50, le=50, allow_inf_nan=False)
+    close_spread_pct: float = Field(ge=-50, le=50, allow_inf_nan=False)
+    expected_open_position: str | None = None
+    expected_close_position: str | None = None
 
 
 class AstroAlertActionResult(BaseModel):

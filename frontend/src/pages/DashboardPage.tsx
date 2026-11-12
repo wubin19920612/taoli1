@@ -123,7 +123,7 @@ type ExchangeStateRow = ExchangePollState & {
   exchange: string;
 };
 
-type AstroSizingFormValues = Required<Omit<AstroCardCreateRequest, "save_as_default" | "target">> & {
+type AstroSizingFormValues = Required<Omit<AstroCardCreateRequest, "save_as_default" | "target" | "open_spread_pct" | "close_spread_pct">> & {
   save_as_default: boolean;
 };
 

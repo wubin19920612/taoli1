@@ -966,11 +966,27 @@ export async function createAstroCard(
 }
 
 export async function previewInstrumentAstroPair(
-  route: AstroInstrumentRouteRequest, target: CardTarget = "astro"
+  route: AstroInstrumentRouteRequest, target: CardTarget = "astro",
+  thresholds: Pick<AstroCardCreateRequest, "open_spread_pct" | "close_spread_pct"> = {}
 ): Promise<AstroPairPlan> {
   return fetchJson<AstroPairPlan>(`/astro/instrument/preview${target === "astro" ? "" : `?target=${target}`}`, {
     method: "POST",
-    body: JSON.stringify(route)
+    body: JSON.stringify({ ...route, ...(target === "astro" ? thresholds : {}) })
+  });
+}
+
+export function lookupInstrumentAstroCard(route: AstroInstrumentRouteRequest) {
+  return fetchJson<import("./types").AstroCardLookup>("/astro/instrument/card/lookup", {
+    method: "POST", body: JSON.stringify(route)
+  });
+}
+
+export function updateInstrumentAstroCard(payload: {
+  route: AstroInstrumentRouteRequest; open_spread_pct: number; close_spread_pct: number;
+  expected_open_position?: string; expected_close_position?: string;
+}) {
+  return fetchJson<AstroActionResult>("/astro/instrument/card/update", {
+    method: "POST", body: JSON.stringify(payload)
   });
 }
 

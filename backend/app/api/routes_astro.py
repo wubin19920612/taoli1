@@ -1,5 +1,6 @@
 import logging
 import time
+from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
@@ -11,6 +12,9 @@ from app.models.astro import (
     AstroCardRouteVariant,
     AstroInstrumentCardCreateRequest,
     AstroInstrumentRouteRequest,
+    AstroInstrumentPreviewRequest,
+    AstroInstrumentCardUpdateRequest,
+    AstroThresholdOverrides,
     AstroPairPlan,
     AstroSdkStatus,
     CardTarget,
@@ -29,7 +33,8 @@ from app.models.orderbook import DepthValidationResult
 from app.models.pair_spread import normalize_pair_spread_symbol
 from app.models.settings import AstroCardSettings, FeeSettings, RiskSettings
 from app.services.astro_client import AstroClientError, AstroSdkClient
-from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
+from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig, position_to_pct
+from app.services.astro_alerts import _same_route
 from app.services.arb_mvp_client import ArbMvpClient
 from app.services.arb_mvp_planner import ArbMvpPlanner
 from app.services.astro_preadd import AstroPreaddService
@@ -41,6 +46,7 @@ from app.services.spread_engine import Mode, build_directional_opportunity
 
 router = APIRouter(prefix="/astro")
 logger = logging.getLogger(__name__)
+card_update_logger = logging.getLogger("astro_card_update")
 
 
 @router.get("/card-attempts")
@@ -320,10 +326,11 @@ async def _build_astro_preview(
     request: Request,
     opportunity: Opportunity,
     manual_warnings: list[str] | None = None,
+    thresholds: AstroThresholdOverrides | None = None,
 ) -> AstroPairPlan:
     context = ManualReview()
     try:
-        return await _build_astro_preview_reviewed(request, opportunity, manual_warnings, context)
+        return await _build_astro_preview_reviewed(request, opportunity, manual_warnings, context, thresholds)
     finally:
         context.log("astro_manual_preview_timing", opportunity.symbol)
 
@@ -333,6 +340,7 @@ async def _build_astro_preview_reviewed(
     opportunity: Opportunity,
     manual_warnings: list[str] | None,
     manual_review: ManualReview,
+    thresholds: AstroThresholdOverrides | None = None,
 ) -> AstroPairPlan:
     risk_settings, risk_warnings = await _manual_risk_settings(request)
     opportunity, review_error = await _review_manual_opportunity(request, opportunity, risk_settings, manual_review)
@@ -346,7 +354,7 @@ async def _build_astro_preview_reviewed(
         )
     settings, settings_warnings = await _manual_astro_card_settings(request)
     planner = AstroPairPlanner(AstroPlannerConfig.from_card_settings(settings))
-    plan = planner.plan(opportunity, allow_manual_override=True)
+    plan = planner.plan(opportunity, allow_manual_override=True, thresholds=thresholds)
     hl_gc_supported = await request.app.state.astro_hl_gc_catalog.supports_opportunity(opportunity)
     route_variants = [
         AstroCardRouteVariant(
@@ -587,14 +595,14 @@ async def preview_astro_pair(opportunity_id: str, request: Request, target: Card
 
 @router.post("/instrument/preview", response_model=AstroPairPlan)
 async def preview_astro_instrument_pair(
-    route: AstroInstrumentRouteRequest,
+    route: AstroInstrumentPreviewRequest,
     request: Request,
     target: CardTarget = "astro",
 ) -> AstroPairPlan:
     opportunity, warnings = await _find_instrument_opportunity(request, route)
     if target != "astro":
         return await _build_arb_preview(request, opportunity, target, warnings)
-    return await _build_astro_preview(request, opportunity, warnings)
+    return await _build_astro_preview(request, opportunity, warnings, route)
 
 
 async def _create_astro_card(
@@ -730,3 +738,78 @@ async def create_astro_card_from_instrument(
             )
         )
     return await _create_astro_card(request, opportunity, payload.card, warnings)
+
+
+async def _instrument_card_plan(request: Request, route: AstroInstrumentRouteRequest):
+    opportunity, warnings = await _find_instrument_opportunity(request, route)
+    plan = await _build_astro_preview(request, opportunity, warnings)
+    if not plan.can_submit or not plan.pair:
+        raise HTTPException(status_code=422, detail="；".join(plan.blockers) or "无法规划卡片路线")
+    variants = [dict(plan.pair, buyEx=variant.buy_exchange, sellEx=variant.sell_exchange)
+                for variant in plan.route_variants]
+    return opportunity, plan.pair, variants or [plan.pair]
+
+
+async def _matching_instrument_cards(request: Request, variants: list[dict]) -> list[dict]:
+    try:
+        pairs = await _astro_client(request).list_pairs()
+    except AstroClientError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    return [pair for pair in pairs if any(_same_route(pair, variant) for variant in variants)]
+
+
+@router.post("/instrument/card/lookup")
+async def lookup_astro_instrument_card(route: AstroInstrumentRouteRequest, request: Request) -> dict:
+    _, _, variants = await _instrument_card_plan(request, route)
+    pairs = await _matching_instrument_cards(request, variants)
+    pair = pairs[0] if len(pairs) == 1 else None
+    return {
+        "found": bool(pairs), "count": len(pairs),
+        "pair_name": pair.get("name") if pair else None,
+        "status": pair.get("status") if pair else None,
+        "disable_open": pair.get("disableOpen") if pair else None,
+        "open_position": str(pair["openPosition"]) if pair else None,
+        "close_position": str(pair["closePosition"]) if pair else None,
+        "open_spread_pct": position_to_pct(pair["openPosition"], pair["type"]) if pair else None,
+        "close_spread_pct": position_to_pct(pair["closePosition"], pair["type"]) if pair else None,
+    }
+
+
+@router.post("/instrument/card/update", response_model=AstroAlertActionResult)
+async def update_astro_instrument_card(payload: AstroInstrumentCardUpdateRequest, request: Request):
+    settings = request.app.state.settings
+    if not settings.astro_manual_card_create or settings.astro_dry_run_only:
+        return AstroAlertActionResult(enabled=settings.astro_manual_card_create, status="disabled",
+                                      action="update", message="人工建卡未启用或处于 dry-run，未修改 Astro")
+    service = getattr(request.app.state, "astro_alert_service", None)
+    if service is None or not hasattr(service, "pair_lock"):
+        raise HTTPException(status_code=503, detail="Astro 建卡锁未就绪")
+    opportunity, planned, variants = await _instrument_card_plan(request, payload.route)
+    async with service.pair_lock(str(planned["name"])):
+        pairs = await _matching_instrument_cards(request, variants)
+        if not pairs:
+            raise HTTPException(status_code=404, detail="未找到对应卡片")
+        if len(pairs) != 1:
+            raise HTTPException(status_code=409, detail="找到多条对应卡片，请明确路线后重试")
+        pair = pairs[0]
+        for field, expected in (("openPosition", payload.expected_open_position),
+                                ("closePosition", payload.expected_close_position)):
+            if expected is not None:
+                try:
+                    matches = Decimal(str(pair.get(field))) == Decimal(expected)
+                except InvalidOperation:
+                    matches = False
+                if not matches:
+                    raise HTTPException(status_code=409, detail="卡片已被修改，请刷新")
+        opening, closing, *_ = AstroPairPlanner().position_thresholds(opportunity, thresholds=payload)
+        updated = dict(pair, openPosition=opening, closePosition=closing)
+        before = f"{pair['openPosition']}/{pair['closePosition']}"
+        after = f"{opening}/{closing}"
+        try:
+            await _astro_client(request).update_pair(updated)
+        except AstroClientError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        card_update_logger.info("astro_card_update pair=%s before=%s after=%s", pair["name"], before, after)
+        return AstroAlertActionResult(enabled=True, status="updated", action="update",
+                                      pair_name=pair["name"], pair_type=pair["type"],
+                                      message=f"开仓/平仓阈值 {before} → {after}")

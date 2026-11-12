@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 
-from app.models.astro import AstroFieldAssumption, AstroPairPlan
+from app.models.astro import AstroFieldAssumption, AstroPairPlan, AstroThresholdOverrides
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.settings import AstroCardSettings
@@ -78,6 +78,11 @@ def _strict_close_position(open_position: str, close_position: str) -> tuple[str
     if close_value < open_value:
         return close_position, False
     return f"{open_value - ASTRO_POSITION_QUANTUM:.6f}", True
+
+
+def position_to_pct(position: str, pair_type: str) -> float:
+    value = Decimal(str(position))
+    return float(Decimal(200) * (value - 1) / (value + 1) if pair_type == "FR" else value * 100)
 
 
 def _raw_base_name(symbol: str | None) -> str | None:
@@ -228,15 +233,23 @@ class AstroPairPlanner:
 
     def position_thresholds(
         self, opportunity: Opportunity, *, allow_negative: bool = False,
+        thresholds: AstroThresholdOverrides | None = None,
     ) -> tuple[str, str, ClosePositionDecision, bool, str]:
         close_decision = _astro_close_decision(
             opportunity,
             self.config,
             allow_negative=allow_negative,
         )
+        open_pct = opportunity.open_spread_pct
+        if thresholds is not None and thresholds.open_spread_pct is not None:
+            open_pct = thresholds.open_spread_pct
+            close_decision = ClosePositionDecision(
+                close_spread_pct=thresholds.close_spread_pct,
+                source="manual_template", note="Uses manually selected template thresholds.",
+            )
         fr_pair_bases = _fr_pair_bases(opportunity)
         position_value = _ratio_position if fr_pair_bases is not None else _decimal_position
-        open_position = position_value(opportunity.open_spread_pct)
+        open_position = position_value(open_pct)
         close_position = position_value(close_decision.close_spread_pct)
         close_position, rounded_close_adjusted = _strict_close_position(
             open_position,
@@ -258,6 +271,7 @@ class AstroPairPlanner:
         *,
         allow_manual_override: bool = False,
         allow_negative_open: bool = False,
+        thresholds: AstroThresholdOverrides | None = None,
     ) -> AstroPairPlan:
         is_reverse_sf = (
             opportunity.type == OpportunityType.SF
@@ -271,6 +285,8 @@ class AstroPairPlanner:
             blockers.append("Close spread is negative; closePosition mapping needs manual review.")
 
         manual_risk_warnings: list[str] = []
+        if thresholds is not None and thresholds.open_spread_pct is not None and thresholds.open_spread_pct <= opportunity.open_spread_pct:
+            manual_risk_warnings.append("当前价差已达到开仓线，建卡后可能立即开仓")
         if allow_manual_override and is_reverse_sf:
             blockers = [
                 blocker
@@ -306,6 +322,7 @@ class AstroPairPlanner:
 
         open_position, close_position, close_decision, rounded_close_adjusted, close_position_note = self.position_thresholds(
             opportunity, allow_negative=allow_manual_override or allow_negative_open,
+            thresholds=thresholds,
         )
         fr_pair_bases = _fr_pair_bases(opportunity)
         pair_type = (

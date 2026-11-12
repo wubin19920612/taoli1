@@ -12,6 +12,19 @@ const props = () => {
 };
 
 describe("PairChartV2", () => {
+  it("draws and replaces the selected executable template converted to mid-price lines", () => {
+    const p = props();
+    const { rerender } = render(<PairChartV2 {...p} templateLines={{ open: 1.1, close: 0.3 }} />);
+    const spread = chartMocks[0].series[0];
+    expect(spread.createPriceLine).toHaveBeenCalledWith(expect.objectContaining({ title: "模板开仓线", price: 1.1, lineStyle: 2 }));
+    expect(spread.createPriceLine).toHaveBeenCalledWith(expect.objectContaining({ title: "模板平仓线", price: 0.3 }));
+    const autoscale = spread.applyOptions.mock.calls.find(([options]) => options.autoscaleInfoProvider)?.[0].autoscaleInfoProvider;
+    expect(autoscale(() => ({ priceRange: { minValue: 0.8, maxValue: 1 } }))).toEqual({ priceRange: { minValue: 0.3, maxValue: 1.1 } });
+    rerender(<PairChartV2 {...p} templateLines={{ open: -1.1, close: -0.3 }} />);
+    expect(spread.removePriceLine).toHaveBeenCalledTimes(2);
+    expect(spread.createPriceLine).toHaveBeenCalledWith(expect.objectContaining({ title: "模板开仓线", price: -1.1 }));
+  });
+
   it("uses the v5 pane API, two axes, realtime rates, net bars and disposes the chart", () => {
     const p = props();
     const { unmount, rerender } = render(<PairChartV2 {...p} />);

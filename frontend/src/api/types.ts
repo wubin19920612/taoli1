@@ -1381,6 +1381,8 @@ export interface AstroCardSettings {
 }
 
 export interface AstroCardCreateRequest {
+  open_spread_pct?: number;
+  close_spread_pct?: number;
   target?: CardTarget;
   max_trade_usdt?: number;
   leverage?: number;
@@ -1416,6 +1418,18 @@ export interface AstroInstrumentRouteRequest {
   buy_market_type: MarketType;
   sell_exchange: string;
   sell_market_type: MarketType;
+}
+
+export interface AstroCardLookup {
+  found: boolean;
+  count: number;
+  pair_name: string | null;
+  status: boolean | null;
+  disable_open: boolean | null;
+  open_position: string | null;
+  close_position: string | null;
+  open_spread_pct: number | null;
+  close_spread_pct: number | null;
 }
 
 export interface AstroFieldAssumption {

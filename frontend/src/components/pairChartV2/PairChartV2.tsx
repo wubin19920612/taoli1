@@ -1,3 +1,5 @@
+import type { TemplateLines } from "../pairTemplate/recommend";
+import type { AutoscaleInfo } from "lightweight-charts";
 import { Button, InputNumber, Popover, Switch, Tag, Tooltip, Typography } from "antd";
 import dayjs from "dayjs";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -18,6 +20,7 @@ export type PairChartV2Controls = {
   onLoadHours: (hours: number) => void;
 };
 type Props = PairChartV2Controls & {
+  templateLines?: TemplateLines | null;
   result: PairSpreadQueryResult | null;
   points: PairSpreadPoint[];
   labels: [string, string];
@@ -65,7 +68,7 @@ function FundingSummary({ result, data }: { result: Props["result"]; data: Retur
   </div>;
 }
 
-export function PairChartV2({ result, points, labels, loading, onSwap, onLoadHours, onRangeSelect, onRangeClear }: Props) {
+export function PairChartV2({ templateLines, result, points, labels, loading, onSwap, onLoadHours, onRangeSelect, onRangeClear }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<Series | null>(null);
@@ -144,6 +147,29 @@ export function PairChartV2({ result, points, labels, loading, onSwap, onLoadHou
     });
     return () => { if (seriesRef.current === series) lines.forEach((line) => series.spread.removePriceLine(line)); };
   }, [visible, thresholds, ratioMode]);
+
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    const templatePrices = templateLines ? Object.values(templateLines)
+      .map((value) => thresholdMetric(value, ratioMode)).filter((value): value is number => value !== null) : [];
+    series.spread.applyOptions({ autoscaleInfoProvider: (original: () => AutoscaleInfo | null) => {
+      const info = original();
+      if (!info?.priceRange || !templatePrices.length) return info;
+      return { ...info, priceRange: {
+        minValue: Math.min(info.priceRange.minValue, ...templatePrices),
+        maxValue: Math.max(info.priceRange.maxValue, ...templatePrices)
+      } };
+    } });
+    if (!templateLines) return;
+    const lines = Object.entries(templateLines).flatMap(([key, value]) => {
+      const price = thresholdMetric(value, ratioMode);
+      return price === null ? [] : [series.spread.createPriceLine({ price,
+        color: key === "open" ? "#1677ff" : "#d97706", lineStyle: LineStyle.Dashed, lineWidth: 2,
+        title: key === "open" ? "模板开仓线" : "模板平仓线", axisLabelVisible: true, lineVisible: true })];
+    });
+    return () => { if (seriesRef.current === series) lines.forEach((line) => series.spread.removePriceLine(line)); };
+  }, [templateLines, ratioMode]);
 
   const { box, clear } = useRangeSelection(host, chartRef, rangeMode, onRangeSelect, onRangeClear);
   const updateThreshold = (key: keyof Thresholds, value: number | null) => {

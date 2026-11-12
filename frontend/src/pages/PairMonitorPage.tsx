@@ -1,3 +1,6 @@
+import { PairTemplateCard } from "../components/pairTemplate/PairTemplateCard";
+import type { TemplateLines } from "../components/pairTemplate/recommend";
+import { thresholdMetric } from "../components/pairChartV2/data";
 import { redirectToLogin } from "../api/auth";
 import {
   DeleteOutlined,
@@ -2647,7 +2650,8 @@ function PairSpreadDiagnosticCard({
   );
 }
 
-export function PairSpreadChart({ result, onRangeSelect, onRangeClear }: {
+export function PairSpreadChart({ result, onRangeSelect, onRangeClear, templateLines }: {
+  templateLines?: TemplateLines | null;
   result: PairSpreadQueryResult | null;
   onRangeSelect?: (start: number, end: number) => void;
   onRangeClear?: () => void;
@@ -2719,6 +2723,11 @@ export function PairSpreadChart({ result, onRangeSelect, onRangeClear }: {
   }
 
   const values = points.map((point) => point.spread_pct).filter((value) => Number.isFinite(value));
+  const templateValues = templateLines ? Object.entries(templateLines).flatMap(([key, value]) => {
+    const price = thresholdMetric(value, ratioMode);
+    return price === null ? [] : [{ key, value: price }];
+  }) : [];
+  values.push(...templateValues.map((line) => line.value));
   const minValue = Math.min(...values);
   const maxValue = Math.max(...values);
   const span = maxValue - minValue || Math.max(Math.abs(maxValue), 1);
@@ -2831,6 +2840,10 @@ export function PairSpreadChart({ result, onRangeSelect, onRangeClear }: {
         ) : null}
         <path className="pair-chart-area" d={spreadAreaPath(points, xAt, yAt, baselineY, gapBeforeIndices)} />
         <path className="pair-chart-line" d={spreadLinePath(points, xAt, yAt, gapBeforeIndices)} />
+        {templateValues.map(({ key, value }) => <g key={`template-${key}`} data-testid={`template-line-${key}`}>
+          <line x1={padding.left} x2={padding.left + chartWidth} y1={yAt(value)} y2={yAt(value)} stroke={key === "open" ? "#1677ff" : "#d97706"} strokeDasharray="6 4" />
+          <text x={padding.left + 8} y={yAt(value) - 5} fill={key === "open" ? "#1677ff" : "#d97706"}>{key === "open" ? "模板开仓线" : "模板平仓线"} {metric(value)}</text>
+        </g>)}
         <circle
           className={`pair-chart-current-point pair-chart-current-${latestTone}`}
           cx={xAt(points.length - 1)}
@@ -2956,16 +2969,16 @@ export function PairSpreadChart({ result, onRangeSelect, onRangeClear }: {
   );
 }
 
-function PairSpreadBacktest({ result, v2 }: { result: PairSpreadQueryResult | null; v2?: PairChartV2Controls }) {
+function PairSpreadBacktest({ result, v2, templateLines }: { result: PairSpreadQueryResult | null; v2?: PairChartV2Controls; templateLines?: TemplateLines | null }) {
   const [range, setRange] = useState<RangeBacktestRange | null>(null);
   const selectRange = useCallback((start: number, end: number) => {
     setRange({ start_at: new Date(start).toISOString(), end_at: new Date(end).toISOString() });
   }, []);
   const clearRange = useCallback(() => setRange(null), []);
   return <>
-    {v2 ? <PairChartV2 {...v2} result={result} points={pairDisplayPoints(result)}
+    {v2 ? <PairChartV2 {...v2} templateLines={templateLines} result={result} points={pairDisplayPoints(result)}
       labels={[leftLegLabel(result), rightLegLabel(result)]} onRangeSelect={selectRange} onRangeClear={clearRange} />
-      : <PairSpreadChart result={result} onRangeSelect={selectRange} onRangeClear={clearRange} />}
+      : <PairSpreadChart result={result} templateLines={templateLines} onRangeSelect={selectRange} onRangeClear={clearRange} />}
     {result && range ? <RangeBacktestPanel leg1={result.leg1} leg2={result.leg2} range={range} defaultDirection="long1_short2" /> : null}
   </>;
 }
@@ -4426,6 +4439,7 @@ function PairDetailTabs({ items }: { items: NonNullable<TabsProps["items"]> }) {
 }
 
 export function PairMonitorPage() {
+  const [templateLines, setTemplateLines] = useState<TemplateLines | null>(null);
   const [chartVersion, setChartVersion] = useState<ChartVersion>(readVersion);
   const [form] = Form.useForm<PairSpreadFormValues>();
   const watchedFormValues = Form.useWatch([], form);
@@ -6018,6 +6032,7 @@ export function PairMonitorPage() {
             }
           />
         </section>
+        {result ? <PairTemplateCard key={JSON.stringify([result.leg1, result.leg2, result.leg2_multiplier])} result={result} onLinesChange={setTemplateLines} /> : null}
         <div className="pair-spread-context">
           <span>周期 {intervalLabel(result ? resultIntervalSeconds(result) : intervalSeconds)}</span>
           <span>{result ? `${dataRangeLabel(result, hours)} · ${fullTime(result.observed_at)}` : durationLabel(hours)}</span>
@@ -6029,7 +6044,7 @@ export function PairMonitorPage() {
         </div>
         <Segmented value={chartVersion} options={[{ label: "新版图表", value: "v2" }, { label: "原版", value: "v1" }]}
           onChange={(value) => { setChartVersion(value as ChartVersion); writeVersion(value as ChartVersion); }} />
-        <PairSpreadBacktest key={JSON.stringify([chartVersion, result?.leg1, result?.leg2, result?.leg2_multiplier])} result={result}
+        <PairSpreadBacktest templateLines={templateLines} key={JSON.stringify([chartVersion, result?.leg1, result?.leg2, result?.leg2_multiplier])} result={result}
           v2={chartVersion === "v2" ? { loading, onSwap: () => void swapPairLegs(), onLoadHours: (nextHours) => {
             if (result) void runQuery({ hours: Math.min(MAX_CHART_HOURS, clampHours(nextHours)), values: pairFormFromResult(result),
               symbolMode: pairSymbolModeFromValues(pairFormFromResult(result)), intervalSeconds: resultIntervalSeconds(result), preserveInterval: true });
