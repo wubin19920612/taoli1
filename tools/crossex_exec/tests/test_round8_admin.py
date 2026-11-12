@@ -26,6 +26,15 @@ class AdminTests(previous.APIFixture, unittest.TestCase):
         self.config['CROSSEX_EXEC_ADMIN_TOKEN'] = ADMIN
 
     def write(self, service, value, path='/api/v1/config', method='PUT', token=ADMIN, raw=None, headers=None):
+        # Round ten adds mandatory preconditions. Preserve every original
+        # boundary/auth assertion; this legacy helper represents a fresh reader.
+        if raw is None:
+            if path == '/api/v1/config':
+                from tools.crossex_exec.settings import Settings
+                value = dict(value, expected_version=Settings(self.store).read()['version'])
+            elif path.startswith('/api/v1/universe/'):
+                from tools.crossex_exec.universe import Universe
+                value = dict(value, expected_status=Universe(self.store).administrative_status(path.split('/')[4]))
         conn = http.client.HTTPConnection(*service.addresses[0], timeout=3)
         try:
             body = json.dumps(value) if raw is None else raw

@@ -1,0 +1,153 @@
+{
+  "source_db_sha256": "ddcc6431f17c364440448167cc14ac1118d450688f89786d765e6185f843c775",
+  "captured_at": 1794459421.2300043,
+  "instruments": {
+    "binance|future|BTCUSDT": {
+      "market": {
+        "exchange": "binance",
+        "market_type": "future",
+        "raw_symbol": "BTCUSDT",
+        "price_multiplier": "1",
+        "contract_size_multiplier": null
+      },
+      "spec": {
+        "base": "BTC",
+        "quote": "USDT",
+        "contract_size": "1",
+        "qty_step": "0.001",
+        "min_qty": "0.001",
+        "min_notional": "50",
+        "price_multiplier": "1",
+        "max_qty": "120"
+      },
+      "symbol": "BINANCE_FUTURE_BTC_USDT",
+      "tick": "0.1",
+      "category": "unconfirmed",
+      "canonical_base": null,
+      "quantity_multiplier": "1",
+      "mapping_id": null
+    },
+    "binance|future|\u725b\u6765USDT": {
+      "market": {
+        "exchange": "binance",
+        "market_type": "future",
+        "raw_symbol": "\u725b\u6765USDT",
+        "price_multiplier": "1",
+        "contract_size_multiplier": null
+      },
+      "spec": {
+        "base": "\u725b\u6765",
+        "quote": "USDT",
+        "contract_size": "1",
+        "qty_step": "1",
+        "min_qty": "1",
+        "min_notional": "5",
+        "price_multiplier": "1",
+        "max_qty": "1000000"
+      },
+      "symbol": "BINANCE_FUTURE_\u725b\u6765_USDT",
+      "tick": "0.00001",
+      "category": "unconfirmed",
+      "canonical_base": null,
+      "quantity_multiplier": "1",
+      "mapping_id": null
+    },
+    "bitget|future|BTCUSDT": {
+      "market": {
+        "exchange": "bitget",
+        "market_type": "future",
+        "raw_symbol": "BTCUSDT",
+        "price_multiplier": "1",
+        "contract_size_multiplier": null
+      },
+      "spec": {
+        "base": "BTC",
+        "quote": "USDT",
+        "contract_size": "1",
+        "qty_step": "0.0001",
+        "min_qty": "0.0001",
+        "min_notional": "5",
+        "price_multiplier": "1",
+        "max_qty": "220"
+      },
+      "symbol": "BTCUSDT",
+      "tick": "0.1",
+      "category": "crypto",
+      "canonical_base": null,
+      "quantity_multiplier": "1",
+      "mapping_id": null
+    },
+    "bitget|future|\u725b\u6765USDT": {
+      "market": {
+        "exchange": "bitget",
+        "market_type": "future",
+        "raw_symbol": "\u725b\u6765USDT",
+        "price_multiplier": "1",
+        "contract_size_multiplier": null
+      },
+      "spec": {
+        "base": "\u725b\u6765",
+        "quote": "USDT",
+        "contract_size": "1",
+        "qty_step": "1",
+        "min_qty": "1",
+        "min_notional": "5",
+        "price_multiplier": "1",
+        "max_qty": "700000"
+      },
+      "symbol": "\u725b\u6765USDT",
+      "tick": "0.00001",
+      "category": "crypto",
+      "canonical_base": null,
+      "quantity_multiplier": "1",
+      "mapping_id": null
+    }
+  },
+  "responses": {
+    "https://fapi.binance.com/fapi/v1/ticker/24hr": [
+      {
+        "symbol": "BTCUSDT",
+        "quoteVolume": "9024754791.44",
+        "closeTime": 1794459415114
+      },
+      {
+        "symbol": "\u725b\u6765USDT",
+        "quoteVolume": "13169474.5920200",
+        "closeTime": 1794459415421
+      }
+    ],
+    "https://fapi.binance.com/fapi/v1/ticker/bookTicker": [
+      {
+        "symbol": "BTCUSDT",
+        "bidPrice": "73714.50",
+        "askPrice": "73714.60",
+        "time": 1794459419865
+      },
+      {
+        "symbol": "\u725b\u6765USDT",
+        "bidPrice": "0.0589100",
+        "askPrice": "0.0589300",
+        "time": 1794459420218
+      }
+    ],
+    "https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES": {
+      "code": "00000",
+      "data": [
+        {
+          "symbol": "BTCUSDT",
+          "usdtVolume": "2250199971.00691",
+          "bidPr": "73718.8",
+          "askPr": "73718.9",
+          "ts": "1794459419421"
+        },
+        {
+          "symbol": "\u725b\u6765USDT",
+          "usdtVolume": "826330.34771",
+          "bidPr": "0.05893",
+          "askPr": "0.059",
+          "ts": "1794459419423"
+        }
+      ]
+    }
+  }
+}
