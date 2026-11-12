@@ -68,3 +68,65 @@ npm.cmd run build
 - 日志和临时目录位于已忽略的 `.pytest-tmp/live-exec-security-*`，包含红灯、定向、全量、构建和依赖版本记录。既有 `.pytest-tmp`、output、node_modules、dist、tsbuildinfo 均保留，不提交。最终 Git 状态另行核对。
 - 本轮没有推送、线上备份、部署或线上请求，线上版本不因本轮改变。三项修复本地交付不等于线上已恢复；真实 nginx 两层链路、生产锁定依赖、真实上游事务并发和有效凭证联调仍需后续验收。
 - 下一阶段另开任务，从本交接继续；在明确授权联网/部署后，先确认 crossex-exec 已包含同一并发契约，再核对外层 8443 Host、使用锁定镜像验证审计 stdout、执行备份和上线检查。本轮没有新增交易授权。
+
+## 外部持仓接入追加（2026-11-12；存在上游字段阻塞，未完成整体验收）
+
+### 范围、固定来源与当前阻塞
+
+- 本轮模块为实盘页外部持仓管理；工作树、分支不变，起始 HEAD 为 `58581df57816d303266215cf097ac0a4df531410`，开始时工作区干净。用户明确限定本地修改、TDD 和独立 test/feat/docs 提交；不改 `.env`，不 push、SSH、WSL 或 amend。
+- [接口契约](live-exec-contract-2026-11-11.md) 已完整复制自只读来源 `../crossex-exec-r8` 的 **`bfb28615dc4f6d3d385d6af86fc960faa0646afe`**。复制前后逐字节相等；契约 Git blob 为 `0a811f9f3d952164feaa187218e71a32dbfab68f`，SHA-256 为 `99c21274db3c937862ba641e76d32da062473f2a350ee446504796f0f069250c`；该来源 `management.py` blob 为 `0861206e4de0f63dfe60cea0d7fcf16ca2e26611`。docs 提交信息亦注明来源 SHA。
+- **不能宣称需求 3 已全部完成。** 固定来源的 `management.py:116-119` 只返回 `status/contracts/income/flatten_status/projection`；`api_data.py:460-465` 的 summary 元数据白名单没有全户原始仓位、外仓或程序投影，`api_data.py:488-550` 的 summary 返回体也没有远端仓位或外仓浮盈亏。契约第九轮新增的 `account_snapshot` 只有时间/新鲜度，不含持仓内容。
+- `engine.py:685-686` 保存的 `program_projection` 只含 `positions/upnl/upnl_by_position/external_positions/captured_at`，而 `upnl_by_position` 是剔除外仓后的程序值。第十一轮契约明确 projection 可能是旧值。归属或收益核实失败时，无法用它列出当前导致停开的未登记远端仓位，也无法据此确认某外仓现在多空均为空。
+- 已向用户异步请求新增 summary/完整远端快照的字段约定或来源提交。没有以推测字段、程序持仓列表、旧投影或全户合计补造当前仓位；没有修改来源工作树。执行期间来源第十二轮推进到 `8046f3d`（实现 `0fe7941`）：income 追加原币现金/贡献、external_fx 与 valuation。这些是区间收益贡献的估值证据，不是各当前远端持仓/浮盈亏；`management.py`、`api_data.py` 相对 bfb2861 没有变更，故阻塞仍在。本地契约按用户指定继续固定 bfb2861，未来附加字段可透传，未猜测新的 USD 行字段。
+
+### 已实现的接口、安全约束与界面基础
+
+- `backend/app/api/routes_live_exec.py` 新增固定 GET `/api/live-exec/external-positions` 和 POST `/api/live-exec/external-positions/register|unregister`，仅透传到对应 `/api/v1/` 路径。GET 沿用既有读取鉴权和只读令牌；POST 复用 `require_admin_session`、严格 Origin/端口/CSRF 校验、独立 ADMIN 令牌、JSON 大小/重复键检查与 `admin_proxy`。没有鉴权旁路，没有引入执行器代码、数据库写入或真实账户访问。
+- 写 body 必须恰好为 `identity/expected_status/reason`；identity 必须恰好包含 route/exchange_type/business/symbol/quote/dex 六项，并按 bfb2861 的原始 symbol 规则逐项一致。普通合约必须显式空 dex；Hyperliquid 的 io/xyz 等 DEX 不可互代，不按规范化 ticker 匹配。`expected_status` 严格为 `x1:` 加 64 位小写十六进制；reason 为 1–200 字符非空文字且无控制字符。远端持仓、活动订单、历史程序归属与目录有效性仍由上游裁决。
+- 写接口沿用独立 stdout 审计 logger；只记录已验证身份的摘要、会话摘要、固定路由和状态，不记录原始身份、reason、cookie、令牌或上游正文。状态冲突和业务拒绝的 **409 状态及原始字节正文** 均原样返回，不透传上游响应头，不重试。
+- `frontend/src/api/liveExec.ts` 增加对象型读取结构及 register/unregister 写类型，仍通过 `sessionFetch` 使用会话和 CSRF。完整身份、原始 `expected_status` 与 reason 原样提交。异常登记记录结构返回 invalid_json，不使页面崩溃；未来附加字段可保留，缺失值不假定为零。
+- `useLiveExecAdmin.ts` 将外仓列为第五个管理读取，仍串行、30 秒轮询、隐藏/卸载取消。管理 hook 提升到 `LiveExecPage` 共用一次；原管理组件改为接收该实例，没有重复轮询。完整页面回归计数为首次 9、5 秒 11、30 秒 28，恢复增加 9；原四项业务、五项管理分别检查，没有 mock 掉管理组件或过滤总请求数。
+- `LiveExternalPositions.tsx` 实现中文远端持仓表与确认组件：保留交易所/通道/原始合约/DEX/方向/原生数量，支持程序、已登记外仓及红色“未登记——导致停开”；原币浮盈亏与 USD 单独显示，USD/折算缺失为“—”。打开弹窗时复制精确身份和状态，二次确认要求说明，重复点击只发一次；409 关闭确认、清除说明、刷新管理数据，无自动重试。提示登记覆盖多空两个方向、永久禁单、取消仍保留禁单和需显式重建收益基线。
+- **该组件的远端行和操作目前仅有合成数据测试，尚未有上游数据适配。** `LiveExecPage` 显式传入 `rows={null}`，实际页面展示“远端持仓数据不可用”和登记记录表，不暴露登记/取消按钮。登记记录不会被冒充为当前持仓；此处是待续接点，不是已完成的账户操作界面。
+- 执行汇总现从已存在的 external-positions.flatten_status 分开显示“程序仓位已平 / 全账户已平”，并显示核实时间、说明是上次核实结果；缺失/null 显示“—”。没有假装 summary 已发布新字段，也不从 `halted` 或空数组推断全平。
+
+### 本地提交与 TDD 证据
+
+- `bd1465a`：后端测试，新增端点鉴权、CSRF、原始身份、白名单、日志脱敏、并发和业务 409。旧路由红灯 `136 failed, 178 deselected`；实现后管理接口 `314 passed`。
+- `ae1d7f1`：前端 API 与完整页面轮询测试。API 旧实现 `4 failed / 5 passed`（对象被当数组、错误走 mappings 路径等）；新增轮询请求计数旧实现 2 项失败。
+- `a4b4a4c`：确认组件 15 项测试。红灯为组件尚不存在的模块加载失败；实现后 15 项全部通过。覆盖多 DEX、缺失与零值、原始身份与方向、二次确认、取消、说明校验、冻结状态、409、不重试和单次在途请求。
+- `ff7f049`：真实页面旧契约接入 3 项测试，先 3 项红灯后通过；核对两种全平状态分开、缺失/null 为“—”、旧投影不授予取消权限。
+- `a378bab`：异常登记记录 4 项先红灯的补充测试。
+- feat 提交为 `9325a97`；本文及契约为独立 docs 提交，其 hash 用 `git log -1 --format=%H -- docs/task-handoff-2026-11-12-live-exec-admin.md` 查询；全部提交可用 `git log 58581df..HEAD --oneline` 查询，没有 amend。提交时显式暂存本模块文件，禁用本次提交 hooks/GPG；Git 索引位于父仓库而申请写权限，自动审批通过，无自动审批拒绝。
+
+### 验证与运行边界
+
+- 后端相关：`372 passed in 63.26s`，退出码 0，包括 routes/admin/deployment 三套测试。
+- 后端全量：`3333 passed, 11 deselected, 12 warnings in 342.16s (0:05:42)`，退出码 0。11 项为 pyproject.toml 原有 network/benchmark 排除，12 条为既有 datetime.utcnow 弃用提示；未新增跳过或放宽断言。
+- 前端相关（响应结构补测前）：5 文件、74 项通过，40.13 秒。最终全量：`Test Files 38 passed (38)`、`Tests 531 passed (531)`、`Duration 376.08s`，退出码 0，包含随后新增的 4 项异常记录回归。使用 `npm.cmd test -- --maxWorkers=2 --minWorkers=2`，没有筛选或跳过用例；既有 antd 弃用和 React act 提示保留。
+- 最终 `npm.cmd run build`（TypeScript + Vite）退出码 0，`built in 10.98s`。PowerShell 将 npm 更新通知标为 NativeCommandError 文本，但进程退出码为 0，构建实际成功；没有安装或更新 npm。
+- 当前验证环境：Python 3.12.10、pytest 8.4.2、Uvicorn 0.41.0、FastAPI 0.135.1、Pydantic 2.12.5、Starlette 0.52.1、httpx 0.28.1，Node 24.14.0、npm 11.9.0。仍存在前文记录的本机与生产锁定依赖差异。
+- 修改的后端测试 Ruff 无新增问题；路由只有基线既存 FURB162（UTC 时间的 `.replace("Z", "+00:00")`），未作无关修复；`git diff --check` 通过。
+- 日志在已忽略的 `.pytest-tmp/live-exec-external-*.log`，红灯、相关、全量和构建日志均保留。未删除已有 `.pytest-tmp`、output、node_modules、dist、tsbuildinfo 等产物。没有新增依赖、修改锁文件或真实配置。
+- 本轮仅有离线合成账户/令牌和本机依赖验收，未运行上游 Engine 或真实鉴权接口，未执行生产锁定依赖/浏览器现场验收；没有 push、SSH、WSL、线上备份、部署或线上请求。线上版本未变，本轮也未新增交易授权。
+
+复现命令（分别在 backend / frontend 目录运行）：
+
+```powershell
+$env:PYTHONPATH='.'
+python -m pytest tests/test_live_exec_routes.py tests/test_live_exec_admin.py tests/test_live_exec_deployment.py -q -p no:cacheprovider --basetemp=../.pytest-tmp/live-exec-external-related-rerun
+python -m pytest tests -q -p no:cacheprovider --basetemp=../.pytest-tmp/live-exec-external-full-rerun
+# frontend
+npm.cmd test -- --maxWorkers=2 --minWorkers=2
+npm.cmd run build
+```
+
+### 继续本模块所需输入
+
+提供上游追加读取字段的契约及固定提交后，继续本模块，不先扩展到其他模块：
+
+1. 需要完整远端持仓快照（含未登记/不可核实仓位）、完整性/采集时间、每行原始六项身份和方向/原生数量，以及可核实的程序/外仓归属依据。缺失身份不得按 ticker 补齐。
+2. 需要各外仓当前原币浮盈亏及币种；第十二轮 USD 及折算状态若尚未发布，保留“—”，不能以原币数值或静态 1:1 代填。
+3. 约定在完整当前快照中证明某已登记合约多空均无仓位的方式，再为相应行提供取消登记；上游仍做活动订单与身份核验。没有完整快照时保持不可用。
+4. 添加真实形状的页面适配与集成 TDD，连接 `LiveExternalPositions` 的行数据和操作，并在成功/409 后刷新当前远端与所有管理数据；保留已冻结的状态、身份，不自动重试。
+5. 按用户要求重跑受影响测试、后端相关/全量（若后端变动）、前端 npm test/build，单独提交 test/feat/docs 并追加本交接。部署仍需另行授权，不沿用历史默认部署规则。
