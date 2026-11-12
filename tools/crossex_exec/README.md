@@ -272,3 +272,11 @@ python -m tools.crossex_exec external-register --env-file /private/crossex-exec.
 USDT/USD 保留原报告口径。全户硬风控、任何正负债停开并告警、精确 DEX 永久禁单和旧日亏锁保持；FX 成功不等于准许开仓。此估值不是历史交易所权益/抵押折扣的重建。
 
 公式、证据字段及离线验证见[第十二轮契约](../../docs/live-exec-contract-2026-11-11.md#第十二轮增补2026-11-12)；登记后的三次匹配快照、HALTED 维护、release-halt/rebaseline 和日亏周期操作见[第十二轮交接](../../docs/task-handoff-2026-11-12-crossex-exec-r8.md#第十二轮)。线上操作交由 Claude，本轮仅 test/feat/docs 本地提交，无 push/SSH/WSL/amend/鉴权/部署。
+
+## 第十三轮：终审修复与远端仓位视图
+
+已修复 r12 终审 5P1/1P2：收益证明绑定持久化账户快照版本，事务提交与最终发送都核对版本；已核实流水 ID/内容摘要持续保存，拒绝消失或改写；非 USD 全户名义额用 FX 区间上界，缺价拒开；统一 CrossEx liability 与 Bitget UTA debt；停机仅消费本次已核实结果，失败非零退出；权益管理审计保存旧外仓基线和程序浮盈亏。坏账户读取立即停开。原额度、损失锁、三快照、保证金和永久禁单不放宽。
+
+新增只读令牌接口 `GET /api/v1/remote-positions`，返回最近发布账户快照的所有非零远端仓位、原始 route/exchange_type/business/symbol/quote/dex、方向/数量/开仓价/标记价、原币及保守 USD 浮盈亏、program/external_registered/unregistered 归属和快照时间/版本/过期状态。USD 浮盈亏展示取下界；无价格返回 null。接口不查询私有 API、不写库、不授权登记，账户覆盖范围沿用现有适配器。页面必须区别无快照、过期和已核实空仓，取消登记需同时读取登记列表。
+
+完整字段及按钮前提见[第十三轮追加契约](../../docs/live-exec-contract-2026-11-11.md#第十三轮增补2026-11-12)，实施、夹具调整、日志和下一任务见[第十三轮交接](../../docs/task-handoff-2026-11-12-crossex-exec-r8.md#第十三轮)。双版本执行器各 511 项、fill-sim 各 158 项，以及每种子 2,664 回合的原三个模拟器种子通过；全部旧断言保留。仅本地 test/feat/docs 提交，未推送、未部署、未做真实账户鉴权，页面与线上验收由后续独立任务完成。

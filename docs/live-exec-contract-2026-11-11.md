@@ -471,3 +471,79 @@ USDT/USD 的 `C_c_upper=x_c`。不同币种分别折算后才能求和。任一�
 原 UTC 次日成功对账的日亏周期规则不变；本轮不补任何即时或自动清旧锁路径。详细线上 CLI 顺序和 HALTED+mismatch 维护分支见[第十二轮交接](task-handoff-2026-11-12-crossex-exec-r8.md#第十二轮)，由 Claude 在服务器执行。
 
 公开文档核实日期 2026-11-12：[OKX ticker](https://www.okx.com/docs-v5/en/#order-book-trading-market-data-get-ticker)、[Bitget spot tickers](https://www.bitget.com/legacy-docs/classic/spot/market/Get-Tickers)、[Bybit spot tickers](https://bybit-exchange.github.io/docs/v5/market/tickers)。本轮只联网核实这些公开文档；接口行为用受 DNS/socket 守护的离线响应验证，未调用真实鉴权或宣称线上行情验收。
+
+## 第十三轮增补（2026-11-12）
+
+本节只追加契约。原有接口、字段、登记身份白名单、ADMIN 权限、永久禁单和风控阈值继续有效。修复终审 5P1/1P2，并新增供外仓登记页面读取的全远端仓位视图；未新增交易或管理写入口。
+
+### GET /api/v1/remote-positions
+
+使用既有 `X-Api-Token` 只读令牌；ADMIN 令牌仍按既有规则兼容读取。无查询参数，无请求体，支持空查询串 `?`。未授权 401，非 GET 405，未知/重复查询参数 400；数据库不可用、损坏、不完整或超过既有读取/响应预算返回 503。响应带 `Cache-Control: no-store`。
+
+只读取执行器数据库中最近一次**已发布的完整账户快照**，包含快照里的所有非零远端仓位，不按程序交易集合或已登记外仓过滤。覆盖范围沿用当前账户适配器：CrossEx `/crossex/positions` 与 Bitget UTA `current-position?category=USDT-FUTURES`；不会在 HTTP GET 中另外查询未订阅的产品类别。该接口不联网、不刷新账户、不初始化数据库、不提交订单、不登记或取消登记。账户余额、用户 ID、订单原文、密钥及其他原始账户字段均不返回。
+
+顶层响应是对象：
+
+| 字段 | 类型与含义 |
+|---|---|
+| `available` | boolean；已有完整快照为 true。尚无快照时 false，不能解读为已核实空仓 |
+| `snapshot_at` | UTC ISO 8601 字符串或 null；采集开始时间，不是 API 读取时间 |
+| `snapshot_version` | 正整数或 null；每次成功发布独立递增并持久化，相同采集时间仍有不同版本，重启不重用版本 |
+| `stale` | boolean；采集时间在未来、年龄超过 10 秒或后续账户刷新失败时 true；没有快照也为 true |
+| `positions` | 全部非零远端仓位数组，按 `position_key` 排序；有完整空仓快照时为 `[]` 且 `available=true` |
+
+每个仓位的字段如下。数值使用十进制**字符串**保留原精度；未知数值为 null，不填 0。
+
+| 字段 | 类型与含义 |
+|---|---|
+| `position_key` | `route|symbol|side`，包含原始 symbol，不用规范化 ticker |
+| `route` | `crossex` / `bitget` |
+| `exchange_type` | CrossEx 原始 symbol 内的交易所，如 `HYPERLIQUID`；Bitget 为 `BITGET` |
+| `business` | CrossEx 为 `FUTURE`；Bitget 保留产品类别，如 `USDT-FUTURES` |
+| `symbol` | 原始交易合约，如 `HYPERLIQUID_FUTURE_io:OAI_USDC` 或 `BTCUSDT` |
+| `quote` | 原币计价币，如 `USDC` / `USDT` |
+| `dex` | 原始 DEX 前缀，如 `io` / `xyz`，普通市场为 `""`；不得互相合并 |
+| `identity_verified` | boolean；无法解释的身份仍保留该行及原 symbol，其未知身份项为 null；false 不可用于登记 |
+| `side` | `long` / `short`；CrossEx `NONE` 按有符号数量转换方向 |
+| `quantity` | 正数量，原始合约数量单位，不套规范化 ticker 的倍率 |
+| `entry_price` | CrossEx `entry_price` / UTA `avgPrice`；缺失或无效为 null |
+| `mark_price` | CrossEx `mark_price` / UTA `markPrice`；缺失或无效为 null |
+| `unrealized_pnl_native` | CrossEx `upnl` / UTA `unrealisedPnl`，币种为 `quote` |
+| `unrealized_pnl_usd` | 保守 USD 浮盈亏**下界**；有盈利用 `L`，亏损用 `H`。来源不足/过期/身份或原值未知为 null |
+| `valuation` | `native_usd` 或 `public_spot_lower_bound`；沿用 USDT/USD 报告口径，不把 USDC 当作 1 |
+| `valuation_verified` | boolean；本次读取时原来源仍能支持折算；与账户 `stale` 独立，不能单凭它决定数据新鲜 |
+| `valuation_error` | 折算可用为 null，否则固定 `position_fx_unavailable`，不返回异常正文 |
+| `ownership` | `program` / `external_registered` / `unregistered`，语义见下文 |
+| `snapshot_at` / `snapshot_version` / `stale` | 与顶层相同，方便逐行展示 |
+
+归属读取与快照读取处于同一个 SQLite 只读事务。与登记禁止规则保持一致：只要精确 route/symbol 有程序订单或 pair 历史，即 `program`，包括已平历史、孤单、未知单，不以相似 ticker 推断。完整精确身份与当前有效登记一致为 `external_registered`；其余为 `unregistered`。取消登记后的永久禁单墓碑不代表仍已登记，不会把未登记仓位隐藏。
+
+示例（省略仓位可选数值展示，不代表删减返回字段）：
+
+```json
+{"available":false,"snapshot_at":null,"snapshot_version":null,"stale":true,"positions":[]}
+```
+
+前端必须区分“无快照”“过期快照”和“已核实空仓”。登记按钮至少要求最新非过期快照、完整身份及 `unregistered`；`program` 不允许登记。原 ADMIN 服务仍会重新核对完整目录、程序历史和写前提，视图的归属标签不授予写权限。取消登记按钮结合既有 `GET /api/v1/external-positions` 的有效登记列表与本接口的**完整非过期空仓证据**判断，合约任一方向仍有持仓时禁用；因此已无仓位的登记仍要在登记列表中显示。写入继续使用既有接口的 `expected_status`（`x1:...`），不能拿 `snapshot_version` 替代；409 后重读并人工复核，不能自动重试。Bitget 行可展示，但本轮没有扩展外仓登记白名单。
+
+### 快照、收益证明与流水连续性
+
+`meta.account_snapshot` 保存完整发布快照及 `captured_at/snapshot_version`，`account_snapshot_version` 保存递增序号。发布、撤销旧收益证明和版本更新在同一 Store RLock / SQLite 事务下完成；写失败不发布新内存缓存。失败刷新保留上一份完整快照供诊断，同时记录 `account_snapshot_error` 并使缓存失效。
+
+`external_income` 成功结果只追加 `snapshot_version`、`equity_revision`。核实提交时在同一事务比较当前快照版本、归属 revision、权益 revision、原外仓起点、已核实流水索引及新鲜度；旧结果不能覆盖新观测。开仓与 SENT 后最终共享发送检查要求证明和当前缓存版本一致，并重新检查 FX 原始来源时钟。
+
+新增 `meta.external_verified_history`，按 `crossex_book/crossex_trades/bitget_book` 保存所有已核实 ID 对应的 `{at,hash}`。每次成功核实只增加已见证据，不滚动原计量起点；请求窗口内已核实 ID 消失或内容变化即失败，同一 ID 再出现也必须原内容。窗口外旧索引保留；原 UTC 日界线规则不变。索引、原始成功流水、收益证明和需要跨日更新的起点同事务提交。rebaseline/release-halt 不得通过丢弃已核实索引绕过缺失检查。旧数据库第一次使用时从仍保存的 anchor history 与最后 `external_activity` 合并迁移，无法重建旧版本已经丢弃且数据库中不再保留的历史证据。
+
+### USD 名义额、负债与停机审计
+
+原 `snapshot.notionals` 保留原币金额。追加 `notionals_usd`、`notional_valuation_verified`，失败追加 `notional_valuation_error=position_fx_unavailable`。全户远端仓位、本地已成交和待发送订单全部按精确计价币分别计量，再做 USD 求和；非 USD 正名义额乘第十二轮 FX 区间上界 `H`，不使用中位价低估额度。最终发送重新计算并检查来源，不能信任一份旧的 USD 字段或“外仓净收益为零”跳过折算。
+
+例：500 USDC × 1.01 × 1.002 = 506.01 USD，另加两条各 50 USD 的腿为 606.01 USD，超过 600 必须拒绝。原单腿 150、全户 600、分所权益回撤 150、累计亏损、保证金和减仓可用性不放宽；缺价不遮蔽权益/保证金硬退出。
+
+`Accounts.account_liabilities` 统一读取 CrossEx `assets[].liability` 与 Bitget UTA `assets[].debt`，不以正余额抵销债务。每项保留 `coin/exchange_type/liability`，追加 `route/source_field`；金额仍为对应原币。缺失、非有限、负值、重复身份或非法资产集合拒绝账户证据。开仓、管理前提和三次独立新鲜无负债恢复共用这份汇总。无借款豁免。
+
+`flatten_all` 每次生成独立 `attempt_id`，追加 `verified/started_at/reason`，启动时先撤销旧成功；返回本次状态对象。shutdown 必须重新读取远端仓位，即使没有外仓登记或处于 HALTING 退避中。任何读取、核实或审计失败返回未核实状态，退出码非 0；CLI 只消费本次返回值，不再读取历史 `flatten_status` 决定退出。`verified=true,program_flat=true,account_flat=false` 表示程序义务已清、登记外仓仍在，可正常退出并明确报告，不会向外仓发单。
+
+rebaseline 与 release-halt 的审计 `old` 在同一写事务中保存全部原基线，补齐 `external_equity_anchor/program_daily_upnl/program_last_upnl/external_verified_history/last_upnl/account_loss_current/external_income`；审计写失败回滚。本轮不增加清日亏、删 STOP、跳过三快照或更改 HALTED 释放条件的入口。
+
+2026-11-12 官方字段核实：[Bitget UTA assets/debt](https://www.bitget.com/docs/catalog/account/assets-balance)、[Bitget UTA current-position/avgPrice](https://www.bitget.com/docs/catalog/trading/position-management)、[CrossEx positions/entry_price](https://www.gate.com/docs/developers/crossex/en/)。只查阅公开文档，未做真实账户鉴权。

@@ -958,3 +958,86 @@ journalctl -u crossex-exec.service --since '10 minutes ago' --no-pager
 推送/线上数据库备份/部署版本/容器或服务/API 线上验收均未执行，未读取服务器 HEAD。真实行情可用性、账户流水权限与时延、外仓实际 USD 估值、Linux POSIX/flock/systemd 和持续影子运行仍未验收。源码本地通过不构成实盘授权。
 
 下一模块请新建任务，由 Claude 在已授权的线上任务中按本节验证部署、公开 FX、账户证据和锁恢复；页面/ADMIN 转发仍属 live-exec-page。负债裁决已确定为“任何正负债停开并告警”，不再作为待实现豁免项。
+
+## 第十三轮
+
+### 范围、基线与本地提交
+
+本轮模块为 crossex-exec 终审安全修复和远端持仓只读契约。先阅读第十一、十二轮及 [r12 只读终审](crossex-exec-r12-final-review-2026-11-12.md)，修复全部 5P1/1P2，并交付 `GET /api/v1/remote-positions`。页面登记/取消按钮实现仍交由 live-exec-page，不混入本工作树模块。
+
+- 指定工作树 `C:/Users/wubin/Desktop/code/codex/taoli1/.worktrees/crossex-exec-r8`，分支 `codex/crossex-exec-r8`，起始完整 HEAD `c7654f4a376e067031d57b8bfad80b59c61b2103`；起始工作区干净。
+- test `052315a`：26 项专项先红，包含真实文件 SQLite、双线程竞态、流水连续性、USD 名义额、负债、停机、审计和 HTTP 只读接口。
+- test `dac6afe`：停机审计故障先红后绿；补迁移/管理/失败快照验证，以及三个旧测试文件的严格证据夹具，原断言不变。
+- test `0c4608b`：新增坏债务响应不能继续显示可开仓的先红后绿回归；最终共 31 项专项。
+- feat `7159167`：六项终审修复及新只读接口；docs 为后续独立本地提交，准确 SHA 见下面命令及 [r13 验收 JSON](crossex-exec-r13-validation-2026-11-12.json)。文档自身 SHA 不写入自身内容。
+
+```powershell
+git log --oneline c7654f4..HEAD
+git log -1 --format=%H -- tools/crossex_exec/engine.py
+git log -1 --format=%H -- docs/task-handoff-2026-11-12-crossex-exec-r8.md
+```
+
+Git 按 test/feat/docs 分组，显式逐文件暂存；关闭本地 hooks/GPG。父仓库 worktree 索引不在可写根内，普通暂存返回 Permission denied 后，仅为已授权的本地提交使用自动审批扩展写权限；没有自动审批拒绝。不 push、SSH、WSL、amend、不做真实账户鉴权或订单，不改变线上版本，不做线上数据库备份或部署。不调用子代理。
+
+### 六项终审修复与关键入口
+
+| 问题 | 实现与验收行为 |
+|---|---|
+| P1-1 快照竞态 | `background.SnapshotCache` 使用 Store 同一 RLock，发布事务分配持久化 `snapshot_version`、保存最新完整快照并撤销旧证明。`ExternalAccounting._evaluate` 在提交事务内比较快照/权益/归属版本、原起点、原已核实历史和十秒新鲜度。`Engine.require_external_income/check_order/check_release` 要求证明与缓存同版本，最终发送重复检查。双线程 A 对账/B 发布单源报价反例被拒绝；同一时间戳和重启也不重用版本。 |
+| P1-2 已核实流水消失 | `external_accounting.verified_history` 持续保存三类流水 ID 的时间和 SHA-256 内容摘要，覆盖窗口内缺失/改写即失败；旧索引保留，不通过滚动计量起点修补。同币种外仓 +5/程序 -5 消失不再把已知 -5 日损益变成零，文件库重开后仍拒绝改写。rebaseline/release-halt 也不能丢弃该证据。 |
+| P1-3 非 USD 全户名义额 | `position_values.py` 保留精确身份和原币，`Engine.read_account_snapshot` 为登记外仓及快照内任意非 USD 持仓读取第十二轮 FX。`notionals` 保留原币，新增 `notionals_usd/notional_valuation_verified`；`HardLimits.exposure/check_order` 在当前时刻重新用上界折算远端、本地已成交与未决名义额，SENT 后共享关口也检查。500 USDC 在 p=1.01 时计 506.01 USD，加两腿 100 为 606.01，拒开。缺价/过期/来源不足拒开，减仓与硬退出仍可进行。 |
+| P1-4 Bitget 债务 | `accounts.account_liabilities` 统一 CrossEx `assets[].liability` 与 UTA `assets[].debt`，保留原币及来源。任何正负债停开，管理前提拒绝；只有三份不同的新鲜无负债快照恢复该锁。缺字段、非法/负数/非有限金额或重复身份拒绝。新读取失败立即撤销缓存、置 risk=STOP 并触发重新对账。 |
+| P1-5 停机结果 | `Engine.flatten_all` 先保存本次未核实状态，独立 attempt_id；shutdown 无登记也核实，忽略 HALTING 重试退避。读取/核实/审计失败不留成功状态。`__main__.finish_shutdown` 仅用本次返回的 verified + program_flat 判断退出 0，否则非 0；不读旧 flatten_status。 |
+| P2 审计 old | `equity.BASELINE_KEYS/apply` 补齐旧 `external_equity_anchor/program_daily_upnl/program_last_upnl` 及历史索引、跟踪值、损益/证明；old 的读取与新基线、审计写入同事务。rebaseline 和 release-halt 都覆盖，审计失败原基线不变。 |
+
+原 600 全户/150 单腿名义额、分所权益回撤、总亏损、保证金、正负债、日亏、STOP、永久禁单、目录核对、未知单/待记账和三快照恢复规则均保留。原 UTC 日界线规则不变；本轮无即时清旧日亏或负债豁免。
+
+新增历史索引在升级时合并数据库仍保存的 anchor history 与最后 `external_activity`。它不能重建旧版本已经丢弃的历史证据；对真实旧库是否已发生旧版误计量，本轮没有账户或库证据，不能自动修正既有亏损。后续真实只读验收须核对原流水，不可删库或直接改基线绕过。
+
+### 远端持仓接口与页面接续
+
+完整字段、类型、失败码及页面按钮前提见 [第十三轮追加契约](live-exec-contract-2026-11-11.md#第十三轮增补2026-11-12)。入口为 `api.py` → `JournalView.get` → `remote_view.remote_view`；通过既有只读 SQLite authorizer、读取时限与大小预算，不导入交易引擎或调用适配器。
+
+- 最近发布快照的所有非零远端行均可见，包含 program、external_registered、unregistered；完整保留 route/exchange_type/business/symbol/quote/dex 和方向，不按 ticker 合并。
+- 返回原始数量、开仓价、标记价、原币浮盈亏和 USD 浮盈亏下界；盈利 × L、亏损 × H，USDT/USD 沿用原报告口径。与收益扣除使用上界是不同目的，不能互换。
+- 无价格为 null、valuation_verified=false；账户过期与 FX 源过期独立报告。没有快照是 available=false，不冒充已核实空仓。刷新失败保留最后完整行并标记 stale，不返回部分失败响应冒充完整快照。
+- 每行及顶层均有 snapshot_at/snapshot_version/stale。读取不会延长任何时间或重新估计源报价。除明确投影字段外，不暴露余额、user_id、原始流水、响应正文或秘密。
+- Bitget 行仅供展示，原登记白名单未扩展。取消按钮须结合现有 external-positions 登记列表及本接口非过期的全量空仓证据；登记/取消的写前提仍是原 `expected_status=x1:...`，不能用快照版本替代，409 不自动重试。
+- 数据覆盖以账户快照实际读取的现有产品范围为准：CrossEx futures 和 Bitget UTA USDT-FUTURES。没有另外扫描股票、现货或其他未订阅产品，不把“全远端行”表述成已查全交易所所有产品。
+
+公开官方字段在本轮核实：[Bitget UTA debt](https://www.bitget.com/docs/catalog/account/assets-balance)、[UTA avgPrice/markPrice](https://www.bitget.com/docs/catalog/trading/position-management)、[CrossEx entry_price](https://www.gate.com/docs/developers/crossex/en/)。未发真实鉴权请求；所有测试账户、报价和本机令牌均为合成夹具。
+
+### TDD、原断言与双版本验证
+
+先执行新增 26 项专项，旧实现结果为 22 failures / 12 errors（含 subTest），再实现到全绿。后续停机审计写失败回归先得到 1 failure，修复后绿；最后追加坏债务响应的 can_open 回归，先得到 1 failure，再让失败刷新即时停开。另三个迁移/管理/快照保留检查用于验证已实现的不变量，不声称它们曾先红。红灯、绿灯、首轮失败及最终日志均保留 Temp，验收 JSON 记录指纹。
+
+旧测试只更新三处夹具文件，无删改或放宽任何已有断言：`test_round2.py` 为 Bitget 成功响应补明确 debt=0 资产，并将抽象 external 名义额标签改为精确 USDT 合约；`test_round11_evidence.py` 给原 601 USD 边界提供两源显式 FX，选 p=1/1.002 使保守上界恰为 1，保留原 601 数值断言；`test_round12_fx.py` 的重启直接对账先经过正式快照发布，保留原跨日/收益断言。未使用生产“缺字段默认零”或“USDC 默认 1”兼容这些测试。
+
+相对 c7654f4，AST 按原 owner/内容/次数核对全部旧断言：执行器 35 个 Python 测试文件、480 个 test_ 定义、1,685 个断言；fill-sim 18 个 Python 文件、146 个 test_ 定义、587 个断言。原函数/类定义全部保留；fill-sim 全部源码/测试与原模拟器文件保持原样。动态/继承测试使实际 discover 计数与定义数不同，未混用统计口径。
+
+最终在两个解释器运行原两条命令，执行器包含全部真实文件库及 **5 项跨进程 SQLite 测试**，没有替换成内存库、skip 或过滤测试：
+
+```powershell
+python -m unittest discover -s tools/crossex_exec/tests -v
+python -m unittest discover -s tools/fill_sim/tests -v
+$py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe'
+& $py310 -m unittest discover -s tools/crossex_exec/tests -v
+& $py310 -m unittest discover -s tools/fill_sim/tests -v
+```
+
+执行器最终 **511 项（480 + 31）**；fill-sim **158 项**。最终通过状态、耗时、Python/SQLite 版本、日志 SHA-256 见 [验收 JSON](crossex-exec-r13-validation-2026-11-12.json)。最后两行即时停开补丁后，执行器双版本再次完整重跑；fill-sim 从未修改，保留本轮已经通过的全量结果，不重复制造性能数字。
+
+| 解释器 | 执行器最终 discover | fill-sim discover | 退出码 |
+|---|---|---|---|
+| Windows 3.12.10 / SQLite 3.49.1 | 511 项 / 131.689s / OK | 158 项 / 29.743s / OK | 全部 0 |
+| 指定 Windows 3.10.20 / SQLite 3.50.4 | 511 项 / 138.545s / OK | 158 项 / 30.842s / OK | 全部 0 |
+
+三种子 20261111/20261112/20261113 在两个解释器均实际执行，每种子 2,664=2,400+168+96 回合，N=1；I1a–d/I2–I7 checks 各 2,664、exercised 全部非零，原 96 次外仓检查和所有故障覆盖断言保留。六份最终种子输出写入验收 JSON。3.10 AST 检查 89 个执行器/fill-sim Python 文件，git diff --check 通过；接口契约对基线做 startswith 检查，只有追加。
+
+本轮自审覆盖发布/核实/最终发送锁序，跨进程版本变化，流水迁移与管理失败回滚，非 USD 远端及待发送额度，缺失/非法负债，旧停机状态/审计失败，以及只读 API 完整性和秘密投影。没有重新声称 Linux、systemd 或稳态 CPU/RSS 验收；本轮新增快照/索引持久化成本仍需实际环境测量。
+
+### 线上状态与下一任务
+
+仅完成本地提交；未推送、未读取服务器 HEAD、未做线上备份、部署或真实 API 验收。没有读取/复制真实账户数据库。工作区起始无 WIP，仅显式纳入本轮文件；Temp 日志、合成测试副产物及原有文件未清理。
+
+下一模块请新建 live-exec-page 任务，依据新增契约启用登记/取消按钮、保留 taoli1 会话/CSRF 和 ADMIN 转发边界；实际页面和线上端到端行为尚未验收。真实行情源、资金流水权限/分页/时延、历史证据迁移、Linux 文件锁/systemd、持续影子及发布必须在后续明确授权的任务中完成。本轮测试通过不授权实盘交易，也不自动解除旧损失锁。

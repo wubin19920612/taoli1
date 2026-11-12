@@ -1,5 +1,11 @@
 # 下一任务入口
 
+2026-11-12 最新入口为[第十三轮交接](task-handoff-2026-11-12-crossex-exec-r8.md#第十三轮)，分支 `codex/crossex-exec-r8`，基线 `c7654f4`。已修复 r12 终审全部 5P1/1P2，并新增只读 `GET /api/v1/remote-positions`，精确保留 DEX 和原始单位，提供归属、USD 浮盈亏下界及账户快照版本/过期状态。[契约只追加](live-exec-contract-2026-11-11.md#第十三轮增补2026-11-12)，[验收 JSON](crossex-exec-r13-validation-2026-11-12.json)记录最终提交、双版本日志与模拟器计数。
+
+Python 3.12/指定 3.10 各执行器 511 项、fill-sim 158 项通过，包含真实文件库的全部 5 项跨进程测试；两版三个种子各 2,664 回合全过。31 项新专项，原 480 个执行器 test_ 定义及 1,685 个断言未删改；fill-sim 和原模拟器原文保留。精确单位/债务/版本夹具调整见交接。所有旧风控与亏损锁保留。
+
+本轮仅本地 test/feat/docs 提交，无 push/SSH/WSL/amend/真实鉴权/线上备份/部署。下一模块另建 live-exec-page 任务，按新只读契约接登记/取消按钮及原 ADMIN 乐观并发写前提；不得以快照版本替代 x1 expected_status。实际页面、真实流水和 FX、Linux/systemd、稳态成本与持续影子验收尚未完成；不得自动清损失锁、豁免负债或把本地测试当实盘许可。以下旧轮次保留为历史证据。
+
 2026-11-12 最新入口为[第十二轮交接](task-handoff-2026-11-12-crossex-exec-r8.md#第十二轮)，分支 `codex/crossex-exec-r8`、基线 `bfb2861`；test `0abce17/91bcdeb/1b25560`，feat `0fe7941`。PM 已批准外仓原币贡献按至少两家公开现货中位价 ±0.2% 取保守上界后扣除；三家公开 GET 复用原队列，过期 >60s/不足两家/极端偏离仍停开。任何正负债继续停开并告警，登记和 FX 成功不清旧日亏锁。
 
 双版本各执行器 **480 项**、fill-sim **158 项**，原三种子各 **2,664 回合**全过；23 项本轮专项，原测试/模拟器未改，契约只追加。[验收 JSON](crossex-exec-r12-validation-2026-11-12.json)保存计数/指纹。交接包含 Claude 线上 CLI 操作单：登记 → 三次匹配快照（含 HALTED 下停止服务维护分支）→ release-halt/rebaseline → 保留当日日亏直至原 UTC 新日成功对账。没有同日日亏豁免命令。
