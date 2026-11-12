@@ -13,6 +13,8 @@ export default defineConfig(({ mode }) => {
   server: {
     port: 3000,
     proxy: {
+      // Preserve the browser's Host for the session-only admin origin check.
+      "/api/live-exec": { target: proxyTarget, changeOrigin: false },
       "/api": {
         target: proxyTarget,
         changeOrigin: true

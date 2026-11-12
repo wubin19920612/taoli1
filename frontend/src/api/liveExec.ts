@@ -11,7 +11,8 @@ export interface LiveAccount {
   equity_usd: Num; baseline_usd: Num; drop_usd: Num; margin_multiple: Num; ok: boolean | null; error: Text;
 }
 export type LiveOpeningSkipReason = "book_skew" | "book_stale" | "funding_diff" | "baseline_not_flat"
-  | "not_single_venue_outlier" | "too_few_venues";
+  | "not_single_venue_outlier" | "too_few_venues" | "size_too_small" | "oi_missing"
+  | "mapping_ratio_mismatch" | "volume_too_low" | "volume_unknown" | "category_unconfirmed";
 export interface LiveSummary {
   generated_at: Text; mode: "shadow" | "live" | null; halted: boolean | null; halt_reason: Text;
   stop_file: boolean | null; opening_paused_reason: Text;
@@ -21,6 +22,8 @@ export interface LiveSummary {
   fees: { crossex_taker: Num; bitget_taker: Num } | null; last_error: Text;
   baseline_ready_pairs?: Num; structural_spread_pairs?: Num; cooldown_pairs?: Num;
   opening_skip_counts?: Partial<Record<LiveOpeningSkipReason, Num>> | null;
+  config_version?: Num;
+  effective_risk_limits?: { max_equity_drop_usd: Num; daily_loss_stop_usd: Num; total_loss_stop_usd: Num } | null;
 }
 interface Leg {
   exchange: Text; side: "long" | "short" | null; qty: Num;
@@ -53,6 +56,99 @@ export interface LiveStats {
 }
 export interface LiveResources { summary: LiveSummary | null; positions: LivePosition[] | null; trades: LiveTrade[] | null; stats: LiveStats | null }
 export type LiveResource = keyof LiveResources;
+
+export interface LiveConfigRule { default: number; min: number; max: number | null; integer: boolean }
+export interface LiveConfig {
+  version: number; values: Record<string, number>; fallback: boolean; schema: Record<string, LiveConfigRule>;
+}
+export interface LiveConfigAudit {
+  version: number; at: string; source: string; old: Record<string, number>; new: Record<string, number>;
+}
+export type LiveCategory = "crypto" | "listed_equity" | "pre_ipo" | "commodity" | "unconfirmed";
+export interface LiveUniverseMarket {
+  market_key: string; raw_symbol: string; exchange: string; category: LiveCategory;
+  effective_category: LiveCategory; underlying_market: "US" | "KRX" | null;
+  volume_usd: Num; volume_basis: Text; at: Text; selected: boolean; eligible: boolean; needs_classification: boolean;
+}
+export interface LiveUniverse {
+  base: string; category: LiveCategory; excluded: boolean; underlying_market: "US" | "KRX" | null;
+  markets: LiveUniverseMarket[];
+}
+export interface LiveMapping {
+  id: string; base: string; status: "pending" | "confirmed" | "rejected"; at: Text; ratio: Num;
+  legs: { market_key: string; raw_base: string; quantity_multiplier: Num }[];
+}
+export interface LiveAdminResources {
+  config: LiveConfig; "config/audit": LiveConfigAudit[]; universe: LiveUniverse[]; mappings: LiveMapping[];
+}
+export type LiveAdminResource = keyof LiveAdminResources;
+
+const readErrors: Record<string, string> = {
+  not_configured: "未配置", timeout: "请求超时", unreachable: "上游不可达", invalid_json: "数据格式异常",
+  invalid_configuration: "配置无效", request_failed: "请求失败",
+};
+export function liveAdminReadError(reason: string): string {
+  const status = /^upstream_http_(\d{3})$/.exec(reason);
+  return readErrors[reason] ?? (status ? `上游响应异常 ${status[1]}` : "服务不可用");
+}
+
+export async function getLiveExecAdmin<K extends LiveAdminResource>(
+  resource: K, signal: AbortSignal,
+): Promise<LiveExecResult<LiveAdminResources[K]>> {
+  try {
+    const response = await sessionFetch(`/api/live-exec/${resource}`, { signal });
+    if (!response.ok) return { available: false, error: "request_failed" };
+    const result = await response.json();
+    if (result?.available === false) return { available: false, error: String(result.error ?? "request_failed") };
+    const data = result?.data;
+    const shapeOk = resource === "config"
+      ? data && Number.isInteger(data.version) && data.values && data.schema && typeof data.fallback === "boolean"
+        && Object.entries(data.schema).every(([key, raw]) => {
+          const rule = raw as LiveConfigRule | null;
+          return rule && Number.isFinite(data.values[key]) && Number.isFinite(rule.default)
+            && Number.isFinite(rule.min) && (rule.max === null || Number.isFinite(rule.max))
+            && typeof rule.integer === "boolean";
+        })
+      : Array.isArray(data);
+    if (result?.available !== true || !shapeOk) return { available: false, error: "invalid_json" };
+    return result;
+  } catch {
+    return { available: false, error: "request_failed" };
+  }
+}
+
+export type LiveAdminWrite =
+  | { resource: "config"; changes: Record<string, number> }
+  | { resource: "universe"; base: string; action: "exclude" | "unexclude" }
+  | { resource: "universe"; base: string; action: "classify"; classification: {
+    category: Exclude<LiveCategory, "unconfirmed">; markets: string[]; underlying_market?: "US" | "KRX";
+  } }
+  | { resource: "mappings"; id: string; action: "confirm" | "reject" };
+
+export async function writeLiveExecAdmin(update: LiveAdminWrite): Promise<void> {
+  const path = update.resource === "config" ? "config" : update.resource === "universe"
+    ? `universe/${encodeURIComponent(update.base)}/${update.action}`
+    : `mappings/${encodeURIComponent(update.id)}/${update.action}`;
+  const body = update.resource === "config" ? update.changes
+    : update.resource === "universe" && update.action === "classify" ? update.classification : {};
+  let response: Response;
+  try {
+    // Browsers supply Origin; never attach either server token. Writes are never retried.
+    response = await sessionFetch(`/api/live-exec/${path}`, {
+      method: update.resource === "config" ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json", "X-Live-Exec-CSRF": "1" }, body: JSON.stringify(body),
+    });
+  } catch {
+    throw new Error("请求未完成，结果可能已生效，请刷新核实后再操作");
+  }
+  const result = await response.json().catch(() => null);
+  if (!response.ok || result?.available !== true) {
+    const message = typeof result?.detail === "string" && /[\u4e00-\u9fff]/.test(result.detail) ? result.detail
+      : response.status === 401 ? "登录已失效，请重新登录"
+        : "操作失败，请刷新核实操作结果";
+    throw new Error(message);
+  }
+}
 
 export async function getLiveExec<K extends LiveResource>(
   resource: K, signal: AbortSignal, before?: string

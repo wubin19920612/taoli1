@@ -92,6 +92,7 @@ class Settings:
     arb_live_api_key: str = ""
     crossex_exec_url: str = ""
     crossex_exec_api_key: str = ""
+    crossex_exec_admin_token: str = ""
     astro_admin_prefix: str = ""
     astro_api_key: str = ""
     astro_verify_tls: bool = True
@@ -367,6 +368,7 @@ def get_settings() -> Settings:
         arb_live_api_key=os.getenv("ARB_LIVE_API_KEY", "").strip(),
         crossex_exec_url=os.getenv("CROSSEX_EXEC_URL", "").strip(),
         crossex_exec_api_key=os.getenv("CROSSEX_EXEC_API_KEY", "").strip(),
+        crossex_exec_admin_token=os.getenv("CROSSEX_EXEC_ADMIN_TOKEN", "").strip(),
         astro_admin_prefix=os.getenv("ASTRO_ADMIN_PREFIX", "").strip(),
         astro_api_key=os.getenv("ASTRO_API_KEY", "").strip(),
         astro_verify_tls=bool_env("ASTRO_VERIFY_TLS", True),

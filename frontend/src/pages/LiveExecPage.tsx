@@ -5,6 +5,7 @@ import type { LiveAccount, LiveGroup, LiveOpeningSkipReason, LivePeriod, LivePos
 import { isPageHidden } from "../utils/pageVisibility";
 import { ProfitHistogram } from "./liveExec/ProfitHistogram";
 import { useLiveExec } from "./liveExec/useLiveExec";
+import { LiveExecAdmin } from "./liveExec/LiveExecAdmin";
 
 const reasons: Record<string, string> = {
   converged: "收敛止盈", stop_loss: "止损", max_hold: "超时", pre_funding: "结算前平仓",
@@ -18,6 +19,12 @@ const openingSkipReasons: { key: LiveOpeningSkipReason; label: string; explanati
   { key: "baseline_not_flat", label: "基准不平坦", explanation: "历史基准偏移或波动过大，未通过平坦性检查。" },
   { key: "not_single_venue_outlier", label: "非单一交易所异常", explanation: "价格偏离未能归因于单一交易所，未通过异常模式检查。" },
   { key: "too_few_venues", label: "交易所数量不足", explanation: "有效且及时的参考交易所不足，无法判断单所异常。" },
+  { key: "size_too_small", label: "定量不足", explanation: "按深度、OI 和剩余额度计算并取整后，未达到最小下单量或名义额。" },
+  { key: "oi_missing", label: "缺少有效 OI", explanation: "两腿均缺少单位可核实且未过期的持仓量数据。" },
+  { key: "mapping_ratio_mismatch", label: "映射价格比不符", explanation: "新鲜盘口价格比与已确认的代码倍率不符。" },
+  { key: "volume_too_low", label: "成交额不足", explanation: "两腿成交额或满足门槛的有效交易所家数不足。" },
+  { key: "volume_unknown", label: "成交额未知", explanation: "精确合约成交额缺失或已超过五分钟。" },
+  { key: "category_unconfirmed", label: "类别未确认", explanation: "类别、股票标的市场或所选择尚未满足交易资格。" },
 ];
 const failureLabels: Record<string, string> = {
   not_configured: "未配置", timeout: "请求超时", unreachable: "上游不可达", invalid_json: "数据格式异常",
@@ -100,10 +107,12 @@ function Summary({ data }: { data: LiveSummary | null }) {
         <Descriptions.Item label="基准预热完成数">{number(data.baseline_ready_pairs, 0)}</Descriptions.Item>
         <Descriptions.Item label="结构性拉黑数">{number(data.structural_spread_pairs, 0)}</Descriptions.Item>
         <Descriptions.Item label="冷却数">{number(data.cooldown_pairs, 0)}</Descriptions.Item>
+        <Descriptions.Item label="当前配置版本">{number(data.config_version, 0)}</Descriptions.Item>
       </Descriptions>
       <Typography.Text type="secondary">组合计数按基础币和无方向交易所组合去重；三项可能重叠，不表示可立即开仓。</Typography.Text>
+      <Typography.Text type="secondary">汇总中的名义额及持仓对数上限为代码硬上限，当前可调参数见下方；账户回撤显示实际生效阈值。</Typography.Text>
       <Card size="small" title="累计放弃开仓原因" style={{ width: "100%" }}>
-        <Typography.Paragraph type="secondary">累计放弃机会数（含影子模式），跨日和重启保留；自第七轮启用后开始统计，按机会去重，不回填升级前历史。多条件失败只计首先判定的原因。</Typography.Paragraph>
+        <Typography.Paragraph type="secondary">累计放弃机会数（含影子模式），跨日和重启保留；各原因自对应功能启用后开始计数，按机会去重，不回填升级前历史。多条件失败只计首先判定的原因。</Typography.Paragraph>
         <Descriptions size="small" column={{ xs: 1, md: 2, xl: 3 }}>
           {openingSkipReasons.map(({ key, label, explanation }) => <Descriptions.Item key={key} label={label}>
             <span>{number(data.opening_skip_counts?.[key], 0)}</span><br />
@@ -112,8 +121,8 @@ function Summary({ data }: { data: LiveSummary | null }) {
         </Descriptions>
       </Card>
       <Row gutter={[12, 12]}>
-        <Col xs={24} xl={12}><Account name="crossex" data={data.accounts?.crossex ?? null} dropMax={data.caps?.equity_drop_max_usd ?? null} /></Col>
-        <Col xs={24} xl={12}><Account name="bitget" data={data.accounts?.bitget ?? null} dropMax={data.caps?.equity_drop_max_usd ?? null} /></Col>
+        <Col xs={24} xl={12}><Account name="crossex" data={data.accounts?.crossex ?? null} dropMax={data.effective_risk_limits?.max_equity_drop_usd ?? data.caps?.equity_drop_max_usd ?? null} /></Col>
+        <Col xs={24} xl={12}><Account name="bitget" data={data.accounts?.bitget ?? null} dropMax={data.effective_risk_limits?.max_equity_drop_usd ?? data.caps?.equity_drop_max_usd ?? null} /></Col>
       </Row>
       <Typography.Text type={data.last_error ? "danger" : "secondary"}>最后一个错误：{data.last_error ?? "无"}</Typography.Text>
     </Space>}
@@ -208,5 +217,6 @@ export function LiveExecPage() {
       <Descriptions.Item label="两腿成交间隔第 90 百分位">{number(vs.leg_fill_gap_ms_p90, 0)} 毫秒</Descriptions.Item>
       <Descriptions.Item label="单腿事件率">{percentage(vs.one_leg_rate)}</Descriptions.Item>
     </Descriptions>}</Card>
+    <LiveExecAdmin />
   </Space>;
 }
