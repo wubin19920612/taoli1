@@ -175,6 +175,49 @@ class HaltRecoveryTests(unittest.TestCase):
                 self.assertEqual(w.store.meta('state'), 'HALTED')
                 self.assertIn('flatten_snapshot_unavailable', w.store.meta('stop_locks'))
 
+    def test_halt_waits_for_three_distinct_matches_before_releasing_mismatch(self):
+        w = world(self)
+        quantity = w.venues[0].quantity
+        w.venues[0].quantity -= dec('.001')
+        w.advance()
+        self.assertIn('position_mismatch', w.engine.stops.reasons)
+        w.venues[0].quantity = quantity  # the failed remote observation has recovered
+        halt(w)
+        self.assertEqual(w.store.meta('state'), 'HALTING')
+        for sample in range(3):
+            w.now = max(w.now+1, w.engine.next_halt+1)
+            w.engine.tick()
+            self.assertEqual(w.store.meta('position_match_streak'), sample+1)
+            if sample < 2:
+                self.assertIn('position_mismatch', w.engine.stops.reasons)
+                self.assertEqual(w.store.meta('state'), 'HALTING')
+        self.assertNotIn('position_mismatch', w.engine.stops.reasons)
+        self.assertEqual(w.store.meta('state'), 'HALTED')
+        release(w)
+
+    def test_halt_clears_only_proven_closed_pair_repair_owners(self):
+        w = world(self)
+        pair = w.store.pairs(active=True)[0]
+        w.engine.close_pair(pair, 'finished_repair')
+        pair = w.store.get_pair(pair['id'])
+        pair['repair_stopped'] = True
+        w.store.pair(pair)
+        w.engine.unhedged(pair)  # persisted observation raced the final confirmation
+        halt(w)
+        for reason in ('unhedged_position', 'repair_stopped'):
+            self.assertNotIn(reason, w.engine.stops.reasons)
+        self.assertEqual(w.store.meta('state'), 'HALTED')
+        release(w)
+
+    def test_unknown_flatten_owner_cannot_bypass_release_preconditions(self):
+        w = world(self, opened=False)
+        w.engine.stops.add('flatten_snapshot_unavailable', 'unknown_owner')
+        w.store.set_meta('state', 'HALTED')
+        w.store.set_meta('halt_reason', 'total_loss')
+        with self.assertRaisesRegex(ValueError, 'position_or_order_lock'):
+            release(w)
+        self.assertEqual(w.store.meta('state'), 'HALTED')
+
 
 if __name__ == '__main__':
     unittest.main()
