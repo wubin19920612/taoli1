@@ -736,3 +736,44 @@ Transport 先验证 HTTP 和 Bitget 外层 `code="00000"`，之后才解析 data
 CLI 保留 `reason=startup_or_runtime_failed_closed` 和退出码 1；标准输出 `kind=fatal` 增加 `error_type`（异常类名）及 `location`（最内层模块:行号）。在数据库已打开且可写时，同一诊断在关闭前落为 `FATAL` 事件，value 仅含 reason/error_type/location。类型/模块名经过字符及长度校验，无 traceback 时 location 为 `unknown:0`。
 
 从不格式化异常正文或异常链，不记录源码、绝对路径、局部变量、响应体、账户数据、请求头或游标。若数据库未能打开或 FATAL 写入失败，仍输出原异常的安全诊断并退出 1；不保证不可写数据库中存在事件。现有可恢复周期告警与后台工作线程的处理语义保持。
+
+## 第二十轮、第二十一轮增补（2026-11-13）
+
+本节覆盖前文关于“未登记外仓必须停开”和“整户现金连续性是程序盈亏前提”的旧约定。默认 program 模式按本地订单自动判定归属；手工登记、撤销、永久禁单记录、CLI 和 ADMIN 路由继续保留。
+
+### 自动归属与混仓保护
+
+按精确 `(route, 原始 symbol)` 查询所有非 SHADOW/UNSENT 订单，包含 INTENT、SENT、UNKNOWN 及终态；无此记录的合约自动归外部。不按 ticker 合并 Hyperliquid DEX，不以 pair 或 SHADOW 记录认领仓位。集合查询和 INTENT 持久化共用 Store.lock，不使用陈旧集合缓存。启动恢复前将崩溃遗留 INTENT 的归属写入 `program_crash_claims`，防止恢复为 UNSENT 后丢失安全责任。
+
+外部合约双向、任意数量变化及逐仓均不需要登记，不进入程序仓位对账或盈亏。程序合约数量与账本不一致仍停开；恢复仍需原有连续新鲜快照。额外数量记录 `program_contract_conflicts`，并发出 `PROGRAM_CONTRACT_MIXED`，包含中文原因、原始合约、预期与观测数量。该告警不会放松原有全局丢腿保护。任意一侧已有外部仓位的合约均拒绝程序新开，发送前原检查链同样执行该规则。
+
+已确认程序仓位的减仓上限取本地成交账本剩余量与远端量的较小值；未决开仓保留原订单数量以内的保守恢复义务。未知订单恢复、reduce-only、共享发送屏障和实际发送函数未改。不会因远端同向合并的额外仓位而扩大已确认程序减仓量。
+
+### 程序盈亏和独立资金费证明
+
+日亏、累计亏、150 USD 权益跌幅及 600 USD 名义额仅使用程序自己的逐订单成交、手续费、原始合约资金费、账本入场价与标记价计算的浮盈亏。原 20/100/150/600 常量、运行时更严格阈值、单腿上限、十秒快照时效保持；`limits.py` 未改。整户权益仍展示，但不再作为这些程序亏损指标。程序可交易币种、市场与原有手续费身份校验没有扩大。
+
+无程序合约时不读资金费历史；存在程序合约时，仅核验其资金费与独立持仓累计计数。首次程序认领前的流水和已完全结束的用户生命周期被排除；跨越认领边界且无法解释的生命周期继续拒绝。缺失/改写历史、币种或身份不符、跨 UTC 日归属不明、读取不完整均保持停开，不能把缺失资金费填零。混仓导致账本数量不一致时，不认证合并生命周期的资金费，保留上一次已核实金额。
+
+CrossEx account_book 使用 `statement_type=FUNDING_FEE`；Bitget financial-records 分别读取两个资金费 type；返回结果再按完整原始 symbol 精确过滤。两个账本接口的当前公开参数表没有声明 symbol 请求过滤，因此没有假定服务器会执行未声明参数。独立 position_history 接口按 symbol 请求，并复核返回 symbol。分页、时间窗、唯一 ID、游标、总行数和读取时限保持原限制。[CrossEx 账本文档](https://www.gate.com/docs/developers/crossex/#query-account-asset-change-history)、[Bitget 财务流水文档](https://www.bitget.com/docs/catalog/account/assets-balance)
+
+不再调用整户成交/非资金费流水核算，也不再证明整户现金连续性。独立持久化键为 `program_funding_anchor`、`program_funding_checkpoint`、`program_verified_history`、`program_funding_baseline`、`program_activity`；原 UTC 证明、历史摘要缓存和提交前版本/账本/时效复查继续使用。旧 `external_*` 诊断数据保留。新程序证明成功后可解除旧现金证明锁及 `program_income_unverifiable`；不解除亏损、负债、订单或仓位保护锁。rebaseline 不需要外部权益锚点，仍要求程序空仓、无未决订单/记账、账户和保证金证据完整，并在原审计事务内更新基线。
+
+### 整户保证金覆盖倍数
+
+整户物理强平风险继续独立生效。CrossEx 全仓可用余额下界为 `max(0, margin_balance - sum(逐仓 isolated_margin + max(逐仓 upnl, 0) 的 USD 上界))`；分母保留整户 maintenance_margin，不扣逐仓维持保证金，负浮亏不加回。最终取原始倍数与下界倍数的较小值。缺逐仓抵押数据或所需新鲜公开 FX 时为 unknown；原始倍数已经小于 2 时保留该已知危险值。维持保证金为零时，仅正余额下界使用无限大哨兵，余额下界为零返回 0。Bitget 保持整户 effEquity/mmr。
+
+倍数小于 3 停新开，小于 2 触发只减程序仓位。外部全仓风险或逐仓抵押会影响整户物理安全判断，但不计入程序盈亏。该下界可能偏保守，不宣称等于交易所实际可用全仓保证金。
+
+### 看板字段只增不删
+
+| 接口/字段 | 增补与口径 |
+|---|---|
+| `/api/v1/summary.program_risk` | 新对象；`verified`、`accounting_basis=own_fills_funding_marks`、`ownership_mode=local_order_history`、`margin_scope=whole_account_cross_lower_bound`、`snapshot_version`、`captured_at` |
+| `program_risk` 金额 | `daily_usd`、`total_usd`、`upnl_usd`、`funding_daily_usd`、`funding_total_usd`；无有效新鲜证明时为 null，不返回已认证零 |
+| `/api/v1/remote-positions.positions[]` | 新增 `effective_ownership=program/external`、`ownership_basis=local_order_history`、`registration_required=false`；旧 `ownership=program/external_registered/unregistered` 和登记字段仍保留 |
+| 既有 external-positions 的 `income` | 保留原字段，增加 `accounting_basis`、`ownership_mode`；`external_cash`、`external_contribution`、`equity_daily` 为 null，两个外部币种分解 map 为空，表示不再计算整户现金扣除；原 `program_*` 字段来自新程序证明 |
+| 原 accounts/today/total、交易及登记管理接口 | 均保留；accounts 是整户观测，today/total 是原交易汇总，不能代替 `program_risk` 风控金额 |
+| 原因枚举 | 增加 `program_income_unverifiable`、`program_contract_mixed`、`isolated_position` 的安全显示 |
+
+以上完成本地离线验证；没有服务器访问、线上备份或部署、WSL、真实账户鉴权或下单。最终四条全量日志、双模拟器三种子原始行及旧断言迁移清单见本轮交接。

@@ -1704,3 +1704,772 @@ PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 3
 Temp 保留全部红灯、环境失败、专项及双版本全量日志；新测试的临时 SQLite 由 fixture 自行清理。仓库交付仅含本轮三个业务文件、三个新增测试/夹具文件、此交接和验收 JSON；保留旧诊断及其他任务产物，不写入整库或凭据。
 
 下一任务先读本节、任务书和验收 JSON，进行独立终审。线上只读/持续影子验证和发布仍按前轮交接边界另行确认，届时先备份并验证实际账户响应、重启和持续运行；不得通过删库、改旧证明、解锁或降低硬上限代替验收。其他页面或策略模块另开任务。
+
+## 第二十轮（2026-11-13，补记已完成 P1，P2 取消）
+
+### 范围、基线与既有提交
+
+本轮任务书为 [crossex-exec-round20-2026-11-13.md](crossex-exec-round20-2026-11-13.md)。第二十一轮开始前，P1 已在当前 `codex/crossex-exec-r8` 的 `7af31bc..5f5dfb2` 完成；本节补记交接，不重复实现。`7af31bc` 是逐仓/启动测试，`d32a7a6` 实现 P1-A/B，`e7b301a` 是安全刷新诊断测试，`5f5dfb2` 实现 P1-C。第二十轮 P2“核实抖动”已被用户取消，由第二十一轮 A/B 取代，不列为未完成任务。
+
+P1-A：`accounts.remote_positions` 接受外部逐仓原始形态，`position_attributes` 保留 margin_mode，原始行保留杠杆；账户快照不再因为任一逐仓行整体失败。登记支持 HL 无前缀原始 symbol、目录 tag=xyz、support_cross=false，并核对实际 DEX；混淆 `UNITREE`、`xyz:UNITREE`、`para:UNITREE` 仍拒绝。CLI/ADMIN 登记审计含逐仓属性。程序自己的逐仓仍停开。P1-B：外部状态异常不会阻止恢复已有订单、启动后台与 API。P1-C：ACCOUNT_REFRESH_FAILED 带固定 reason、异常类型、最内层文件:行号；不写异常正文、响应或凭据，按原因去重。
+
+P1 当时“未登记外仓停开、登记后解除”的规则，在第二十一轮已明确变为自动归属，不是本轮回归。旧手工登记接口和证据仍保留。
+
+### 保证金覆盖倍数口径（第二十一轮继续沿用）
+
+CrossEx：逐仓锁定储备 `R = Σ USD上界(isolated_margin + max(upnl,0))`；全仓余额下界 `B = max(0, margin_balance - R)`。覆盖倍数取 `min(原账户倍数, B / 整户 maintenance_margin)`。维持保证金分母不扣逐仓部分；逐仓负浮亏不加回余额；非 USD/USDT 的储备使用新鲜公开现货 FX 上界。无法证明储备或 FX 时返回 unknown；若原账户倍数已经 <2，仍保留该已知危险值。maintenance_margin=0 时，B>0 才用 1e30 哨兵，B=0 返回 0。Bitget 保持整户 effEquity/mmr。
+
+<3 停新开、<2 只减程序仓位。这个下界有意低估覆盖能力，不把逐仓抵押和正浮盈当成全仓可用资产，也不声称精确还原交易所强平公式。
+
+### 第二十轮旧断言、看板与验收边界
+
+`test_round15_review.IdentityTests.test_null_cap_does_not_relax_identity_or_malformed_rule_checks` 原参数 `support_cross='false'` 必须拒绝，改为 `support_cross='unknown'` 必须拒绝；原因是用户实测 HL HIP-3 的合法逐仓目录明确为 false。同用例新增 false+ISOLATED 登记成功且保留原字段的断言；其他错误身份、重复目录、非法数值断言保持。新增 `test_round20_positions.py`、`test_round20_diagnostics.py` 覆盖 P1-A/B/C。
+
+远端持仓原字段保留，新增 `margin_mode`（见 `remote_view.py`）；杠杆等原始证据保留在账户/登记快照，不把它们误写为新增公开字段。未改 `limits.py` 或发送函数。没有保存为本次独立验收的第二十轮专属四条日志，不能把历史口头结果冒充本次结果；第二十一轮最终四条全量测试完整包含第二十轮用例。服务器背景来自任务书，本任务没有服务器访问权限，没有重新核实线上版本或执行部署。
+
+## 第二十一轮（2026-11-13，A 自动归属、B 程序盈亏）
+
+### 范围、分支与提交
+
+最高优先任务书：[crossex-exec-round21-2026-11-13.md](crossex-exec-round21-2026-11-13.md)；读取并保留第十九轮终审约束。指定工作树 `C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec-r8`，分支 `codex/crossex-exec-r8`，进入本轮时 HEAD=`390c6b6`、工作区干净。仅修改 crossex_exec 模块及交接/契约，不涉及其他策略或 UI 模块。
+
+| 提交 | 内容 |
+|---|---|
+| `a523a60` | 先加入自动归属、程序盈亏和混仓保护红灯测试 |
+| `13e21f9` | 默认自动归属、程序资金费/成交/标记价核算 |
+| `b121154` | 增补崩溃 INTENT、混合资金费和公开字段红灯测试 |
+| `88159a4` | 保留崩溃归属、混仓证据隔离、看板增量字段及金额口径测试 |
+| `3fbd210` | 排除认领前用户资金费，保留旧 dedicated-account 基线兼容行为 |
+| `9e296ec` | 按裁定迁移旧断言，保留旧现金诊断测试，扩展随机外部交易模拟 |
+| `fdbe88c` | 将原子性/竞态/回滚断言迁至真实生效的程序锚点和检查点 |
+| `d8e825b` | 保留 600U 超额场景对原两条路由的拒绝检查 |
+
+### 已完成行为与代码入口
+
+`ownership.py`：归属只按本地非 SHADOW/UNSENT 订单的精确 route+原始 symbol；INTENT 已落库即生效，集合不缓存，同 Store.lock 防竞态。启动恢复前保存 `program_crash_claims`，解决 INTENT 在原恢复流程变为 UNSENT 后丢失合约责任的问题，不改恢复发送语义。原手工登记、撤销 tombstone、永久禁单保持；登记不再是外部仓位排除的前提。
+
+外部合约任意方向、开/加/减/翻向、CROSS/ISOLATED 自动排除。任务书四个真实形态（BINANCE OPENAI、HL io:OAI、HL 无前缀 UNITREE 逐仓、ASTER UNITREE）均使用离线合成数据覆盖，没有捕获或提交真实账户数据。程序合约仍必须精确对账；新开合约任意方向已有外部量即拒绝。出现额外量保留原 `position_mismatch` 停开，并通过 `PROGRAM_CONTRACT_MIXED` 发出中文原因。原全局丢腿保护比“只停该合约”更保守，本轮未放宽。`save_remote` 的归属投影按程序成交剩余量限额，未决订单只保留订单数量以内的原恢复义务；减仓不会吸收额外用户仓位或穿零。
+
+`program_accounting.py`、`program_risk.py`：程序已实现盈亏/手续费来自已有逐订单成交查询；浮盈亏按程序账本入场价、剩余原生数量和远端标记价计算，不用远端合并入场价或整户 upnl。日亏20、累计亏100、权益跌幅150、名义额600统一程序口径，运行时更严格阈值保留。资金费只计程序原始合约，自该合约首次程序认领前的用户账单/已结束生命周期排除。程序数量不一致时，不把合并资金费认证成自己的收入，保留上次已核实指标并停开。订单手续费、资金费、浮盈亏和显式基线统一 USD 估值口径；未扩大程序允许交易的币种/合约范围。
+
+`Accounts.program_activity`、adapters/history：无程序合约不读取历史。其余只读资金费类型和程序合约独立持仓累计；双快照只比较程序合约数量/结算计数，不再要求整户现金、外部成交或外部结算静止。CrossEx account_book、Bitget financial-records 官方当前参数表不声明 symbol 请求过滤，因此采用服务端资金费 type 过滤+客户端完整原始 symbol 精确筛选；position_history 使用已声明的 symbol 参数并复核。不能声称外部资金费量不再影响分页耗时。[CrossEx](https://www.gate.com/docs/developers/crossex/#query-account-asset-change-history)、[Bitget](https://www.bitget.com/docs/catalog/account/assets-balance)
+
+原独立累计/UTC 分日证明、历史全窗消失/改写检测、摘要缓存预算、分页游标、8秒接口预算和10秒快照期限均保留；自己的资金费读取缺失/不完整仍停开。核算使用独立 `program_funding_anchor/checkpoint`、`program_verified_history`、`program_funding_baseline`，提交前复核快照、订单摘要、基线版本、原检查点与时效，避免慢计算覆盖新状态。`external_accounting.py` 原整户现金核算保留作诊断，默认程序开仓不再依赖它。
+
+`equity.py`：rebaseline/release-halt 不再要求外部权益锚点；仍检查程序空仓、无未决订单/待记账、账户读取、保证金和负债，并在原审计事务更新基线。旧现金证明锁仅在新程序证明成功后恢复；亏损、未决订单、仓位、负债保护锁不因外部现金变化解除。整户保证金覆盖倍数继续使用上节保守口径，只影响物理保护。
+
+本轮 `limits.py`、`execution.py`、`transport.py` 无差异；engine 的 `new_intent/check_release/reduction_intent` 与适配器实际 `place` 发送函数均保持原实现。新增的是它们消费的归属和风险证据，没有修改下单路径。
+
+### 看板字段变化
+
+契约仅追加：[live-exec-contract-2026-11-11.md](live-exec-contract-2026-11-11.md) 的第二十/二十一轮节。前端静态文件未修改。
+
+| 接口 | 新增或兼容语义 |
+|---|---|
+| `/api/v1/summary.program_risk` | `verified`、`accounting_basis`、`ownership_mode`、`margin_scope`、`snapshot_version`、`captured_at`、`daily_usd`、`total_usd`、`upnl_usd`、`funding_daily_usd`、`funding_total_usd`；失效金额=null |
+| `/api/v1/remote-positions.positions[]` | `effective_ownership`、`ownership_basis`、`registration_required=false`；保留旧 ownership/登记字段，旧 unregistered 不再代表阻止程序开仓 |
+| external-positions 的既有 `income` | 增 `accounting_basis=own_fills_funding_marks`、`ownership_mode=local_order_history`；原 external_cash/external_contribution/equity_daily 键保留为 null，外部币种分解 map={}，明确不再核算整户现金扣除；program_* 键继续提供程序证据 |
+| 原 accounts/today/total、CLI/ADMIN | 字段及入口保留；整户权益、原交易汇总与新的程序风控金额分别解释，不能相互替代 |
+| 原因枚举 | 增 program_income_unverifiable、program_contract_mixed、isolated_position |
+
+### 测试先行、回归修复与断言审计方法
+
+初始 A/B 测试先红后绿；后续崩溃归属、混仓资金费和只增不删的 API 字段同样先暴露失败再修复。整套首次运行发现旧 API 字段全集未更新和基线重构影响 dedicated-account 两例，修复后继续完整运行，未跳过失败。认领前资金费测试特意在同一 UTC 日内插入两笔 -90 用户资金费，先复现误阻断，再验证新程序总额0、自己的 -2 结算仍为 -2。旧夹具使用真实墙钟创建订单而账单使用固定时钟的几处不一致改为固定时钟，亏损与停机预期保持原值。
+
+以下旧断言清单以 `390c6b6` 为基线，按 AST 对每个既有测试函数的 assert 调用逐条比较；列出旧/新行号和表达式，并给出原因。未删除测试方法、未添加 skip、未降低硬上限或自身资金费/发送安全断言。只有数据、模拟注入点、字段全集变化而断言表达式未变的场景另列。新测试无需作为“旧断言放宽”计数。
+
+### 被改动的旧断言逐项清单
+
+共 53 个既有用例，102个旧 assert 调用变更为106个替换/新增调用。行号分别对应 `390c6b6` 和最终代码验收提交 `d8e825b`；表达式由 AST 规范化显示，循环/数据条件变化另见下一表。
+
+#### A01 `test_round11_evidence.py` / `EvidenceTests.test_both_external_sides_are_excluded_but_other_dex_same_ticker_is_not`
+
+原因：另一 DEX 原始合约无程序订单，按 A 自动归外部；精确 DEX 身份仍各自保留。
+
+```diff
+- L156: self.assertTrue(self.store.meta('position_mismatch'))
+- L157: self.assertFalse(self.engine.can_open())
++ L158: self.assertFalse(self.store.meta('position_mismatch'))
++ L159: self.assertTrue(self.engine.can_open())
+```
+
+#### A02 `test_round11_external.py` / `AccountingTests.test_empty_history_with_unexplained_cash_change_is_not_complete_evidence`
+
+原因：B 停用整户现金连续性；无程序交易时现金变化不影响零程序盈亏。
+
+```diff
+- L424: self.assertFalse(self.store.meta('external_income')['verified'])
++ L428: self.assertTrue(self.store.meta('external_income')['verified'])
++ L429: self.assertEqual(self.engine.totals(), (dec(0), dec(0)))
+```
+
+#### A03 `test_round11_external.py` / `AccountingTests.test_external_pending_order_blocks_income_certificate_and_keeps_raw_order`
+
+原因：外部活动订单不再作为程序收益证明前提；启动/管理动作的未决订单规则未改。
+
+```diff
+- L418: self.assertFalse(self.store.meta('external_income')['verified'])
+- L419: self.assertEqual(self.store.meta('external_failed_snapshot')['raw_open_orders']['crossex'], self.open_orders)
++ L422: self.assertTrue(self.store.meta('external_income')['verified'])
++ L423: self.assertTrue(self.engine.can_open())
+```
+
+#### A04 `test_round11_external.py` / `AccountingTests.test_failed_rebaseline_cannot_reuse_old_income_and_keeps_new_evidence`
+
+原因：仅外部流水不完整不能阻止程序空仓 rebaseline；不再创建外部权益锚点，程序资金费缺失仍拒绝。
+
+```diff
+- L451: self.assertRaisesRegex(ValueError, 'external_income_unverifiable')
+- L453: self.assertFalse(self.engine.can_open())
+- L454: self.assertFalse(self.store.meta('external_income')['verified'])
+- L455: self.assertFalse(self.store.meta('external_admin_snapshot')['activity']['complete'])
++ L458: self.assertTrue(self.engine.can_open())
++ L459: self.assertIsNone(self.store.meta('external_equity_anchor'))
+```
+
+#### A05 `test_round11_external.py` / `AccountingTests.test_increase_partial_close_full_close_and_funding_are_not_current_upnl_offset`
+
+原因：外部成交及资金费不再计算整户扣除项，external_contribution 键保留 null。
+
+```diff
+- L324: self.assertEqual(dec(self.store.meta('external_income')['external_contribution']), dec('-23.3'))
++ L325: self.assertIsNone(self.store.meta('external_income')['external_contribution'])
+```
+
+#### A06 `test_round11_external.py` / `AccountingTests.test_missing_complete_history_unknown_type_and_non_usdt_never_zero`
+
+原因：不完整、未知类型、非 USDT 外部现金不属于程序资金费，不挂整户现金锁。
+
+```diff
+- L277: self.assertIn('external_income_unverifiable', self.store.meta('stop_locks'))
+- L278: self.assertFalse(self.engine.can_open())
+- L283: self.assertIn('external_income_unverifiable', self.store.meta('stop_locks'))
++ L284: self.assertNotIn('external_income_unverifiable', self.store.meta('stop_locks'))
++ L279: self.assertTrue(self.engine.can_open())
++ L284: self.assertNotIn('external_income_unverifiable', self.store.meta('stop_locks'))
+```
+
+#### A07 `test_round11_external.py` / `AccountingTests.test_missing_trade_missing_fee_duplicate_and_transfer_fail_closed`
+
+原因：场景缺失的是外部成交、手续费或划转；程序逐订单成交完整性要求保留。
+
+```diff
+- L332: self.assertFalse(self.store.meta('external_income')['verified'])
+- L338: self.assertFalse(self.store.meta('external_income')['verified'])
++ L339: self.assertTrue(self.store.meta('external_income')['verified'])
++ L339: self.assertTrue(self.store.meta('external_income')['verified'])
+```
+
+#### A08 `test_round11_external.py` / `AccountingTests.test_non_usdt_cancellation_of_different_currency_pnl_is_not_zero_proof`
+
+原因：不同外部币种的盈亏均排除，外部币种核算不能成为程序证明前提。
+
+```diff
+- L382: self.assertFalse(self.store.meta('external_income')['verified'])
++ L384: self.assertTrue(self.store.meta('external_income')['verified'])
++ L385: self.assertEqual(self.engine.totals(), (dec(0), dec(0)))
+```
+
+#### A09 `test_round11_external.py` / `AccountingTests.test_program_trade_cash_must_match_immutable_fill_journal`
+
+原因：程序成交以逐订单查询为准，不再要求整户交易账单重复匹配；此场景本地已确认零成交。
+
+```diff
+- L390: self.assertFalse(self.store.meta('external_income')['verified'])
++ L393: self.assertTrue(self.store.meta('external_income')['verified'])
++ L394: self.assertEqual(self.engine.totals(), (dec(0), dec(0)))
+```
+
+#### A10 `test_round11_external.py` / `AccountingTests.test_same_millisecond_new_funding_is_not_discarded_at_epoch_boundary`
+
+原因：同毫秒新增的是外部资金费，不再产生外部抵扣值；自身同毫秒资金费校验保留。
+
+```diff
+- L431: self.assertEqual(dec(self.store.meta('external_income')['external_contribution']), -1)
++ L436: self.assertIsNone(self.store.meta('external_income')['external_contribution'])
+```
+
+#### A11 `test_round11_external.py` / `AccountingTests.test_slow_history_and_settlement_during_reads_cannot_certify_stale_snapshot`
+
+原因：无程序合约跳过整户历史，外部结算变化不使程序证明失效；程序双快照和十秒限制保留。
+
+```diff
+- L375: self.assertFalse(self.store.meta('external_income')['verified'])
++ L376: self.assertTrue(self.store.meta('external_income')['verified'])
++ L377: self.assertEqual(self.engine.totals(), (dec(0), dec(0)))
+```
+
+#### A12 `test_round11_external.py` / `ExternalAPITests.test_rebaseline_external_evidence_and_margin_refusals_are_conflicts`
+
+原因：仅外部流水不完整的管理请求从409改200；保证金不足场景仍409。
+
+```diff
+- L506: self.assertEqual(response.status, 409)
++ L510: self.assertEqual(response.status, 409 if reason == 'margin_open_limit' else 200)
+```
+
+#### A13 `test_round11_external.py` / `RegistryTests.test_catalog_change_and_raw_missing_stop_without_losing_snapshot`
+
+原因：外部目录 tick 变化不再是程序全局开仓条件；登记严格身份和 DEX 检查保留。
+
+```diff
+- L197: self.assertFalse(self.engine.can_open())
+- L198: self.assertIn('external_identity_unverifiable', self.store.meta('stop_locks'))
++ L198: self.assertTrue(self.engine.can_open())
++ L199: self.assertNotIn('external_identity_unverifiable', self.store.meta('stop_locks'))
+```
+
+#### A14 `test_round12_fx.py` / `FXAccountingTests.test_baseline_difference_is_native_units_then_converted`
+
+原因：不再核算外部基线抵扣值，external_contribution/equity_daily 键保留 null。
+
+```diff
+- L207: self.assertEqual(dec(value['external_contribution']), dec('20') * dec('1.001') * dec('1.002'))
+- L208: self.assertLessEqual(dec(value['equity_daily']), 0)
++ L207: self.assertIsNone(value['external_contribution'])
++ L208: self.assertIsNone(value['equity_daily'])
+```
+
+#### A15 `test_round12_fx.py` / `FXAccountingTests.test_certificate_rechecks_fx_expiry_before_account_ten_second_expiry`
+
+原因：这里只用于外部盈亏的 FX 过期不阻塞程序；程序币种和逐仓储备 FX 仍必须新鲜。
+
+```diff
+- L231: self.assertRaisesRegex(ValueError, 'external_income_unverifiable')
+- L233: self.assertFalse(self.engine.can_open())
+- L234: self.assertRaisesRegex(ValueError, 'external_income_unverifiable')
++ L232: self.assertTrue(self.engine.can_open())
+```
+
+#### A16 `test_round12_fx.py` / `FXAccountingTests.test_expired_single_and_extreme_quotes_invalidate_prior_success_and_keep_hard_exit`
+
+原因：失效、单来源、分歧报价仅涉及此场景的外部 PnL，不使程序证明失效；物理保证金退出保留。
+
+```diff
+- L216: self.assertFalse(self.reconcile()['verified'])
+- L217: self.assertFalse(self.engine.can_open())
+- L218: self.assertIn('external_income_unverifiable', self.store.meta('stop_locks'))
++ L216: self.assertTrue(self.reconcile()['verified'])
++ L217: self.assertTrue(self.engine.can_open())
++ L218: self.assertNotIn('external_income_unverifiable', self.store.meta('stop_locks'))
+```
+
+#### A17 `test_round12_fx.py` / `FXAccountingTests.test_external_funding_fee_realized_and_close_count_once_in_native_cash`
+
+原因：外部资金费、费用、平仓收益不再逐条抵扣，兼容字段为 null，外部旧行缺失不污染程序。
+
+```diff
+- L254: self.assertEqual(dec(value['external_cash']), dec('17.034'))
+- L255: self.assertEqual(dec(value['external_contribution']), dec('17.034'))
+- L256: self.assertEqual(dec(value['equity_daily']), dec('-.034'))
+- L258: self.assertFalse(self.reconcile()['verified'])
++ L252: self.assertIsNone(value['external_cash'])
++ L253: self.assertIsNone(value['external_contribution'])
++ L254: self.assertIsNone(value['equity_daily'])
++ L256: self.assertTrue(self.reconcile()['verified'])
+```
+
+#### A18 `test_round12_fx.py` / `FXAccountingTests.test_external_profit_upper_and_loss_lower_never_hide_own_loss`
+
+原因：外部浮盈亏抵扣停用，字段为 null；真实程序亏损由自身订单和资金费测试覆盖。
+
+```diff
+- L192: self.assertEqual(dec(value['external_contribution']), dec(contribution))
+- L193: self.assertEqual(dec(value['equity_daily']), dec(daily))
++ L192: self.assertIsNone(value['external_contribution'])
++ L193: self.assertIsNone(value['equity_daily'])
+```
+
+#### A19 `test_round12_fx.py` / `FXAccountingTests.test_failed_fx_at_midnight_cannot_roll_anchor_or_clear_old_daily_lock`
+
+原因：缺程序资金费时检查真实程序起点未推进，不能比较两个停用的外部空锚点；日亏锁要求不变。
+
+```diff
+- L357: self.assertEqual(self.store.meta('external_equity_anchor'), old_anchor)
++ L355: self.assertEqual(self.store.meta('program_funding_anchor'), old_anchor)
+```
+
+#### A20 `test_round12_fx.py` / `FXAccountingTests.test_missing_public_provider_never_blocks_full_account_protection`
+
+原因：缺失外部 PnL 报价不单独停开，整户保证金危险仍执行原保护。
+
+```diff
+- L288: self.assertFalse(self.engine.can_open())
++ L286: self.assertTrue(self.engine.can_open())
+```
+
+#### A21 `test_round12_fx.py` / `FXAccountingTests.test_mixed_currency_cancellation_is_converted_separately`
+
+原因：外部多币种抵销不参与程序盈亏，原字段返回 null。
+
+```diff
+- L281: self.assertEqual(dec(value['external_contribution']), dec('10.080'))
+- L282: self.assertEqual(dec(value['equity_daily']), dec('-.080'))
++ L279: self.assertIsNone(value['external_contribution'])
++ L280: self.assertIsNone(value['equity_daily'])
+```
+
+#### A22 `test_round12_fx.py` / `FXAccountingTests.test_non_usdt_zero_net_still_requires_prices_for_nonzero_components`
+
+原因：只有外部非零分量相抵无需收益 FX 证明；不存在程序币种或逐仓储备依赖。
+
+```diff
+- L240: self.assertFalse(self.reconcile()['verified'])
+- L241: self.assertFalse(self.engine.can_open())
++ L238: self.assertTrue(self.reconcile()['verified'])
++ L239: self.assertTrue(self.engine.can_open())
+```
+
+#### A23 `test_round12_fx.py` / `FXAccountingTests.test_utc_rollover_verifies_carried_fx_then_restart_keeps_native_anchor`
+
+原因：外部 FX 不再滚动整户权益锚点；重启改测真实 Engine 程序证明与零程序金额。
+
+```diff
+- L303: self.assertTrue(value['verified'])
+- L304: self.assertEqual(dec(value['carried_interval']['external_contribution']), dec('-9.980'))
+- L305: self.assertEqual(dec(value['equity_daily']), 0)
+- L313: self.assertTrue(value['verified'])
+- L314: self.assertEqual(dec(value['equity_daily']), 0)
++ L300: self.assertTrue(self.reconcile()['verified'])
++ L301: self.assertIsNone(self.store.meta('external_equity_anchor'))
++ L307: self.assertTrue(reopened.meta('external_income')['verified'])
++ L308: self.assertEqual(engine.totals(), (dec(0), dec(0)))
+```
+
+#### A24 `test_round13_review.py` / `HistoryTests.test_digest_growth_keeps_original_epoch_and_verified_old_ids`
+
+原因：历史索引只保留程序资金费 ID，锚点迁入 program_funding_anchor；旧程序 ID 不得丢失。
+
+```diff
+- L153: self.assertEqual(set(first['crossex_book']), {'external', 'program'})
+- L158: self.assertEqual(set(current['crossex_book']), {'external', 'program', 'next'})
+- L159: self.assertEqual(current['crossex_book']['external'], first['crossex_book']['external'])
+- L160: self.assertEqual(self.store.meta('external_equity_anchor'), anchor)
++ L154: self.assertEqual(set(first['crossex_book']), {'program'})
++ L159: self.assertEqual(set(current['crossex_book']), {'program', 'next'})
++ L160: self.assertEqual(current['crossex_book']['program'], first['crossex_book']['program'])
++ L161: self.assertEqual(self.store.meta('program_funding_anchor'), anchor)
+```
+
+#### A25 `test_round13_review.py` / `HistoryTests.test_post_anchor_verified_funding_disappearance_is_not_zero_income`
+
+原因：资金费消失时仍停开且实际程序起点不能推进，不再比较停用外部锚点。
+
+```diff
+- L133: self.assertEqual(self.store.meta('external_equity_anchor'), anchor)
++ L134: self.assertEqual(self.store.meta('program_funding_anchor'), anchor)
+```
+
+#### A26 `test_round13_review.py` / `HistoryTests.test_rebaseline_cannot_erase_missing_verified_history`
+
+原因：缺失已核实程序资金费仍拒绝 rebaseline，改程序专用原因；起点不变检查迁入真实程序锚点。
+
+```diff
+- L166: self.assertRaisesRegex(ValueError, 'external_income_unverifiable')
+- L168: self.assertEqual(self.store.meta('external_equity_anchor'), anchor)
++ L167: self.assertRaisesRegex(ValueError, 'program_income_unverifiable')
++ L169: self.assertEqual(self.store.meta('program_funding_anchor'), anchor)
+```
+
+#### A27 `test_round13_review.py` / `NotionalTests.test_external_500_usdc_plus_two_50_usd_legs_exceeds_hard_600`
+
+原因：600U 是程序口径，外部500不计，程序两腿100；随后增加程序待决501，原超过600拒绝保持。
+
+```diff
+- L188: self.assertEqual(self.engine.limits.exposure(snapshot), dec('606.010'))
++ L189: self.assertEqual(self.engine.limits.exposure(snapshot), dec('100.000'))
+```
+
+#### A28 `test_round13_review.py` / `NotionalTests.test_notional_fx_rechecked_at_send_earlier_than_account_ttl`
+
+原因：此场景仅外部 USDC 仓位，程序名义额0；不以外部报价过期拒绝程序发送。
+
+```diff
+- L208: self.assertGreater(self.engine.limits.exposure(snapshot), 100)
+- L210: self.assertRaises(ValueError)
++ L211: self.assertEqual(self.engine.limits.exposure(snapshot), 0)
+```
+
+#### A29 `test_round13_review.py` / `NotionalTests.test_notional_requires_fx_even_with_zero_external_income`
+
+原因：外部 USDC 不消耗程序额度，缺其盈亏 FX 不阻止其他合约开仓。
+
+```diff
+- L199: self.assertFalse(self.engine.can_open())
+- L200: self.assertRaises(ValueError)
++ L202: self.assertTrue(self.engine.can_open())
+```
+
+#### A30 `test_round13_review.py` / `SnapshotProofTests.test_old_coordinator_cannot_publish_after_new_account_revokes_proof`
+
+原因：旧核算被新快照撤销时验证实际程序起点不被覆盖；暂停点迁入 journal_pnl，竞态拒绝保持。
+
+```diff
+- L69: self.assertEqual(self.store.meta('external_equity_anchor'), original_anchor)
++ L70: self.assertEqual(self.store.meta('program_funding_anchor'), original_anchor)
+```
+
+#### A31 `test_round14_isolation.py` / `NoExternalEvidenceTests.test_bitget_transfer_is_excluded_but_wrong_sign_or_fee_is_not`
+
+原因：非资金费的 Bitget 划转被整体排除，不以整户划转符号或费用错误停程序。
+
+```diff
+- L361: self.assertFalse(self.engine.can_open())
++ L362: self.assertTrue(self.engine.can_open())
+```
+
+#### A32 `test_round14_isolation.py` / `NoExternalEvidenceTests.test_default_program_scope_also_requires_complete_evidence_without_external`
+
+原因：程序从未下单无需整户历史，不能因空账户历史缺失停开。
+
+```diff
+- L337: self.assertFalse(self.engine.can_open())
+- L338: self.assertFalse(self.store.meta('external_income')['verified'])
++ L338: self.assertTrue(self.engine.can_open())
++ L339: self.assertTrue(self.store.meta('external_income')['verified'])
+```
+
+#### A33 `test_round14_isolation.py` / `ProgramIsolationTests.test_unknown_or_incomplete_transfer_remains_unverifiable`
+
+原因：未知或不完整的外部划转不参与程序证明；自己的资金费未知仍停开。
+
+```diff
+- L170: self.assertFalse(self.engine.can_open())
+- L171: self.assertFalse(self.store.meta('external_income')['verified'])
++ L171: self.assertTrue(self.engine.can_open())
++ L172: self.assertTrue(self.store.meta('external_income')['verified'])
+```
+
+#### A34 `test_round14_isolation.py` / `ProgramIsolationTests.test_unknown_remote_position_still_mismatches_and_alert_does_not_repeat`
+
+原因：无本地订单的原始合约自动归外部，不产生仓位不匹配或重复告警。
+
+```diff
+- L207: self.assertTrue(self.store.meta('position_mismatch'))
+- L208: self.assertFalse(self.engine.can_open())
+- L211: self.assertEqual(len(alerts), 1)
++ L208: self.assertFalse(self.store.meta('position_mismatch'))
++ L209: self.assertTrue(self.engine.can_open())
++ L212: self.assertEqual(len(alerts), 0)
+```
+
+#### A35 `test_round15_funding.py` / `FundingTests.test_first_missing_offsetting_funding_is_not_zero_then_delayed_rows_recover`
+
+原因：缺失相反程序资金费仍拒绝 rebaseline，仅改程序专用错误原因。
+
+```diff
+- L59: self.assertRaisesRegex(ValueError, 'external_income_unverifiable')
++ L59: self.assertRaisesRegex(ValueError, 'program_income_unverifiable')
+```
+
+#### A36 `test_round15_program.py` / `ProgramLifecycleTests.test_default_flat_account_requires_both_independent_history_responses`
+
+原因：没有程序订单时两路历史无需请求；存在程序生命周期时仍要求相关独立证明。
+
+```diff
+- L95: self.assertFalse(w.store.meta('external_income')['verified'])
+- L96: self.assertFalse(w.engine.can_open())
++ L96: self.assertTrue(w.engine.can_open())
++ L95: self.assertTrue(w.store.meta('external_income')['verified'])
+```
+
+#### A37 `test_round15_program.py` / `ProgramSimulationTests.test_default_program_three_seeds`
+
+原因：仅新增72次外部随机交易覆盖和证据断言；原种子、12场景及全部发送/亏损不变量保留。
+
+```diff
++ L128: self.assertTrue(w.store.meta('external_income')['verified'])
++ L129: self.assertEqual(dec(w.store.meta('external_income')['program_total']), 0)
++ L130: self.assertFalse(w.store.meta('position_mismatch'))
++ L170: self.assertEqual(coverage['program_external_random_trades'], 72)
+```
+
+#### A38 `test_round15_review.py` / `HaltingTests.test_halting_refreshes_expired_catalog_accounts_sampling_and_retries_independently`
+
+原因：只有外仓且程序已平可直接 HALTED，不等外部目录；无程序合约一次账户读取即可。
+
+```diff
+- L168: self.assertEqual(self.store.meta('state'), 'HALTING')
++ L182: self.assertEqual(self.store.meta('state'), 'HALTED')
+- L176: self.assertGreaterEqual(read.call_count, 2)
++ L176: self.assertGreaterEqual(read.call_count, 1)
+```
+
+#### A39 `test_round16_funding.py` / `DailyFundingTests.test_observed_boundary_counter_then_late_today_loss_is_exact_after_restart`
+
+原因：检查点键迁至 program_funding_checkpoint，重启持久化精确一致的要求不变。
+
+```diff
+- L107: self.assertEqual(reopened.meta('funding_checkpoint'), checkpoint)
++ L107: self.assertEqual(reopened.meta('program_funding_checkpoint'), checkpoint)
+```
+
+#### A40 `test_round16_funding.py` / `DailyFundingTests.test_opposite_days_first_omission_blocks_without_rolling_any_checkpoint`
+
+原因：起点/检查点迁移及错误原因改名；失败后不得推进二者的要求不变。
+
+```diff
+- L64: self.assertRaisesRegex(ValueError, 'external_income_unverifiable')
+- L66: self.assertEqual(self.store.meta('external_equity_anchor'), anchor)
+- L67: self.assertEqual(self.store.meta('funding_checkpoint'), checkpoint)
++ L64: self.assertRaisesRegex(ValueError, 'program_income_unverifiable')
++ L66: self.assertEqual(self.store.meta('program_funding_anchor'), anchor)
++ L67: self.assertEqual(self.store.meta('program_funding_checkpoint'), checkpoint)
+```
+
+#### A41 `test_round16_funding.py` / `DailyFundingTests.test_restart_and_late_cash_rows_do_not_create_missing_boundary_evidence`
+
+原因：起点改 program_funding_anchor；重启不可补造分日证据的要求不变。
+
+```diff
+- L82: self.assertEqual(reopened.meta('external_equity_anchor'), anchor)
++ L82: self.assertEqual(reopened.meta('program_funding_anchor'), anchor)
+```
+
+#### A42 `test_round16_history.py` / `DiagnosticShutdownTests.test_checkpoint_rebaseline_is_audited_and_rollback_keeps_it`
+
+原因：审计和回滚指向程序检查点/起点；审计旧值与失败不提交要求不变。
+
+```diff
+- L166: self.assertEqual(audit['old']['funding_checkpoint'], before)
++ L170: self.assertEqual(audit['old']['program_funding_checkpoint'], before)
+- L169: self.assertEqual(current['captured_at'], self.store.meta('external_equity_anchor')['captured_at'])
++ L173: self.assertEqual(current['captured_at'], self.store.meta('program_funding_anchor')['captured_at'])
+- L172: self.assertEqual(self.store.meta('funding_checkpoint'), current)
++ L176: self.assertEqual(self.store.meta('program_funding_checkpoint'), current)
+```
+
+#### A43 `test_round16_history.py` / `DiagnosticShutdownTests.test_large_real_adapter_activity_reaches_verified_external_income`
+
+原因：21001行、22页改为程序资金费并断言 program_activity；分页数量与完整性不降低。
+
+```diff
+- L191: self.assertEqual(len(self.store.meta('external_activity')['crossex_book']), 21001)
++ L195: self.assertEqual(len(self.store.meta('program_activity')['crossex_book']), 21001)
+```
+
+#### A44 `test_round16_history.py` / `DiagnosticShutdownTests.test_three_registered_positions_replace_previous_shutdown_failure`
+
+原因：未登记但无程序订单的三个合约自动外部，程序安全停机退出0。
+
+```diff
+- L197: self.assertEqual(finish_shutdown(self.engine), 1)
++ L206: self.assertEqual(finish_shutdown(self.engine), 0)
+```
+
+#### A45 `test_round16_history.py` / `DiagnosticShutdownTests.test_unregistered_position_nonzero_also_logs_fresh_classification`
+
+原因：第三份持仓自动外部；退出0，程序平仓但整户未平，无剩余程序量，仅正常 shutdown_positions。
+
+```diff
+- L138: self.assertEqual(finish_shutdown(self.engine), 1)
+- L140: self.assertFalse(status['program_flat'])
++ L138: self.assertEqual(finish_shutdown(self.engine), 0)
+- L141: self.assertEqual(len(status['external_positions']), 2)
+- L142: self.assertEqual(len(status['remaining_positions']), 1)
+- L143: self.assertIn(unittest.mock.call('shutdown_positions', **status), emit.call_args_list)
++ L141: self.assertTrue(status['program_flat'])
++ L142: self.assertFalse(status['account_flat'])
++ L143: self.assertEqual(len(status['external_positions']), 3)
++ L144: self.assertFalse(status['remaining_positions'])
++ L145: emit.assert_called_once_with('shutdown_positions', **status)
+```
+
+#### A46 `test_round17_funding.py` / `FundingOriginTests.test_certified_anchor_can_replace_missing_checkpoint_and_records_source`
+
+原因：检查点证明 source 仍必须 daily_continuity，仅改程序元数据键。
+
+```diff
+- L119: self.assertEqual(self.store.meta('funding_checkpoint')['funding_daily_proof']['source'], 'daily_continuity')
++ L122: self.assertEqual(self.store.meta('program_funding_checkpoint')['funding_daily_proof']['source'], 'daily_continuity')
+```
+
+#### A47 `test_round17_funding.py` / `FundingOriginTests.test_daily_roll_has_bound_proof_and_failed_write_cannot_leave_certificate`
+
+原因：程序起点不随 UTC 滚日移动，连续性由程序检查点承担；新增起点不变断言，原子回滚保留。
+
+```diff
+- L149: self.assertEqual(self.store.meta('external_equity_anchor'), before)
+- L152: self.assertEqual(rolled['funding_daily_proof']['source'], 'daily_continuity')
++ L152: self.assertEqual(self.store.meta('program_funding_anchor'), before)
++ L155: self.assertEqual(rolled, before)
++ L156: self.assertEqual(self.store.meta('program_funding_checkpoint')['funding_daily_proof']['source'], 'daily_continuity')
+```
+
+#### A48 `test_round17_funding.py` / `FundingOriginTests.test_legacy_or_tampered_anchor_cannot_replace_missing_checkpoint`
+
+原因：无来源或被篡改的起点仍不能替代检查点，仅改程序键。
+
+```diff
+- L135: self.assertEqual(self.store.meta('external_equity_anchor'), anchor)
+- L136: self.assertIsNone(self.store.meta('funding_checkpoint'))
++ L138: self.assertEqual(self.store.meta('program_funding_anchor'), anchor)
++ L139: self.assertIsNone(self.store.meta('program_funding_checkpoint'))
+```
+
+#### A49 `test_round17_resources.py` / `ResourceSafetyTests.test_full_window_recheck_detects_missing_revised_and_late_cached_rows`
+
+原因：全窗缺失、改写、部分读取仍失败且索引不变，仅改 program_verified_history。
+
+```diff
+- L52: self.assertEqual(self.store.meta('external_verified_history'), before)
++ L53: self.assertEqual(self.store.meta('program_verified_history'), before)
+```
+
+#### A50 `test_round17_resources.py` / `ResourceSafetyTests.test_unchanged_verified_ledger_is_not_serialized_and_rewritten`
+
+原因：相同索引不重复写、新行只写一次的资源要求保留，仅改程序索引键。
+
+```diff
+- L76: self.assertFalse(any((c.args[0] == 'external_verified_history' for c in writes.call_args_list)))
++ L77: self.assertFalse(any((c.args[0] == 'program_verified_history' for c in writes.call_args_list)))
+- L82: self.assertEqual(sum((c.args[0] == 'external_verified_history' for c in writes.call_args_list)), 1)
++ L83: self.assertEqual(sum((c.args[0] == 'program_verified_history' for c in writes.call_args_list)), 1)
+```
+
+#### A51 `test_round18_lifecycle.py` / `LifecycleTests.test_real_startup_tick_shutdown_with_observed_empty_orders`
+
+原因：新程序启动仍读活动订单，跳过整户账本/交易历史；生命周期与停机要求保留。
+
+```diff
+- L104: self.assertTrue({OPEN, POSITIONS, FINANCIAL, '/api/v4/crossex/account_book', '/api/v4/crossex/history_trades', '/api/v4/crossex/history_positions', '/api/v4/crossex/open_orders'} <= paths)
++ L104: self.assertIn(OPEN, paths)
++ L105: self.assertTrue({FINANCIAL, '/api/v4/crossex/account_book', '/api/v4/crossex/history_trades'}.isdisjoint(paths))
+```
+
+#### A52 `test_round20_positions.py` / `LifecycleTests20.test_unregistered_isolated_startup_api_register_reconcile_and_shutdown`
+
+原因：A 取代第二十轮未登记逐仓停开规则，启动及撤销登记后自动排除；ADMIN 登记测试保留。
+
+```diff
+- L200: self.assertFalse(self.engine.can_open())
+- L201: self.assertIn('isolated_position', self.store.meta('stop_locks'))
++ L239: self.assertTrue(self.engine.can_open())
++ L230: self.assertNotIn('isolated_position', self.store.meta('stop_locks'))
+- L233: self.assertFalse(self.engine.can_open())
++ L239: self.assertTrue(self.engine.can_open())
+```
+
+#### A53 `test_round20_positions.py` / `PositionTests.test_unregistered_and_program_isolated_stop_without_invalidating_account`
+
+原因：外部逐仓无需登记；同用例后半段本程序逐仓必须停开的断言未改。
+
+```diff
+- L125: self.assertIn('isolated_position', self.store.meta('stop_locks'))
+- L126: self.assertFalse(self.engine.can_open())
++ L125: self.assertNotIn('isolated_position', self.store.meta('stop_locks'))
++ L126: self.assertTrue(self.engine.can_open())
+```
+### 断言未改但夹具、注入点或字段全集有变的清单
+
+这些变化同样纳入审计，避免只比较 assert 文本漏掉测试强度变化。
+
+| 文件 / 方法或夹具 | 变化及原因 |
+|---|---|
+| test_api.py 的 SUMMARY；DataTests.test_empty_contract_and_unknowns、HTTPTests.test_http_contract_auth_and_get_only | 全集增 program_risk，仍要求字段全集精确相等，未改成子集检查 |
+| round11_simulator.enable | 增 program_activity 离线入口和程序原生 mark×quantity 名义额；保留原96次外仓及48次后续场景，不改2712轮/2400随机轮或断言阈值 |
+| round15_simulator.ProgramWorld.__init__/snapshot | 增 program_activity、user_rows/user_cash 合成外仓变化及程序标记名义额；原发送和独立累计状态仍由真实 Engine/Executor 消费 |
+| round19_fixtures.ObservedFixture.prove/anchor、legacy_cash_diagnostics.py | 第十九轮现金域、兑换、利息的原断言继续调用旧 ExternalAccounting 诊断，不把它装回程序准入；锚点由诊断 helper 显式建立 |
+| test_round11_evidence.EvidenceTests.test_external_notional_liability_and_margin_keep_original_limits | >600 的夹具改为程序 UNKNOWN 订单601，避免再用未登记外仓冒充程序占用；原限额/负债/保证金断言不变 |
+| test_round11_external.ExternalFixture.setUp | 增 program_activity mock 入口，保留独立持仓计数模型；真实 Accounts 无回退到整户 activity |
+| test_round11_external.AccountingTests 的 own_funding_loss、equity_and_margin_hard_limits、rebaseline_offsets_verified_program_funding 三例 | 只将本地订单 created_at 改为夹具固定时钟，避免使用运行当日墙钟而账单是固定历史日期；-21/-150、日亏锁和基线审计断言不变 |
+| test_round13_review.HistoryTests.funding_pair、test_round14_isolation.IsolationFixture.own_funding | 同上，资金费发生在程序认领之后；历史撤回、实际 -5/-60/-101/-150/-20 金额及停机断言保持 |
+| test_round13_review.HistoryTests.test_upgrade_seeds_post_anchor_ids_from_last_verified_legacy_activity | 删除的索引键迁为 program_verified_history，检查独立检查点仍拒绝已认证资金费消失，不再删除无效的旧键 |
+| test_round13_review.ShutdownAuditTests.test_both_admin_audits_include_old_attribution_baselines_and_rollback | 审计键全集保留旧键并加入程序起点/检查点/资金费基线/索引；原两种管理动作及审计写失败回滚逐值相等要求不变 |
+| test_round13_review.NotionalTests.test_external_500_usdc_plus_two_50_usd_legs_exceeds_hard_600 | 改用程序待决量触发>600，并对 a/b 两条原路由逐个保留拒绝检查，非只测其中一腿 |
+| test_round14_isolation.ProgramIsolationTests.test_unproved_legacy_funding_epoch_cannot_silently_restart_at_zero | 移除真实程序锚点 funding_daily_proof，替代移除已不使用的旧 carry 字段；停开断言不变 |
+| 同类 test_missing_income_never_becomes_zero_and_external_equity_cannot_force_halt | 先造自己的 -1 资金费，再制造历史不完整；保留旧指标、不认零、不被外部权益迫停的断言不变 |
+| 同类 test_order_change_during_pnl_calculation_cannot_certify_old_result；r13 SnapshotProofTests 的旧核算竞态 | mock 移至正在使用的 program_accounting.journal_pnl 并转发 fx 参数；订单变更与快照撤销仍阻止证书提交 |
+| test_round12_fx.FXAccountingTests.test_failed_fx_at_midnight_cannot_roll_anchor_or_clear_old_daily_lock | 增程序合约及其历史失败，保证该失败仍相关；原亏损日锁不可跨日误清的断言保持，起点迁移见逐项清单 |
+| test_round16_funding.DailyFundingTests.test_current_uta_lifetime_crossing_days_has_no_net_zero_exemption、test_checkpoint_commit_failure_cannot_advance_anchor_or_history | 删除/故障注入对象迁至程序检查点和起点；跨日净零不可豁免、原子回滚断言保持 |
+| test_round16_history.DiagnosticShutdownTests.test_activity_exception_has_diagnostic_in_snapshot_and_alert | 增自己的零终态合约，使程序历史必读；接口失败诊断与告警断言保持 |
+| test_round16_history 的大分页场景 | 整户 TRANSACTION 改自己的 FUNDING_FEE、显式零终态归属，调用真实 Accounts.program_activity；21001行、22页以及完整读取断言保持 |
+| test_round17_funding.FundingOriginTests.legacy_roll | 仍执行已提交 r15 旧源码重现错误，只用诊断 helper 建立旧外部锚点/快照；升级后丢日证据必须停开的原断言保留 |
+| test_round17_resources.ResourceSafetyTests.setUp/test_one_history_index_per_income_proof_and_unchanged_rows_reuse_hashes | 旧外部 TRANSACTION 改自己 FUNDING_FEE、设置固定时钟零终态归属；mock 移到程序核算入口，缓存单次索引/复用摘要/变更检测边界不变 |
+
+上述审计键均在原审计事务中比较。新增用例另见 test_round21_program.py 与 test_round21_evidence.py，共17项，覆盖归属、崩溃、混仓、未知资金费、原始标记价、历史认领边界、基线币种、适配器过滤分页和公开证据字段。
+
+### 最终双版本全量验收及原始汇总行
+
+最终代码/测试提交为 `d8e825be7b9799786da7f39997a6a5ee657370d8`；此后只追加文档和验收记录。四条均为未经筛选的 discover 全量命令，无跳过，退出码全部0。完整元数据、SHA256及静态边界证据见 [crossex-exec-r21-validation-2026-11-13.json](crossex-exec-r21-validation-2026-11-13.json)。
+
+两套解释器分别执行：
+
+```text
+python -m unittest discover -s tools/crossex_exec/tests -v
+python -m unittest discover -s tools/fill_sim/tests -v
+```
+
+Python 3.12.10：`C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe`。Python 3.10.20：用户任务书指定的 `C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe`。
+
+完整日志保留在 `C:\Users\wubin\AppData\Local\Temp\crossex-r21-20261113`，未提交临时数据库或整份执行日志。以下 Ran/OK 为原始行；模拟器仅去掉同一行前置的 unittest 用例名，其汇总正文不重算、不摘录字段。
+
+#### Python 3.12.10 / `delivery-3.12-crossex_exec.log`
+
+```text
+Ran 673 tests in 145.793s
+
+OK
+```
+
+SHA256：`0e4c85beea6d6163a771ea17676bc7c82103a0ef3d746531a31448c78a741a53`。
+
+```text
+INVARIANTS seed=20261111 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 35, '1b': 80, '1c': 25, '1d': 104, '2': 94, '3': 115, '4': 94, '5': 600, '6': 23, '7': 363} coverage={'account_failures': 151, 'baseline_admission': 94, 'cooldown_active': 167, 'db_failures': 22, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 162, 'halted': 362, 'halting_retry': 1, 'intent_write_abort': 21, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 94, 'opened_pairs': 47, 'partial_fill': 27, 'position_failures': 137, 'position_read': 4071, 'query': 4235, 'query_failures': 1404, 'recovery_obligation': 23, 'reduce': 115, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 722, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'skip_baseline_not_flat': 75, 'skip_book_skew': 28, 'skip_book_stale': 112, 'skip_funding_diff': 56, 'skip_not_single_venue_outlier': 129, 'skip_size_too_small': 1, 'skip_too_few_venues': 26, 'skip_volume_too_low': 1, 'timeout_ack': 28, 'timeout_unknown': 21, 'zero_fill': 20}
+INVARIANTS seed=20261112 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 27, '1b': 76, '1c': 13, '1d': 97, '2': 88, '3': 103, '4': 88, '5': 600, '6': 30, '7': 388} coverage={'account_failures': 116, 'baseline_admission': 88, 'cooldown_active': 24, 'db_failures': 16, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 152, 'halted': 387, 'halting_retry': 1, 'intent_write_abort': 15, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 88, 'opened_pairs': 44, 'partial_fill': 24, 'position_failures': 139, 'position_read': 4085, 'query': 4904, 'query_failures': 635, 'recovery_obligation': 30, 'reduce': 103, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 722, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'skip_baseline_not_flat': 65, 'skip_book_skew': 20, 'skip_book_stale': 86, 'skip_funding_diff': 91, 'skip_not_single_venue_outlier': 153, 'skip_size_too_small': 1, 'skip_too_few_venues': 46, 'skip_volume_too_low': 1, 'timeout_ack': 22, 'timeout_unknown': 34, 'zero_fill': 15}
+INVARIANTS seed=20261113 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 37, '1b': 98, '1c': 27, '1d': 126, '2': 114, '3': 135, '4': 114, '5': 600, '6': 31, '7': 405} coverage={'account_failures': 134, 'baseline_admission': 114, 'cooldown_active': 158, 'db_failures': 20, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 202, 'halted': 404, 'halting_retry': 1, 'intent_write_abort': 20, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 114, 'opened_pairs': 57, 'partial_fill': 27, 'position_failures': 141, 'position_read': 4069, 'query': 5555, 'query_failures': 638, 'recovery_obligation': 31, 'reduce': 135, 'restarts': 114, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 722, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'skip_baseline_not_flat': 43, 'skip_book_skew': 28, 'skip_book_stale': 73, 'skip_funding_diff': 68, 'skip_not_single_venue_outlier': 132, 'skip_size_too_small': 1, 'skip_too_few_venues': 22, 'skip_volume_too_low': 1, 'timeout_ack': 39, 'timeout_unknown': 37, 'zero_fill': 20}
+PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 524, "program_delayed_funding": 8, "program_episodes": 12, "program_explicit_rejection": 4, "program_external_random_trades": 72, "program_roundtrip": 8, "program_send_checks": 40, "query": 40, "reduce": 20, "restarts": 20}, "seed": 20261111}
+PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 524, "program_delayed_funding": 8, "program_episodes": 12, "program_explicit_rejection": 4, "program_external_random_trades": 72, "program_roundtrip": 8, "program_send_checks": 40, "query": 40, "reduce": 20, "restarts": 20}, "seed": 20261112}
+PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 524, "program_delayed_funding": 8, "program_episodes": 12, "program_explicit_rejection": 4, "program_external_random_trades": 72, "program_roundtrip": 8, "program_send_checks": 40, "query": 40, "reduce": 20, "restarts": 20}, "seed": 20261113}
+```
+
+#### Python 3.12.10 / `delivery-3.12-fill_sim.log`
+
+```text
+Ran 158 tests in 31.265s
+
+OK
+```
+
+SHA256：`0f07a17d2518ebde368bfbcd99abe396d7a75d38c3deaf095f977c91ca82d65b`。
+
+#### Python 3.10.20 / `delivery-3.10-crossex_exec.log`
+
+```text
+Ran 673 tests in 155.942s
+
+OK
+```
+
+SHA256：`bbef007d70a90bf37f6e22c1d0da77472fa2835c866d1cfa1cdcd81413d02f05`。
+
+```text
+INVARIANTS seed=20261111 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 35, '1b': 80, '1c': 25, '1d': 104, '2': 94, '3': 115, '4': 94, '5': 600, '6': 23, '7': 363} coverage={'account_failures': 151, 'baseline_admission': 94, 'cooldown_active': 167, 'db_failures': 22, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 162, 'halted': 362, 'halting_retry': 1, 'intent_write_abort': 21, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 94, 'opened_pairs': 47, 'partial_fill': 27, 'position_failures': 137, 'position_read': 4071, 'query': 378, 'query_failures': 53, 'recovery_obligation': 23, 'reduce': 115, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 722, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'skip_baseline_not_flat': 75, 'skip_book_skew': 28, 'skip_book_stale': 112, 'skip_funding_diff': 56, 'skip_not_single_venue_outlier': 129, 'skip_size_too_small': 1, 'skip_too_few_venues': 26, 'skip_volume_too_low': 1, 'timeout_ack': 28, 'timeout_unknown': 21, 'zero_fill': 20}
+INVARIANTS seed=20261112 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 27, '1b': 76, '1c': 13, '1d': 97, '2': 88, '3': 103, '4': 88, '5': 600, '6': 30, '7': 388} coverage={'account_failures': 116, 'baseline_admission': 88, 'cooldown_active': 24, 'db_failures': 16, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 152, 'halted': 387, 'halting_retry': 1, 'intent_write_abort': 15, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 88, 'opened_pairs': 44, 'partial_fill': 24, 'position_failures': 139, 'position_read': 4085, 'query': 394, 'query_failures': 25, 'recovery_obligation': 30, 'reduce': 103, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 722, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'skip_baseline_not_flat': 65, 'skip_book_skew': 20, 'skip_book_stale': 86, 'skip_funding_diff': 91, 'skip_not_single_venue_outlier': 153, 'skip_size_too_small': 1, 'skip_too_few_venues': 46, 'skip_volume_too_low': 1, 'timeout_ack': 22, 'timeout_unknown': 34, 'zero_fill': 15}
+INVARIANTS seed=20261113 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 37, '1b': 98, '1c': 27, '1d': 126, '2': 114, '3': 135, '4': 114, '5': 600, '6': 31, '7': 405} coverage={'account_failures': 134, 'baseline_admission': 114, 'cooldown_active': 158, 'db_failures': 20, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 202, 'halted': 404, 'halting_retry': 1, 'intent_write_abort': 20, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 114, 'opened_pairs': 57, 'partial_fill': 27, 'position_failures': 141, 'position_read': 4069, 'query': 474, 'query_failures': 25, 'recovery_obligation': 31, 'reduce': 135, 'restarts': 114, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 722, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'skip_baseline_not_flat': 43, 'skip_book_skew': 28, 'skip_book_stale': 73, 'skip_funding_diff': 68, 'skip_not_single_venue_outlier': 132, 'skip_size_too_small': 1, 'skip_too_few_venues': 22, 'skip_volume_too_low': 1, 'timeout_ack': 39, 'timeout_unknown': 37, 'zero_fill': 20}
+PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 524, "program_delayed_funding": 8, "program_episodes": 12, "program_explicit_rejection": 4, "program_external_random_trades": 72, "program_roundtrip": 8, "program_send_checks": 40, "query": 40, "reduce": 20, "restarts": 20}, "seed": 20261111}
+PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 524, "program_delayed_funding": 8, "program_episodes": 12, "program_explicit_rejection": 4, "program_external_random_trades": 72, "program_roundtrip": 8, "program_send_checks": 40, "query": 40, "reduce": 20, "restarts": 20}, "seed": 20261112}
+PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 524, "program_delayed_funding": 8, "program_episodes": 12, "program_explicit_rejection": 4, "program_external_random_trades": 72, "program_roundtrip": 8, "program_send_checks": 40, "query": 40, "reduce": 20, "restarts": 20}, "seed": 20261113}
+```
+
+#### Python 3.10.20 / `delivery-3.10-fill_sim.log`
+
+```text
+Ran 158 tests in 31.381s
+
+OK
+```
+
+SHA256：`7358f0bfa564e8fe28522571d47c3bf3fcb0c37b8bbe43e51e4270c419a15131`。
+
+### 交付边界、线上状态与下一步
+
+本轮完成 A/B 本地实现、17项新增测试、旧断言迁移及四条双版本全量验收。INVARIANTS 每版本每种子2712轮、2400随机轮、十项不变量各检查2712次；PROGRAM_INVARIANTS 每种子12场景，另加入72次外部随机交易。两个版本的全部三种子均通过，计数以各自原始行记录，不用固定 query 次数伪装并发调度一致。
+
+`limits.py`、`execution.py`、`transport.py`、`funding.py` 与390c6b6逐字相同；关键发送函数AST也一致，哈希在验收JSON。静态审阅确认只改变归属/风险证据和其读取范围，没有调整金额硬上限、授权或发送协议。原53个用例的102处旧断言变化和106处替换/新增调用均已逐项记录，另表覆盖了条件、循环和夹具变化。文档使用UTF-8，原交接及契约正文无删除。
+
+没有执行 WSL、SSH、服务器读取、线上 `/data/radar.db` 备份、部署、容器重启、真实账户鉴权或真实下单。线上运行版本与状态未独立核实；第二十轮任务书的线上信息仅作背景，不能作为本轮实测结果。没有服务器权限，因此不存在本轮线上备份文件或部署版本。
+
+残余边界：有程序合约时仍受远端资金费分页/权限/延迟和独立 UTC 日界证据约束；文档未声明 symbol 请求过滤的账本接口仍需读取该路由资金费类型页，再按合约排除。首次部署后的性能、完整性及持续影子状态尚未实测。整户保证金下界可能保守停开；同程序合约的混仓会保持原丢腿停开，历史混合资金费不能凭空拆分归属。后续不得以放宽十秒期限、删历史、修改证明或自动重基线代替排查。
+
+仓库新增产物仅为代码/测试、此交接、契约增补及验收JSON；日志放Temp，临时SQLite由fixture清理。本轮开始无其他WIP，保留了原有文档与历史诊断，没有删除、reset、clean或force push。下一任务先读第二十/二十一轮两节、任务书、验收JSON，安排独立终审；生产只读/影子验收须在获准访问的后续任务进行。其他主要功能模块请另开任务。
