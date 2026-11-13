@@ -196,6 +196,7 @@ def history_index(activity, cache=None):
     # hashing/normalization of byte-for-byte equal rows; it supplies NO rows to a
     # response and cannot hide a deletion, rewrite, late row or incomplete page.
     result = {}
+    replacement = {}
     remaining_bytes = 8*1024*1024
     remaining_rows = 25000
     for name,key in HISTORY_KEYS.items():
@@ -212,8 +213,12 @@ def history_index(activity, cache=None):
                 pending[row[key]] = (encoded, fingerprint)
                 remaining_rows -= 1
                 remaining_bytes -= len(encoded)
-        if cache is not None:
-            cache[name] = pending
+        replacement[name] = pending
+    # A later interface can fail after earlier ones consumed the full budget.
+    # Publish only a completely validated replacement, never a new/old mixture.
+    if cache is not None:
+        cache.clear()
+        cache.update(replacement)
     return result
 
 
