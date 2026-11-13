@@ -322,6 +322,18 @@ class BaselineTests(unittest.TestCase):
             self.baseline.record({}, ('BTC',), at=NOW)
         self.assertEqual(self.store.baseline_state(key), newer[0])
 
+    def test_full_scan_larger_than_budget_keeps_a_useful_warm_working_set(self):
+        self.baseline._cache = WindowCache(16*1024)
+        self.seed(('BTC',), 100)
+        self.baseline.record({}, ('BTC',))
+        keys = set(self.baseline._cache.entries)
+        self.assertTrue(keys)
+        with patch.object(self.store, 'baseline_samples', wraps=self.store.baseline_samples) as read:
+            self.baseline.record({}, ('BTC',))
+        full_reads = sum(call.args[1] == NOW-21600 for call in read.call_args_list)
+        self.assertLessEqual(full_reads, 15-len(keys))
+        self.assertEqual(set(self.baseline._cache.entries), keys)
+
 
 if __name__ == '__main__':
     unittest.main()

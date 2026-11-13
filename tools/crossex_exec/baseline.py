@@ -121,6 +121,7 @@ class Baseline:
         # Isolate them before quotes, samples AND empty-round status writes;
         # never normalize/rename them or abort valid pairs in the same round.
         bases = tuple(base for base in bases if supported_base(base))
+        self._cache.retain(bases)
         clean = {}
         for ex in BATCH_URLS:
             for base in bases:

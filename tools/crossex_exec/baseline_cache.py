@@ -6,7 +6,7 @@ from decimal import getcontext
 import threading
 
 
-CACHE_BYTES = 256*1024*1024
+CACHE_BYTES = 48*1024*1024
 CACHE_ENTRIES = 8192
 MAX_WINDOW_BYTES = 128*1024
 
@@ -41,6 +41,7 @@ class WindowCache:
         self.bytes = 0
         self.entries = OrderedDict()
         self.lock = threading.Lock()
+        self.admit_new = True
 
     def get(self, key):
         with self.lock:
@@ -48,6 +49,14 @@ class WindowCache:
             if value is not None:
                 self.entries.move_to_end(key)
             return value
+
+    def retain(self, bases):
+        bases = set(bases)
+        with self.lock:
+            for key in tuple(self.entries):
+                if key.split('|', 1)[0] not in bases:
+                    self.bytes -= self.entries.pop(key).charge
+                    self.admit_new = True
 
     def put(self, key, since, until, revision, rows, stats):
         # SQLite REAL timestamps are already doubles. Bps retain their exact
@@ -59,7 +68,11 @@ class WindowCache:
                 old = self.entries.pop(key, None)
                 if old is not None:
                     self.bytes -= old.charge
+                    self.admit_new = True
             return
+        with self.lock:
+            if key not in self.entries and not self.admit_new:
+                return
         if 2+9*len(rows)+sum(len(r[1]) for r in rows) > MAX_WINDOW_BYTES:
             return
         if (any(not r[1].isascii() or '\n' in r[1] for r in rows)
@@ -75,6 +88,14 @@ class WindowCache:
             return
         entry = Window(since, until, revision, payload, dict(stats), arithmetic_context(), charge)
         with self.lock:
+            # A scan larger than the budget must not evict every useful entry on
+            # each round. Keep the admitted working set; misses use exact DB
+            # windows. Removed/empty windows reopen admission. Existing entries
+            # may evict an older one only when their own payload grows.
+            if key not in self.entries and (not self.admit_new or self.bytes+charge > self.budget
+                                           or len(self.entries) >= CACHE_ENTRIES):
+                self.admit_new = False
+                return
             old = self.entries.pop(key, None)
             if old is not None:
                 self.bytes -= old.charge
