@@ -347,12 +347,12 @@ class FXAccountingTests(ExternalFixture,unittest.TestCase):
         self.assertTrue(self.reconcile()['verified'])
         self.store.save_order(dict(intent('own',ex='bitget'),state='TERMINAL',filled='0',fee='0',accounting_pending=False))
         self.activity_complete=False
-        old_anchor=copy.deepcopy(self.store.meta('external_equity_anchor'))
+        old_anchor=copy.deepcopy(self.store.meta('program_funding_anchor'))
         old_day=day(self.now)
         self.store.set_meta('daily_loss_day',old_day); self.engine.stops.add('daily_loss')
         self.now+=86400; self.catalog(); self.fx_prices=('1',)
         self.assertFalse(self.reconcile()['verified'])
-        self.assertEqual(self.store.meta('external_equity_anchor'),old_anchor)
+        self.assertEqual(self.store.meta('program_funding_anchor'),old_anchor)
         self.assertEqual(self.store.meta('daily_loss_day'),old_day)
         self.assertIn('daily_loss',self.store.meta('stop_locks'))
 

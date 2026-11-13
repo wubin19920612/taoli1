@@ -45,7 +45,7 @@ class SnapshotProofTests(FXFixture,unittest.TestCase):
     def test_old_coordinator_cannot_publish_after_new_account_revokes_proof(self):
         self.rows=[position(upnl='1')]; self.equity='1001'
         self.assertTrue(self.reconcile()['verified'])
-        original_anchor=self.store.meta('external_equity_anchor')
+        original_anchor=self.store.meta('program_funding_anchor')
         self.engine.workers=[SimpleNamespace(close=lambda:None)]
         entered,resume=threading.Event(),threading.Event()
         from tools.crossex_exec import program_accounting as accounting
@@ -67,7 +67,7 @@ class SnapshotProofTests(FXFixture,unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertFalse(self.store.meta('external_income')['verified'])
         self.assertFalse(self.engine.can_open())
-        self.assertEqual(self.store.meta('external_equity_anchor'),original_anchor)
+        self.assertEqual(self.store.meta('program_funding_anchor'),original_anchor)
         with self.assertRaises(ValueError): self.engine.check_order(intent(ex='bitget'))
 
     def test_same_timestamp_publications_get_distinct_persistent_versions_and_final_gate_checks(self):
@@ -124,14 +124,14 @@ class HistoryTests(ExternalFixture,unittest.TestCase):
         self.assertTrue(self.store.meta('external_income')['verified'])
 
     def test_post_anchor_verified_funding_disappearance_is_not_zero_income(self):
-        anchor=self.store.meta('external_equity_anchor')
+        anchor=self.store.meta('program_funding_anchor')
         self.funding_pair()
         self.book=[]
         self.reconcile()
         self.assertFalse(self.store.meta('external_income')['verified'])
         self.assertFalse(self.engine.can_open())
         self.assertEqual(dec(self.store.meta('account_loss_current')['daily']),-5)
-        self.assertEqual(self.store.meta('external_equity_anchor'),anchor)
+        self.assertEqual(self.store.meta('program_funding_anchor'),anchor)
 
     def test_post_anchor_hash_rewrite_rejected_after_file_database_reopen(self):
         self.funding_pair()
@@ -162,15 +162,15 @@ class HistoryTests(ExternalFixture,unittest.TestCase):
 
     def test_rebaseline_cannot_erase_missing_verified_history(self):
         self.funding_pair()
-        anchor=self.store.meta('external_equity_anchor')
+        anchor=self.store.meta('program_funding_anchor')
         self.book=[]
         with self.assertRaisesRegex(ValueError,'program_income_unverifiable'):
             self.anchor()
-        self.assertEqual(self.store.meta('external_equity_anchor'),anchor)
+        self.assertEqual(self.store.meta('program_funding_anchor'),anchor)
 
     def test_upgrade_seeds_post_anchor_ids_from_last_verified_legacy_activity(self):
         self.funding_pair()
-        self.store.db.execute("DELETE FROM meta WHERE key='external_verified_history'")
+        self.store.db.execute("DELETE FROM meta WHERE key='program_verified_history'")
         self.book=[]
         self.reconcile()
         self.assertFalse(self.store.meta('external_income')['verified'])
@@ -349,7 +349,8 @@ class ShutdownAuditTests(FXFixture,unittest.TestCase):
             self.assertEqual(finish_shutdown(self.engine),0)
 
     def test_both_admin_audits_include_old_attribution_baselines_and_rollback(self):
-        keys=('external_equity_anchor','program_daily_upnl','program_last_upnl')
+        keys=('external_equity_anchor','program_funding_anchor','program_funding_checkpoint',
+              'program_verified_history','program_funding_baseline','program_daily_upnl','program_last_upnl')
         for release in (False,True):
             old={k:self.store.meta(k) for k in keys}
             if release:
