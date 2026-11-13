@@ -5,6 +5,7 @@ from unittest.mock import patch
 from tools.fill_sim.core import dec
 from tools.crossex_exec.transport import APIError
 from tools.crossex_exec.ownership import journal_positions
+from tools.crossex_exec.equity import EquityAdmin
 from round26_fixtures import world, halt, release
 from test_exec import setUpModule, tearDownModule
 
@@ -92,6 +93,46 @@ class HaltRecoveryTests(unittest.TestCase):
         w.engine.tick()
         self.assertNotIn('flatten_snapshot_unavailable', w.engine.stops.reasons)
         self.assertEqual(w.store.meta('state'), 'HALTED')
+        release(w)
+
+    def test_halt_final_proof_recovers_confirmed_order_locks_before_process_exit(self):
+        for reason in ('unknown_order', 'unknown_close', 'accounting_pending', 'fills_pending',
+                       'entry_accounting_unknown', 'negative_local_position', 'close_incomplete'):
+            with self.subTest(reason=reason):
+                w = world(self)
+                w.engine.alert(reason)  # delayed/failed observation, venue evidence is now available
+                halt(w)
+                self.assertEqual(w.store.meta('state'), 'HALTED')
+                self.assertNotIn(reason, w.engine.stops.reasons)
+                release(w)
+
+    def test_persisted_halted_flatten_lock_requires_fresh_proof_and_can_be_released_offline(self):
+        w = world(self, opened=False)
+        w.engine.alert('flatten_snapshot_unavailable')
+        w.store.set_meta('state', 'HALTED')
+        w.store.set_meta('halt_reason', 'total_loss')
+        admin = EquityAdmin(w.store, w.accounts, clock=lambda:w.now)
+        with patch.object(w.accounts, 'snapshot', side_effect=APIError('timeout')):
+            with self.assertRaisesRegex(ValueError, 'account_read_unavailable'):
+                admin.apply(confirm='total_loss', reason='recovered_snapshot', source='cli', release_halt=True)
+        self.assertIn('flatten_snapshot_unavailable', w.store.meta('stop_locks'))
+        admin.apply(confirm='total_loss', reason='recovered_snapshot', source='cli', release_halt=True)
+        self.assertNotIn('flatten_snapshot_unavailable', w.store.meta('stop_locks'))
+        self.assertEqual(w.store.meta('state'), 'RUNNING')
+
+    def test_old_position_snapshot_cannot_certify_a_newer_close(self):
+        w = world(self)
+        old = dict(positions={}, captured_at=w.now-1)
+        w.engine.close_pair(w.store.pairs(active=True)[0], 'fresh_close')
+        w.engine.alert('flatten_snapshot_unavailable')
+        with patch.object(w.accounts, 'position_snapshot', return_value=old):
+            halt(w)
+        self.assertEqual(w.store.meta('state'), 'HALTING')
+        self.assertIn('flatten_snapshot_unavailable', w.engine.stops.reasons)
+        w.now += 3
+        w.engine.tick()
+        self.assertEqual(w.store.meta('state'), 'HALTED')
+        self.assertNotIn('flatten_snapshot_unavailable', w.engine.stops.reasons)
         release(w)
 
 
