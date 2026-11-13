@@ -164,6 +164,24 @@ class AdverseFundingTests(unittest.TestCase):
         self.recover_samples(w)
         self.assertEqual(len(self.intervals(w)), 1)
         self.assertEqual(self.intervals(w)[-1]['to_ms'], end)
+        self.assert_income(w, '-1', can_open=True)
+        # A flat program can work elsewhere; the same raw contract still has
+        # outside inventory, so its existing admission guard must reject entry.
+        entry = next(w.store.iter_orders(reduce_only=False))
+        with self.assertRaisesRegex(ValueError, 'external_contract_forbidden'):
+            w.engine.external.check_order(dict(entry, cid='forbidden-reopen', state='INTENT', filled='0'))
+        venue.settle('90'); venue.settle('-90'); w.advance()
+        self.assert_income(w, '-1', can_open=True)
+        w.restart(); w.advance()
+        self.assert_income(w, '-1', can_open=True)
+        # The external lifecycle ends. A later program lifecycle must regain
+        # full funding attribution, including its opening millisecond.
+        venue.history.append(dict(venue.live_position, closed=int(w.now*1000)))
+        venue.live_position = None; venue.quantity = dec(0)
+        w.advance(3601); w.open()
+        self.assertTrue(all(v.quantity > 0 for v in w.venues))
+        venue.settle('-2'); w.advance()
+        self.assert_income(w, '-3', can_open=True)
 
     def test_round22_23_withdrawal_repro_keeps_daily_loss_under_more_conservative_rule(self):
         for leg in (0, 1):
