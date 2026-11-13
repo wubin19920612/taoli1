@@ -2662,3 +2662,114 @@ OK
 两个版本均完整通过 `20261111/20261112/20261113` 的 INVARIANTS 和 PROGRAM_INVARIANTS。每个 INVARIANTS 种子 2712 轮，其中随机 2400 轮，十项不变量各检查 2712 次；每个 PROGRAM_INVARIANTS 种子 12 个程序生命周期。原始模拟器行、完整汇总正文、命令、解释器、日志 SHA256、红绿灯证据和静态比对均保存在 [crossex-exec-r23-validation-2026-11-13.json](crossex-exec-r23-validation-2026-11-13.json)。收集器首次仅匹配行首，遗漏了带 unittest verbose 前缀的模拟器行；随后从原始日志按标记完整提取并核对三个种子，未改写日志或重跑测试，收集器更正记录也保留在 JSON。
 
 本节与验收 JSON 单独作交付提交，普通推送目标为 `origin` 的 `codex/crossex-exec-r8`，推送回执及最终文档提交号以本任务最终报告为准。代码提交后仅新增文档和验收证据；开始时没有其他 WIP，既有任务书、全部旧测试和历史交接均保留，无 reset、clean、覆盖未知归属文件或 force push。本轮无待交付的未跟踪产物；临时原始日志留在上述 Temp 目录。
+
+## 第二十四轮（2026-11-13，混仓资金费保守结案与自动恢复）
+
+### 范围、基线与小步提交
+
+按 [第二十四轮任务书](crossex-exec-round24-2026-11-13.md) 执行。模块仅为真钱执行器的混仓资金费归属及其恢复链路。本节新规则替代第二十二、二十三轮的比例、已认证 ID 豁免和闭合区间永久拒证规则；原始账单证明、只减自身确认成交、不穿零、整户保证金规则继续有效。
+
+工作树 `C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec-r8`；分支 `codex/crossex-exec-r8`；开始 HEAD=`eae2760f346e27f63d2d370691a29752b345920a`，工作区干净，远端跟踪提交为 `fa060a8`。既有任务书提交 `eae2760` 保留并随本轮推送。最终代码/测试提交为 `d3dfd1a42bbdc5bf267f5b60d2e1ef4c2e30b968`，之后仅追加文档和验收证据。
+
+| 提交 | 内容 |
+|---|---|
+| `eae0176` | 测试先行：起点同毫秒、自己的 UNKNOWN、缺字段旧区间、最大可能成交量、50 次外仓变化等 11 项 |
+| `e6b1a67` | 闭区间逐笔负数全额、正数零；排除自身未确认开仓；旧区间迁移及自动闭合 |
+| `4c0d4e3` | 迁移第二十二、二十三轮过时的比例和永久拒证预期，14 项旧测试全部保留 |
+| `b3c85a9` | 补充乱序成交、较早旧区间缺结束字段、持久化、读期间订单变化等 6 项；两处边界先红灯 |
+| `ff9da19` | 已确认减仓扣减未决开仓可解释数量；干净采样闭合所有旧未决区间 |
+| `7a62333` | 补充真实链路红灯：程序已平、用户仍持仓时持续 `program_position_mismatch`；同时保护后续重新开仓资金费 |
+| `d3dfd1a` | 程序平仓结案后恢复认证及对账；排除后续纯外仓资金费，保留同合约防混仓开仓检查 |
+
+首次 Git 提交因共享主仓库 worktree 索引不在当前可写目录而被沙箱拒绝，随后按用户已有提交授权取得该操作权限并正常提交；没有修改仓库权限、重置工作区或强推。
+
+### 最终规则、持久状态与代码入口
+
+`program_funding.py` 的 `observe_funding_ownership` 持久化 version 3 状态。混仓判定按原始 route/symbol/side，比对远端数量和程序最大可能净数量；后者按 pair/leg 生命周期累加已确认开减仓，加 SENT/ACK/UNKNOWN 开仓尚未确认的余量。已确认减仓即使先于开仓确认返回，也会消费同生命周期的最大可能开仓量。INTENT、减仓委托和反向持仓不增加这项解释额度；该上界不用于减仓授权。
+
+可疑区间从最后干净采样毫秒起，到下一次干净采样毫秒止，两个端点都包括。`allocate_funding` 对区间内每笔负资金费全额计入、正资金费计零；不再使用比例、`certain` 或 `prior_ids` 豁免。重叠区间不会重复计费。未闭合区间仍拒绝认证，干净采样后自动结案；程序确认平仓且无未决订单时，即使用户余仓未撤也闭合。过期采样或读取期间订单变化不能关闭新区间。
+
+旧区间缺 `first_mixed_ms`、起止证据等字段时，起点扩大到该程序原始合约首个有效订单时刻，按相同规则结案；较早而非末尾的未闭合旧记录也会恢复。不重建比例，不删除资金费历史，不改日基线、不手动清锁。区间及策略保存于 `program_funding_ownership`，最终认证金额沿用 `external_income` 等原事务持久化；原始完整账单、独立累计、UTC 日界与 ownership revision 并发检查保持。
+
+补充真实恢复链路：`funding_flat_contracts` 只在已持久化程序平仓结案、当前仍无程序确认净仓且订单均已结算时，允许对账忽略其剩余外仓。`ProgramAccounting._evaluate` 和 `Engine.reconcile_positions` 消费这项证据；原始仓位、合约归属和冲突告警保留，原 `ProgramOwnership.check_order` 仍禁止在用户占用的同一原始合约开仓。程序平仓采样之后、下一次程序开仓之前的纯外仓资金费不计程序；下一程序订单所在毫秒恢复正常归属。测试覆盖实际重新开仓，而非仅检查状态字段。
+
+认证标签为 `adverse_only_mixed_interval`，原 `funding_attribution_estimated` 兼容字段保留，用来表示保守归属并非精确历史重建；闭合后的认证不再依赖比例可信度。任务书旧 `−22` 复现在两路由均变为更保守的 `−30`（`−9−21`），仍触发日亏。确认超时补齐并全部平仓后 `−1` 正常认证、`can_open=True`，重启后亦然，rebaseline 可执行但恢复不依赖它；从未触碰程序合约的 50 次外仓变化始终 `can_open=True`。
+
+### 旧测试删改清单与原因
+
+没有删除测试或降低其他风险阈值。原第二十二轮 5 项、第二十三轮 9 项全部保留，其中 13 项方法更新新规则预期（6 项同时更名）；下表用原方法名便于查找历史差异。`test_entry_same_millisecond_as_first_mixed_sample_keeps_full_loss` 原样保留。
+
+| 文件 / 原测试方法 | 修改及原因 |
+|---|---|
+| round22 / `test_minus_90_mixed_funding_stays_minus_10_after_withdrawal_delayed_history_and_restart` | `−10→−90`，随后 `−31→−111`；全部费用计入。新增确认自动平仓断言及随后刷新，因为新金额触发原有累计亏损退出，不能沿用平仓前证明 |
+| round22 / `test_uncertain_ratio_allocates_each_fee_adversely_before_netting` | `+90/3−90/2=−15` 改为 `0−90=−90`，认证标签改为新规则；保留逐笔处理和估算标记断言 |
+| round22 / `test_allocated_funding_still_requires_original_full_history_and_counters` | 初值 `−30→−90`；篡改账单后拒证、检查点不变及停开断言均原样保留 |
+| round22 / `test_new_charge_at_clean_boundary_cannot_be_diluted_by_old_mixed_ratio` | 干净结束同毫秒由永久拒证改为全额认证 `−111`；日亏停开仍在，新增实际累计亏损平仓断言 |
+| round22 / `test_unknown_entry_during_mixed_interval_remains_unverifiable_after_query` | 查询补齐并撤出外仓后认证 `−90`；停开原因应为实际日亏，不应为永远不可信的旧比例 |
+| round23 / `test_withdrawal_gap_charges_full_loss_and_keeps_daily_stop` | `−22→−30`，首笔 `−9` 不再按 1/9 折减；原日亏锁及重复刷新断言保留 |
+| round23 / `test_withdrawal_gap_allocates_income_and_expense_before_netting` | `−21→−39`，`−9` 与 `−30` 全计，`+90` 计零 |
+| round23 / `test_entry_gap_cannot_dilute_loss_paid_before_external_entry` | `−21→−31`，开始间隔 `+90` 不再计 `+10` |
+| round23 / `test_gap_evidence_survives_delayed_history_and_sqlite_restart` | `−22→−30`；延迟流水期间拒证、停开、文件 SQLite 重启断言保留 |
+| round23 / `test_withdrawal_same_millisecond_as_last_mixed_sample_keeps_full_loss` | `−22→−30`，包含首笔完整费用且保留同毫秒覆盖 |
+| round23 / `test_legacy_interval_without_first_mixed_sample_stays_stopped` | 改为旧格式迁移后认证 `−21`；实际日亏锁仍保留，取消过时的永久归属拒证 |
+| round23 / `test_stable_mixed_interior_keeps_original_adverse_ratios` | 稳定混仓内段同样适用新规则，`−90/9+45/9=−5` 改为 `−90` |
+| round23 / `test_unprovable_gap_ratio_cannot_certify_zero` | 已闭合区间不再依赖比例，负 `−21` 全计、正 `90` 计零；新增测试另保留未闭合区间拒证覆盖 |
+
+与基线比较，其余 99 个既有测试/夹具文件内容完全相同。新增 `test_round24_funding.py` 共 17 项。初批 11 项测试实际失败 31 个子用例，修复后全过；后续 17 项曾分别复现两处边界失败和一次真实平仓恢复失败，均先提交测试再修复。专项第二十一至二十四轮 55 项通过；最终以以下双版本全量为交付证据。中途旧测试 `−111` 首次出现 3 个证明失效错误，根因是原累计亏损规则自动平仓产生新成交，已通过保留原阈值、追加实际平仓断言和刷新后的认证解决。
+
+### 双版本全量原始汇总
+
+固定代码提交 `d3dfd1a42bbdc5bf267f5b60d2e1ef4c2e30b968`，两套解释器分别完整执行以下未筛选 discover 命令；四次退出码均为 0，无 skip：
+
+```text
+python -m unittest discover -s tools/crossex_exec/tests -v
+python -m unittest discover -s tools/fill_sim/tests -v
+```
+
+Python 3.12.10：`C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe`。
+
+`delivery-3.12-crossex_exec.log` 原始汇总：
+
+```text
+Ran 711 tests in 155.452s
+
+OK
+```
+
+`delivery-3.12-fill_sim.log` 原始汇总：
+
+```text
+Ran 158 tests in 31.246s
+
+OK
+```
+
+Python 3.10.20：沿用指定的 `C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe`。
+
+`delivery-3.10-crossex_exec.log` 原始汇总：
+
+```text
+Ran 711 tests in 170.243s
+
+OK
+```
+
+`delivery-3.10-fill_sim.log` 原始汇总：
+
+```text
+Ran 158 tests in 32.097s
+
+OK
+```
+
+两版本均完整通过 `20261111/20261112/20261113` 的 INVARIANTS 和 PROGRAM_INVARIANTS。每个 INVARIANTS 种子 2712 轮，其中随机 2400 轮，十项不变量各检查 2712 次；每个 PROGRAM_INVARIANTS 种子 12 个程序生命周期。全部原始模拟器行（含 unittest verbose 前缀）、原始汇总、命令、解释器、退出码、日志 SHA256、红绿灯记录和静态审计均保存在 [crossex-exec-r24-validation-2026-11-13.json](crossex-exec-r24-validation-2026-11-13.json)，未重算或截短模拟器字段。
+
+### 范围审计、线上状态与接续
+
+按 AST 比较，Engine 仅修改 `reconcile_positions`；其他方法全部不变，包括下单准入、生成、查询、取消、发送和恢复减仓路径。`limits.py`、`ownership.py`、`execution.py`、`transport.py`、`adapters.py`、`funding.py`、`program_risk.py`、`accounts.py` 内容未变，哈希见验收 JSON。本轮为自审，未委派代理，不称为独立终审。
+
+全程只用 Windows 离线夹具和本地回环接口；没有运行 WSL、SSH，没有访问生产服务器、真实账户或真实交易接口，没有备份线上数据库、部署或重启容器；线上版本未核实。原始日志保留在 `C:\Users\wubin\AppData\Local\Temp\crossex-r24-6rnuwxte`，测试 SQLite 临时文件由 fixture 清理。首次 PowerShell 输出转写日志另保留在 `C:\Users\wubin\AppData\Local\Temp\crossex-r24-validation`，最终红绿灯与全量证据均使用 subprocess 直接保存的原始日志。
+
+剩余边界：采样之间从未观察到的混仓无法凭空重建；原始流水缺失、身份不明、确认未补齐、真实日亏或累计亏损等原风险保护仍有效。本轮移除的是混仓比例及旧区间字段造成的永久拒证，不自动清除真实亏损锁。外仓仍占用的同一原始合约不可重新开仓，其他合约的恢复不再受已平仓的旧混仓区间牵连。
+
+本节和验收 JSON 随独立文档提交交付，普通推送目标固定为 `origin` 的 `codex/crossex-exec-r8`；最终文档提交号和推送回执见本任务最终报告。开始时无其他 WIP，未删除未知归属文件、未 reset/clean、未 force push；待提交文件只包含本任务交接与证据。下一任务先读本节、第二十四轮任务书及验收 JSON；独立终审、服务器/影子验收和其他主要模块请另开任务，并另行明确服务器访问授权。

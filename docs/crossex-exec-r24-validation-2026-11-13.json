@@ -1,0 +1,490 @@
+{
+  "task": "crossex-exec round 24",
+  "date": "2026-11-13",
+  "scope": "Windows offline only; no WSL or production server access",
+  "base_commit": "eae2760f346e27f63d2d370691a29752b345920a",
+  "validated_code_commit": "d3dfd1a42bbdc5bf267f5b60d2e1ef4c2e30b968",
+  "branch": "codex/crossex-exec-r8",
+  "log_directory": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r24-6rnuwxte",
+  "runs": [
+    {
+      "command": [
+        "C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/crossex_exec/tests",
+        "-v"
+      ],
+      "version": "Python 3.12.10",
+      "started_at": "2026-11-13T06:19:28.187432+00:00",
+      "completed_at": "2026-11-13T06:22:04.966435+00:00",
+      "exit_code": 0,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r24-6rnuwxte\\delivery-3.12-crossex_exec.log",
+      "sha256": "ff7bcc56ad1615ecb4edca82325b553d4de59f6c841d1a933a13242d89b6077d",
+      "summary": [
+        "Ran 711 tests in 155.452s",
+        "OK"
+      ],
+      "raw_invariant_lines": [
+        "test_fault_invariants_seed_20261111_2448_rounds (test_invariants.InvariantSimulationTests.test_fault_invariants_seed_20261111_2448_rounds) ... INVARIANTS seed=20261111 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 35, '1b': 80, '1c': 25, '1d': 104, '2': 94, '3': 115, '4': 94, '5': 600, '6': 23, '7': 363} coverage={'account_failures': 151, 'baseline_admission': 94, 'cooldown_active': 167, 'db_failures': 22, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 162, 'halted': 362, 'halting_retry': 1, 'intent_write_abort': 21, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 94, 'opened_pairs': 47, 'partial_fill': 27, 'position_failures': 137, 'position_read': 4071, 'query': 4199, 'query_failures': 1370, 'recovery_obligation': 23, 'reduce': 115, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 722, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'skip_baseline_not_flat': 75, 'skip_book_skew': 28, 'skip_book_stale': 112, 'skip_funding_diff': 56, 'skip_not_single_venue_outlier': 129, 'skip_size_too_small': 1, 'skip_too_few_venues': 26, 'skip_volume_too_low': 1, 'timeout_ack': 28, 'timeout_unknown': 21, 'zero_fill': 20}",
+        "test_fault_invariants_seed_20261112_2448_rounds (test_invariants.InvariantSimulationTests.test_fault_invariants_seed_20261112_2448_rounds) ... INVARIANTS seed=20261112 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 27, '1b': 76, '1c': 13, '1d': 97, '2': 88, '3': 103, '4': 88, '5': 600, '6': 30, '7': 388} coverage={'account_failures': 116, 'baseline_admission': 88, 'cooldown_active': 24, 'db_failures': 16, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 152, 'halted': 387, 'halting_retry': 1, 'intent_write_abort': 15, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 88, 'opened_pairs': 44, 'partial_fill': 24, 'position_failures': 139, 'position_read': 4085, 'query': 4940, 'query_failures': 643, 'recovery_obligation': 30, 'reduce': 103, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 722, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'skip_baseline_not_flat': 65, 'skip_book_skew': 20, 'skip_book_stale': 86, 'skip_funding_diff': 91, 'skip_not_single_venue_outlier': 153, 'skip_size_too_small': 1, 'skip_too_few_venues': 46, 'skip_volume_too_low': 1, 'timeout_ack': 22, 'timeout_unknown': 34, 'zero_fill': 15}",
+        "test_fault_invariants_seed_20261113_2448_rounds (test_invariants.InvariantSimulationTests.test_fault_invariants_seed_20261113_2448_rounds) ... INVARIANTS seed=20261113 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 37, '1b': 98, '1c': 27, '1d': 126, '2': 114, '3': 135, '4': 114, '5': 600, '6': 31, '7': 405} coverage={'account_failures': 134, 'baseline_admission': 114, 'cooldown_active': 158, 'db_failures': 20, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 202, 'halted': 404, 'halting_retry': 1, 'intent_write_abort': 20, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 114, 'opened_pairs': 57, 'partial_fill': 27, 'position_failures': 141, 'position_read': 4069, 'query': 5638, 'query_failures': 627, 'recovery_obligation': 31, 'reduce': 135, 'restarts': 114, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 722, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'skip_baseline_not_flat': 43, 'skip_book_skew': 28, 'skip_book_stale': 73, 'skip_funding_diff': 68, 'skip_not_single_venue_outlier': 132, 'skip_size_too_small': 1, 'skip_too_few_venues': 22, 'skip_volume_too_low': 1, 'timeout_ack': 39, 'timeout_unknown': 37, 'zero_fill': 20}",
+        "test_default_program_three_seeds (test_round15_program.ProgramSimulationTests.test_default_program_three_seeds) ... PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261111}",
+        "PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261112}",
+        "PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261113}"
+      ],
+      "python": "3.12",
+      "suite": "crossex_exec",
+      "validated_code_commit": "d3dfd1a42bbdc5bf267f5b60d2e1ef4c2e30b968",
+      "skipped": 0,
+      "raw_summary": "\n----------------------------------------------------------------------\nRan 711 tests in 155.452s\n\nOK",
+      "all_three_seeds_passed": true
+    },
+    {
+      "command": [
+        "C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/fill_sim/tests",
+        "-v"
+      ],
+      "version": "Python 3.12.10",
+      "started_at": "2026-11-13T06:19:34.245823+00:00",
+      "completed_at": "2026-11-13T06:20:06.471057+00:00",
+      "exit_code": 0,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r24-6rnuwxte\\delivery-3.12-fill_sim.log",
+      "sha256": "09dc5a87d1ba8abb555010d5b21f570de39f0e73ce159316910c4b5313873e28",
+      "summary": [
+        "Ran 158 tests in 31.246s",
+        "OK"
+      ],
+      "raw_invariant_lines": [],
+      "python": "3.12",
+      "suite": "fill_sim",
+      "validated_code_commit": "d3dfd1a42bbdc5bf267f5b60d2e1ef4c2e30b968",
+      "skipped": 0,
+      "raw_summary": "DNS_FOUR_WORKERS abandoned=4 sending=0 queued_http=PASS\nRUNTIME_STOP reason=dns_abandoned_limit code=78 seconds=6.625\nRUNTIME_STOP reason=public_workers_stalled code=78 seconds=0.609\nGUARD_EXIT code=78 seconds_after_trigger=0.031\nREPORT_RSS events=6000 fills=72000 positions=72000 peak_delta_mib=1.797"
+    },
+    {
+      "command": [
+        "C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/crossex_exec/tests",
+        "-v"
+      ],
+      "version": "Python 3.10.20",
+      "started_at": "2026-11-13T06:19:41.204015+00:00",
+      "completed_at": "2026-11-13T06:22:34.281706+00:00",
+      "exit_code": 0,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r24-6rnuwxte\\delivery-3.10-crossex_exec.log",
+      "sha256": "fd4f6b1ae78e12af867c20f59bc8991d2c8c21eec2b2dd80b5847ed717696f9e",
+      "summary": [
+        "Ran 711 tests in 170.243s",
+        "OK"
+      ],
+      "raw_invariant_lines": [
+        "test_fault_invariants_seed_20261111_2448_rounds (test_invariants.InvariantSimulationTests) ... INVARIANTS seed=20261111 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 35, '1b': 80, '1c': 25, '1d': 104, '2': 94, '3': 115, '4': 94, '5': 600, '6': 23, '7': 363} coverage={'account_failures': 151, 'baseline_admission': 94, 'cooldown_active': 167, 'db_failures': 22, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 162, 'halted': 362, 'halting_retry': 1, 'intent_write_abort': 21, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 94, 'opened_pairs': 47, 'partial_fill': 27, 'position_failures': 137, 'position_read': 4071, 'query': 382, 'query_failures': 56, 'recovery_obligation': 23, 'reduce': 115, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 722, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'skip_baseline_not_flat': 75, 'skip_book_skew': 28, 'skip_book_stale': 112, 'skip_funding_diff': 56, 'skip_not_single_venue_outlier': 129, 'skip_size_too_small': 1, 'skip_too_few_venues': 26, 'skip_volume_too_low': 1, 'timeout_ack': 28, 'timeout_unknown': 21, 'zero_fill': 20}",
+        "test_fault_invariants_seed_20261112_2448_rounds (test_invariants.InvariantSimulationTests) ... INVARIANTS seed=20261112 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 27, '1b': 76, '1c': 13, '1d': 97, '2': 88, '3': 103, '4': 88, '5': 600, '6': 30, '7': 388} coverage={'account_failures': 116, 'baseline_admission': 88, 'cooldown_active': 24, 'db_failures': 16, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 152, 'halted': 387, 'halting_retry': 1, 'intent_write_abort': 15, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 88, 'opened_pairs': 44, 'partial_fill': 24, 'position_failures': 139, 'position_read': 4085, 'query': 393, 'query_failures': 26, 'recovery_obligation': 30, 'reduce': 103, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 722, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'skip_baseline_not_flat': 65, 'skip_book_skew': 20, 'skip_book_stale': 86, 'skip_funding_diff': 91, 'skip_not_single_venue_outlier': 153, 'skip_size_too_small': 1, 'skip_too_few_venues': 46, 'skip_volume_too_low': 1, 'timeout_ack': 22, 'timeout_unknown': 34, 'zero_fill': 15}",
+        "test_fault_invariants_seed_20261113_2448_rounds (test_invariants.InvariantSimulationTests) ... INVARIANTS seed=20261113 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 37, '1b': 98, '1c': 27, '1d': 126, '2': 114, '3': 135, '4': 114, '5': 600, '6': 31, '7': 405} coverage={'account_failures': 134, 'baseline_admission': 114, 'cooldown_active': 158, 'db_failures': 20, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 202, 'halted': 404, 'halting_retry': 1, 'intent_write_abort': 20, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 114, 'opened_pairs': 57, 'partial_fill': 27, 'position_failures': 141, 'position_read': 4069, 'query': 481, 'query_failures': 25, 'recovery_obligation': 31, 'reduce': 135, 'restarts': 114, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 722, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'skip_baseline_not_flat': 43, 'skip_book_skew': 28, 'skip_book_stale': 73, 'skip_funding_diff': 68, 'skip_not_single_venue_outlier': 132, 'skip_size_too_small': 1, 'skip_too_few_venues': 22, 'skip_volume_too_low': 1, 'timeout_ack': 39, 'timeout_unknown': 37, 'zero_fill': 20}",
+        "test_default_program_three_seeds (test_round15_program.ProgramSimulationTests) ... PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261111}",
+        "PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261112}",
+        "PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261113}"
+      ],
+      "python": "3.10",
+      "suite": "crossex_exec",
+      "validated_code_commit": "d3dfd1a42bbdc5bf267f5b60d2e1ef4c2e30b968",
+      "skipped": 0,
+      "raw_summary": "\n----------------------------------------------------------------------\nRan 711 tests in 170.243s\n\nOK",
+      "all_three_seeds_passed": true
+    },
+    {
+      "command": [
+        "C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/fill_sim/tests",
+        "-v"
+      ],
+      "version": "Python 3.10.20",
+      "started_at": "2026-11-13T06:19:48.286395+00:00",
+      "completed_at": "2026-11-13T06:20:21.401421+00:00",
+      "exit_code": 0,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r24-6rnuwxte\\delivery-3.10-fill_sim.log",
+      "sha256": "759d3b27d9446580f1961b135a3f712fde7a81cd5191f537b58990e8f51c9a0d",
+      "summary": [
+        "Ran 158 tests in 32.097s",
+        "OK"
+      ],
+      "raw_invariant_lines": [],
+      "python": "3.10",
+      "suite": "fill_sim",
+      "validated_code_commit": "d3dfd1a42bbdc5bf267f5b60d2e1ef4c2e30b968",
+      "skipped": 0,
+      "raw_summary": "DNS_FOUR_WORKERS abandoned=4 sending=0 queued_http=PASS\nRUNTIME_STOP reason=dns_abandoned_limit code=78 seconds=6.860\nRUNTIME_STOP reason=public_workers_stalled code=78 seconds=0.859\nGUARD_EXIT code=78 seconds_after_trigger=0.015\nREPORT_RSS events=6000 fills=72000 positions=72000 peak_delta_mib=1.727"
+    }
+  ],
+  "test_first_evidence": [
+    {
+      "command": [
+        "C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/crossex_exec/tests",
+        "-p",
+        "test_round24_funding.py",
+        "-v"
+      ],
+      "version": "Python 3.12.10",
+      "started_at": "2026-11-13T06:05:30.367232+00:00",
+      "completed_at": "2026-11-13T06:05:35.557519+00:00",
+      "exit_code": 1,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r24-6rnuwxte\\red-initial.log",
+      "sha256": "619374a7d7fa4388423a28b6ae7757c7e5dd911a916062232a83c38e5a988294",
+      "summary": [
+        "Ran 11 tests in 4.209s",
+        "FAILED (failures=31)"
+      ],
+      "raw_invariant_lines": []
+    },
+    {
+      "command": [
+        "C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/crossex_exec/tests",
+        "-p",
+        "test_round24_funding.py",
+        "-v"
+      ],
+      "version": "Python 3.12.10",
+      "started_at": "2026-11-13T06:07:25.870180+00:00",
+      "completed_at": "2026-11-13T06:07:30.658644+00:00",
+      "exit_code": 0,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r24-6rnuwxte\\green-initial.log",
+      "sha256": "0e36424ac6f1e97b175215525420514539faa78f0307acfc8265c27f27222161",
+      "summary": [
+        "Ran 11 tests in 3.943s",
+        "OK"
+      ],
+      "raw_invariant_lines": []
+    },
+    {
+      "command": [
+        "C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/crossex_exec/tests",
+        "-p",
+        "test_round2[23]_funding.py",
+        "-v"
+      ],
+      "version": "Python 3.12.10",
+      "started_at": "2026-11-13T06:09:18.310683+00:00",
+      "completed_at": "2026-11-13T06:09:21.025253+00:00",
+      "exit_code": 1,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r24-6rnuwxte\\green-previous-funding.log",
+      "sha256": "5b08b516c0086de6cb0849b8a42f96466b75a7976b812c22023d10fcfc204e10",
+      "summary": [
+        "Ran 14 tests in 1.924s",
+        "FAILED (errors=3)"
+      ],
+      "raw_invariant_lines": []
+    },
+    {
+      "command": [
+        "C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/crossex_exec/tests",
+        "-p",
+        "test_round2[23]_funding.py",
+        "-v"
+      ],
+      "version": "Python 3.12.10",
+      "started_at": "2026-11-13T06:09:46.780262+00:00",
+      "completed_at": "2026-11-13T06:09:49.426207+00:00",
+      "exit_code": 0,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r24-6rnuwxte\\green-previous-funding-final.log",
+      "sha256": "c11c01627ef217c2fad41e14c92fd0fe6faa89c84bd0ba9aa58613e80c75b7f7",
+      "summary": [
+        "Ran 14 tests in 1.908s",
+        "OK"
+      ],
+      "raw_invariant_lines": []
+    },
+    {
+      "command": [
+        "C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/crossex_exec/tests",
+        "-p",
+        "test_round24_funding.py",
+        "-v"
+      ],
+      "version": "Python 3.12.10",
+      "started_at": "2026-11-13T06:10:59.226601+00:00",
+      "completed_at": "2026-11-13T06:11:05.140662+00:00",
+      "exit_code": 1,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r24-6rnuwxte\\red-boundaries.log",
+      "sha256": "42ec026bc94bf0aaf58f35348ee8bc7c3ed178d6b2d18f67a1f033ba2ab125ef",
+      "summary": [
+        "Ran 17 tests in 4.966s",
+        "FAILED (failures=1, errors=1)"
+      ],
+      "raw_invariant_lines": []
+    },
+    {
+      "command": [
+        "C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/crossex_exec/tests",
+        "-p",
+        "test_round24_funding.py",
+        "-v"
+      ],
+      "version": "Python 3.12.10",
+      "started_at": "2026-11-13T06:11:24.898406+00:00",
+      "completed_at": "2026-11-13T06:11:30.961099+00:00",
+      "exit_code": 1,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r24-6rnuwxte\\red-boundaries-final.log",
+      "sha256": "2e09c6e3f831eb1bb248df9811d28f5af5c8353ea166378e96d2c7594d9a3e57",
+      "summary": [
+        "Ran 17 tests in 5.216s",
+        "FAILED (failures=2)"
+      ],
+      "raw_invariant_lines": []
+    },
+    {
+      "command": [
+        "C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/crossex_exec/tests",
+        "-p",
+        "test_round2[234]_funding.py",
+        "-v"
+      ],
+      "version": "Python 3.12.10",
+      "started_at": "2026-11-13T06:12:18.892737+00:00",
+      "completed_at": "2026-11-13T06:12:27.266519+00:00",
+      "exit_code": 0,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r24-6rnuwxte\\green-funding-all.log",
+      "sha256": "21392af468c450c0811bbf4639f1e8846deb4862d8a99a31c0ccbbbea22aca47",
+      "summary": [
+        "Ran 31 tests in 7.514s",
+        "OK"
+      ],
+      "raw_invariant_lines": []
+    },
+    {
+      "command": [
+        "C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/crossex_exec/tests",
+        "-p",
+        "test_round24_funding.py",
+        "-v"
+      ],
+      "version": "Python 3.12.10",
+      "started_at": "2026-11-13T06:15:01.837983+00:00",
+      "completed_at": "2026-11-13T06:15:08.031401+00:00",
+      "exit_code": 1,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r24-6rnuwxte\\red-flat-certification.log",
+      "sha256": "255c5977a9f5c4d11b1e9f88b90525cedefb2ea79046eeed93efa509dea594c8",
+      "summary": [
+        "Ran 17 tests in 5.321s",
+        "FAILED (failures=1)"
+      ],
+      "raw_invariant_lines": []
+    },
+    {
+      "command": [
+        "C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/crossex_exec/tests",
+        "-p",
+        "test_round24_funding.py",
+        "-v"
+      ],
+      "version": "Python 3.12.10",
+      "started_at": "2026-11-13T06:16:58.193313+00:00",
+      "completed_at": "2026-11-13T06:17:06.273171+00:00",
+      "exit_code": 0,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r24-6rnuwxte\\green-flat-certification.log",
+      "sha256": "dbf2c93d48d0b041cef34aaf14fb2d8d6fb0c7e060b766633872c23fc922ca44",
+      "summary": [
+        "Ran 17 tests in 6.780s",
+        "OK"
+      ],
+      "raw_invariant_lines": []
+    },
+    {
+      "command": [
+        "C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/crossex_exec/tests",
+        "-p",
+        "test_round2[1234]*.py",
+        "-v"
+      ],
+      "version": "Python 3.12.10",
+      "started_at": "2026-11-13T06:17:53.933730+00:00",
+      "completed_at": "2026-11-13T06:18:06.049304+00:00",
+      "exit_code": 0,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r24-6rnuwxte\\green-round21-through24.log",
+      "sha256": "2a1a1200d72715950e02beba7f3c1e4881cdf484bac9ca3331836348f1cd25f0",
+      "summary": [
+        "Ran 55 tests in 11.042s",
+        "OK"
+      ],
+      "raw_invariant_lines": []
+    }
+  ],
+  "scope_audit": {
+    "base_commit": "eae2760f346e27f63d2d370691a29752b345920a",
+    "code_commit": "d3dfd1a42bbdc5bf267f5b60d2e1ef4c2e30b968",
+    "protected_files": {
+      "tools/crossex_exec/limits.py": {
+        "unchanged": true,
+        "sha256": "0722ff676adbc19ef8f495d68f6744262f906365d1ce2aff64808336cde84e88"
+      },
+      "tools/crossex_exec/ownership.py": {
+        "unchanged": true,
+        "sha256": "be8aaf12da3d8aae05018e387b49d0067ce94d4697217afffb33f13f49b5f2c5"
+      },
+      "tools/crossex_exec/execution.py": {
+        "unchanged": true,
+        "sha256": "c11458efd104d172ed8d6522ed14e3b3b49dd84868bc7c47d329f590edbf3dc9"
+      },
+      "tools/crossex_exec/transport.py": {
+        "unchanged": true,
+        "sha256": "280f5ae02c941519386c786feb1014f8ae8708b7bf9c1901aa91487053a643ca"
+      },
+      "tools/crossex_exec/adapters.py": {
+        "unchanged": true,
+        "sha256": "89cab84ba13f414a993fefac6fdc4f9eb51803950c9ba4f2b28cee52c55b8341"
+      },
+      "tools/crossex_exec/funding.py": {
+        "unchanged": true,
+        "sha256": "393044cb3c7306c890a21e207de260baaa8f1f46754a5c959698be5994295554"
+      },
+      "tools/crossex_exec/program_risk.py": {
+        "unchanged": true,
+        "sha256": "63ebd1ed412ba7513168c84401a40649e82d8510e4206d9a921637b7b45964f9"
+      },
+      "tools/crossex_exec/accounts.py": {
+        "unchanged": true,
+        "sha256": "07932688777450103e4ce38364f6bdec5b7d2dc83b79ec82987635dd6e902d56"
+      }
+    },
+    "engine_changed_methods": [
+      "reconcile_positions"
+    ],
+    "unchanged_existing_test_files": 99,
+    "changed_existing_tests": {
+      "tools/crossex_exec/tests/test_round22_funding.py": {
+        "deleted_tests": [],
+        "changed_tests": [
+          {
+            "old": "test_minus_90_mixed_funding_stays_minus_10_after_withdrawal_delayed_history_and_restart",
+            "new": "test_minus_90_mixed_funding_stays_full_after_withdrawal_delayed_history_and_restart"
+          },
+          {
+            "old": "test_uncertain_ratio_allocates_each_fee_adversely_before_netting",
+            "new": "test_mixed_interval_charges_expenses_and_discards_income_before_netting"
+          },
+          {
+            "old": "test_allocated_funding_still_requires_original_full_history_and_counters",
+            "new": "test_allocated_funding_still_requires_original_full_history_and_counters"
+          },
+          {
+            "old": "test_new_charge_at_clean_boundary_cannot_be_diluted_by_old_mixed_ratio",
+            "new": "test_new_charge_at_clean_boundary_cannot_be_diluted_by_old_mixed_ratio"
+          },
+          {
+            "old": "test_unknown_entry_during_mixed_interval_remains_unverifiable_after_query",
+            "new": "test_unknown_entry_during_real_mixing_finalizes_after_query_and_withdrawal"
+          }
+        ],
+        "old_test_count": 5,
+        "new_test_count": 5
+      },
+      "tools/crossex_exec/tests/test_round23_funding.py": {
+        "deleted_tests": [],
+        "changed_tests": [
+          {
+            "old": "test_withdrawal_gap_charges_full_loss_and_keeps_daily_stop",
+            "new": "test_withdrawal_gap_charges_full_loss_and_keeps_daily_stop"
+          },
+          {
+            "old": "test_withdrawal_gap_allocates_income_and_expense_before_netting",
+            "new": "test_withdrawal_gap_allocates_income_and_expense_before_netting"
+          },
+          {
+            "old": "test_entry_gap_cannot_dilute_loss_paid_before_external_entry",
+            "new": "test_entry_gap_cannot_dilute_loss_paid_before_external_entry"
+          },
+          {
+            "old": "test_gap_evidence_survives_delayed_history_and_sqlite_restart",
+            "new": "test_gap_evidence_survives_delayed_history_and_sqlite_restart"
+          },
+          {
+            "old": "test_withdrawal_same_millisecond_as_last_mixed_sample_keeps_full_loss",
+            "new": "test_withdrawal_same_millisecond_as_last_mixed_sample_keeps_full_loss"
+          },
+          {
+            "old": "test_legacy_interval_without_first_mixed_sample_stays_stopped",
+            "new": "test_legacy_interval_without_first_mixed_sample_finalizes_adverse_loss"
+          },
+          {
+            "old": "test_stable_mixed_interior_keeps_original_adverse_ratios",
+            "new": "test_stable_mixed_interior_also_charges_full_expense_and_zero_income"
+          },
+          {
+            "old": "test_unprovable_gap_ratio_cannot_certify_zero",
+            "new": "test_unprovable_ratio_is_irrelevant_after_interval_closes"
+          }
+        ],
+        "old_test_count": 9,
+        "new_test_count": 9
+      }
+    },
+    "new_test_file": "tools/crossex_exec/tests/test_round24_funding.py",
+    "new_test_count": 17,
+    "review": "self-review; no delegation; not an independent audit"
+  }
+}
