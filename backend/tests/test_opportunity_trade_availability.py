@@ -80,6 +80,8 @@ AVAILABLE = _action(
     "PUBLIC_MARKET_AVAILABLE",
     "公开市场状态允许且实时盘口有报价",
 )
+
+
 NOT_APPLICABLE = _action(
     TradeAvailabilityState.NOT_APPLICABLE,
     "NOT_APPLICABLE",
@@ -367,3 +369,28 @@ async def test_report_degrades_failed_exchange_to_unknown_without_dropping_other
     assert "买入腿：hyperliquid / future / DEX main / ZETA" in report.text
     assert "交易状态：未知（诊断失败：TimeoutError: public status timed out）" in report.text
     assert "卖出腿：binance / future / ZETAUSDT" in report.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", [
+    TradeAvailabilityState.AVAILABLE, TradeAvailabilityState.BLOCKED,
+    TradeAvailabilityState.UNKNOWN, TradeAvailabilityState.CONDITIONAL,
+])
+@pytest.mark.parametrize("side", ["buy", "sell"])
+async def test_report_exposes_exact_restricted_opening_leg(state, side):
+    action = _action(state, "TEST_STATE", "test")
+    buy = _market("hyperliquid", MarketType.FUTURE, "ZETA", **(
+        {"buy_open": action} if side == "buy" else {"sell_open": action}
+    ))
+    sell = _market("binance", MarketType.FUTURE, "ZETAUSDT", **(
+        {"sell_open": action} if side == "sell" else {"buy_open": action}
+    ))
+    service = FakeTradeAvailabilityService({
+        "hyperliquid": _result("hyperliquid", [buy]), "binance": _result("binance", [sell]),
+    })
+    report = await build_opportunity_trade_availability_report(service, _opportunity())
+    expected = () if state == TradeAvailabilityState.AVAILABLE else (
+        "买入腿" if side == "buy" else "卖出腿",
+    )
+    assert report.opening_restricted_legs == expected
+    assert report.opening_restricted is bool(expected)

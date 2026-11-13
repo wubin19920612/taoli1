@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from math import isfinite
+from typing import TYPE_CHECKING
 
 from app.models.alert import ALERT_SEVERITY_DESCRIPTIONS, ALERT_TYPE_DESCRIPTIONS, AlertRule
 from app.models.market import MarketType
@@ -9,6 +12,9 @@ from app.models.settings import AlertMessageTemplateSettings
 from app.services.alert_metrics import AlertObservation, combined_open_edge_pct
 from app.services.funding_edge import current_cycle_funding_edge_pct, next_cycle_funding_edge_pct
 from app.services.market_labels import is_bitget_rtoken_spot, market_leg_label
+
+if TYPE_CHECKING:
+    from app.services.opportunity_trade_availability import OpportunityTradeAvailabilityReport
 
 ALERT_DISPLAY_TIMEZONE = timezone(timedelta(hours=8), "UTC+8")
 HIGH_VOLUME_24H_USDT = 10_000_000
@@ -25,27 +31,101 @@ RISK_LABEL_NAMES = {
 }
 
 
-def build_big_spread_message(rule: AlertRule, opportunity: Opportunity) -> str:
-    # This alert always includes the safety context, regardless of template toggles.
-    message = build_compact_alert_message(rule, opportunity, include_rating=False)
-    lines = [f"【大价差提醒】{message}",
-             f"买入侧盘口：bid {opportunity.buy_bid:g} / ask {opportunity.buy_ask:g}",
-             f"卖出侧盘口：bid {opportunity.sell_bid:g} / ask {opportunity.sell_ask:g}"]
-    if _has_mixed_funding_intervals(opportunity):
-        lines.extend(_mixed_interval_funding_lines(opportunity))
-    labels = [f"{label}（{RISK_LABEL_NAMES.get(label, '未定义标签，请核实')}）"
-              for label in opportunity.risk_labels]
-    lines.append(f"全部风险标签：{'、'.join(labels) if labels else '无'}")
-    if "HUGE_SPREAD_VERIFY" in opportunity.risk_labels:
-        lines.append("≥10% 价差，请人工核实")
-    lines.append(
-        f"手续费：买 {opportunity.buy_fee_pct:g}% / 卖 {opportunity.sell_fee_pct:g}%；"
-        f"滑点估算 {opportunity.safety_slippage_pct:g}%；"
-        f"费用{'为估算' if opportunity.fees_are_estimated else '为配置值'}；"
-        f"行情：买{'预估' if opportunity.buy_is_estimated else '非预估'} / "
-        f"卖{'预估' if opportunity.sell_is_estimated else '非预估'}"
+def build_big_spread_message(
+    rule: AlertRule,
+    opportunity: Opportunity,
+    *,
+    huge_spread_pct: float = 10.0,
+    card_summary: str = "未创建（自动建卡未启用）",
+    availability_report: OpportunityTradeAvailabilityReport | None = None,
+) -> str:
+    title = (
+        f"【大价差】{opportunity.symbol.removesuffix('USDT')}  "
+        f"开 {opportunity.open_spread_pct:.2f}% / 平 {opportunity.close_spread_pct:.2f}%"
     )
+    if opportunity.open_spread_pct >= huge_spread_pct:
+        title += " ⚠请人工核实"
+
+    def funding(side: str) -> str:
+        rate = getattr(opportunity, f"funding_rate_{side}_pct")
+        interval = getattr(opportunity, f"{side}_funding_interval_hours")
+        if (getattr(opportunity, f"{side}_market_type") == MarketType.SPOT
+                or rate is None or not isfinite(rate) or not interval or interval <= 0):
+            return "-"
+        return f"{rate:.2f}%/{interval}h"
+
+    hourly = (
+        _hourly_funding_difference(opportunity, next_cycle=False)
+        if funding('buy') != "-" and funding('sell') != "-" else None
+    )
+    net = f"{hourly:+.3f}%/h" if hourly is not None and hourly.is_finite() else "-"
+    lines = [
+        title,
+        f"{_big_spread_leg(opportunity, 'buy')} 买 {_big_spread_price(opportunity.buy_ask)} → "
+        f"{_big_spread_leg(opportunity, 'sell')} 卖 {_big_spread_price(opportunity.sell_bid)}",
+        f"资金费：买 {funding('buy')} · 卖 {funding('sell')}（持仓净 {net}）",
+        f"24h 成交额：{_big_spread_volume(opportunity.buy_volume_24h_usdt)} / "
+        f"{_big_spread_volume(opportunity.sell_volume_24h_usdt)} U",
+    ]
+    notices = []
+    if opportunity.risk_labels:
+        labels = [RISK_LABEL_NAMES.get(label, f"{label}（未定义标签，请核实）")
+                  for label in opportunity.risk_labels]
+        notices.append(f"风险：{'、'.join(labels)}")
+    if availability_report is not None and availability_report.opening_restricted:
+        legs = availability_report.opening_restricted_legs or ("买入腿", "卖出腿")
+        notices.append(f"交易状态：{'、'.join(legs)} 开仓受限")
+    if notices:
+        # Share a line when both notices apply, keeping the full message within six lines.
+        lines.append("；".join(notices))
+    summary = " ".join(card_summary.split())
+    if summary.startswith("未创建（") and summary.endswith("）"):
+        summary = f"未创建（{summary[4:-1][:40]}）"
+    lines.append(f"卡片：{summary}")
     return "\n".join(lines)
+
+
+def _big_spread_leg(opportunity: Opportunity, side: str) -> str:
+    exchange = getattr(opportunity, f"{side}_exchange").lower()
+    raw_symbol = getattr(opportunity, f"{side}_raw_symbol")
+    names = {
+        "binance": "Binance", "okx": "OKX", "bybit": "Bybit", "gate": "Gate",
+        "bitget": "Bitget", "aster": "Aster", "lighter": "Lighter",
+        "rh-lighter": "RH-Lighter", "arcus": "Arcus", "kraken": "Kraken",
+        "deribit": "Deribit",
+    }
+    name = names.get(exchange, exchange)
+    details = []
+    if exchange in {"hyperliquid", "hyper", "hl"}:
+        dex = getattr(opportunity, f"{side}_dex")
+        if not dex and raw_symbol and ":" in raw_symbol:
+            dex = raw_symbol.split(":", 1)[0]
+        name = f"HL {dex}" if dex and dex != "main" else "HL"
+        if raw_symbol:
+            details.append(raw_symbol)
+    price_multiplier = getattr(opportunity, f"{side}_price_multiplier")
+    contract_multiplier = getattr(opportunity, f"{side}_contract_size_multiplier")
+    if price_multiplier != 1:
+        details.append(f"价格倍率 {price_multiplier:g}")
+    if contract_multiplier not in (None, 1):
+        details.append(f"1张={contract_multiplier:g}个{_base_currency(opportunity.symbol)}")
+    label = market_leg_label(
+        name, getattr(opportunity, f"{side}_market_type"), raw_symbol, opportunity.symbol,
+    )
+    return f"{label}（{'，'.join(details)}）" if details else label
+
+
+def _big_spread_price(value: float) -> str:
+    return format(Decimal(f"{value:.6g}"), "f")
+
+
+def _big_spread_volume(value: float | None) -> str:
+    if value is None or not isfinite(value):
+        return "-"
+    divisor, unit = (100_000_000, " 亿") if value >= 100_000_000 else (10_000, " 万")
+    if value < 10_000:
+        divisor, unit = 1, ""
+    return f"{value / divisor:.2f}".rstrip("0").rstrip(".") + unit
 
 
 def build_alert_rating_header(

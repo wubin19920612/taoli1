@@ -23,6 +23,7 @@ DIAGNOSTIC_TIMEOUT_SECONDS = 15.0
 class OpportunityTradeAvailabilityReport:
     text: str
     opening_restricted: bool
+    opening_restricted_legs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -143,6 +144,10 @@ async def build_opportunity_trade_availability_report(
     return OpportunityTradeAvailabilityReport(
         text="\n".join(lines),
         opening_restricted=opening_state != "公开可用",
+        opening_restricted_legs=tuple(
+            leg.label for leg, (_, state) in zip(legs, opening_actions, strict=True)
+            if state != TradeAvailabilityState.AVAILABLE
+        ),
     )
 
 

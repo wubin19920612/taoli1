@@ -440,15 +440,16 @@ async def _process_alert_match(
         existing_card_skipped = False
         signal_condition_failure = False
         latest_opportunity = _find_latest_opportunity(app, match.opportunity.id)
-        message = build_alert_message(
-            match.rule,
-            latest_opportunity or match.opportunity,
-            observations=match.observations,
-            template=alert_template,
-            include_rating=False,
-        )
         if is_big_spread:
-            message = build_big_spread_message(match.rule, match.opportunity)
+            message = ""
+        else:
+            message = build_alert_message(
+                match.rule,
+                latest_opportunity or match.opportunity,
+                observations=match.observations,
+                template=alert_template,
+                include_rating=False,
+            )
         availability_report = None
         trade_availability_service = getattr(
             app.state,
@@ -574,6 +575,15 @@ async def _process_alert_match(
                             existing_card_skipped = True
                         if astro_result.status == "created":
                             card_summary = "已建卡（未开仓，需手动开启）" if is_big_spread else "已创建"
+                            if is_big_spread:
+                                # A missing variant can be added alongside an already-open card.
+                                existing_summary = next(
+                                    (part for part in astro_result.message.split("；")
+                                     if part.startswith("已有卡片 ")),
+                                    None,
+                                )
+                                if existing_summary:
+                                    card_summary += f"；{existing_summary}"
                         elif astro_result.status == "updated":
                             card_summary = "已更新"
                         elif astro_result.action == "existing":
@@ -606,7 +616,12 @@ async def _process_alert_match(
             ),
         )
         if is_big_spread:
-            message += f"\n卡片：{card_summary}"
+            message = build_big_spread_message(
+                match.rule, match.opportunity,
+                huge_spread_pct=settings.huge_spread_pct,
+                card_summary=card_summary,
+                availability_report=availability_report,
+            )
         else:
             message = f"{rating_header}\n\n{message}"
         if alert_template.format == "compact" and not is_big_spread:
@@ -622,14 +637,14 @@ async def _process_alert_match(
             latest_settings = await app.state.settings_repo.get_risk_settings()
             if big_spread_is_muted(latest_opportunity or match.opportunity, latest_settings, datetime.now(UTC)):
                 fast_eligibility_failed = True
-                message += "\n路线已屏蔽（big_spread_muted）"
+                message += "；路线已屏蔽（big_spread_muted）"
         if fast_eligibility_failed or (not is_big_spread and (signal_condition_failure or existing_card_skipped)):
             status = "muted"
         elif not is_big_spread and alert_template.suppress_when_card_conditions_fail and card_condition_failure:
             status = "muted"
         elif not getattr(app.state, "feishu_live_send_enabled", True):
             status = "muted"
-            message = f"{message}\n\n飞书实时发送未启用"
+            message += "；飞书实时发送未启用" if is_big_spread else "\n\n飞书实时发送未启用"
         else:
             try:
                 async with write_lock:
@@ -655,7 +670,10 @@ async def _process_alert_match(
                         sent_ids.add(match.opportunity.id)
             except Exception as exc:  # noqa: BLE001 - preserve event even when webhook fails.
                 status = "failed"
-                message = f"{message}\n\n飞书发送失败：{exc}"
+                if is_big_spread:
+                    logger.error("big spread Feishu send failed: %s (%s)", key, type(exc).__name__)
+                else:
+                    message = f"{message}\n\n飞书发送失败：{exc}"
         event = AlertEvent(
             rule_id=match.rule.id,
             opportunity_id=match.opportunity.id,
