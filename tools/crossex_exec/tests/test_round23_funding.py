@@ -102,6 +102,37 @@ class FundingBoundaryTests(unittest.TestCase):
                     w.advance()
                 self.assert_loss(w, '-22')
 
+    def test_withdrawal_same_millisecond_as_last_mixed_sample_keeps_full_loss(self):
+        for leg in (0, 1):
+            with self.subTest(leg=leg):
+                w = self.world()
+                venue = w.venues[leg]
+                own = venue.quantity
+                venue.quantity = own*9
+                venue.settle('-9'); w.advance()
+                venue.quantity = own
+                venue.settle('-21'); w.advance()
+                for _ in range(3):
+                    w.advance()
+                self.assert_loss(w, '-22')
+
+    def test_entry_same_millisecond_as_first_mixed_sample_keeps_full_loss(self):
+        for leg in (0, 1):
+            with self.subTest(leg=leg):
+                w = self.world()
+                venue = w.venues[leg]
+                own = venue.quantity
+                w.now += 1
+                venue.settle('-21')
+                venue.quantity = own*9
+                w.advance(0)
+                w.advance()
+                venue.quantity = own
+                w.advance()
+                for _ in range(3):
+                    w.advance()
+                self.assert_loss(w, '-21')
+
     def test_legacy_interval_without_first_mixed_sample_stays_stopped(self):
         w = self.world()
         venue = w.venues[0]
