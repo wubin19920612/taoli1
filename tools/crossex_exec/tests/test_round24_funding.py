@@ -196,6 +196,88 @@ class AdverseFundingTests(unittest.TestCase):
         observe_funding_ownership(w.store, clean, clean_at, list(w.store.iter_orders()))
         self.assertEqual(w.store.meta(OWNERSHIP_KEY), before)
 
+    def test_confirmed_reduction_consumes_unknown_open_capacity_in_same_lifecycle(self):
+        w = self.world(); venue = w.venues[0]
+        pair = w.store.pairs(active=True)[0]
+        entry = next(w.store.iter_orders(reduce_only=False))
+        w.engine.reduce(pair, 0, dec('.245'), 3)
+        w.store.save_order(dict(entry, state='UNKNOWN', filled='0'))
+        w.advance()
+        self.assertEqual(venue.quantity, dec('.245'))
+        self.assertEqual(self.intervals(w), [])
+        venue.quantity += dec('.100')
+        w.advance()
+        self.assertEqual(len(self.intervals(w)), 1)
+        self.assertIsNone(self.intervals(w)[-1]['to_ms'])
+
+    def test_legacy_missing_end_in_earlier_interval_also_closes_on_clean_sample(self):
+        w = self.world(); venue = w.venues[0]
+        own = venue.quantity
+        for _ in range(2):
+            venue.quantity = own*3; w.advance()
+            venue.settle('-1'); w.advance()
+            venue.quantity = own; self.recover_samples(w)
+        state = w.store.meta(OWNERSHIP_KEY)
+        name = 'crossex|'+w.instruments[0].symbol
+        state['version'] = 1
+        state['contracts'][name]['intervals'][0].pop('to_ms')
+        state['contracts'][name]['intervals'][0].pop('first_mixed_ms')
+        w.store.set_meta(OWNERSHIP_KEY, state)
+        w.restart(); self.recover_samples(w)
+        self.assert_income(w, '-2', can_open=True)
+        self.assertTrue(all(v['to_ms'] is not None for v in self.intervals(w)))
+
+    def test_read_with_changed_order_journal_cannot_close_interval(self):
+        w = self.world(); venue = w.venues[0]
+        own = venue.quantity
+        venue.quantity *= 9; w.advance()
+        before = list(w.store.iter_orders())
+        w.engine.reduce(w.store.pairs(active=True)[0], 0, own, 3)
+        w.now += 1
+        observe_funding_ownership(w.store, w.accounts.snapshot(), w.now, before)
+        self.assertIsNone(self.intervals(w)[-1]['to_ms'])
+        observe_funding_ownership(w.store, w.accounts.snapshot(), w.now, list(w.store.iter_orders()))
+        self.assertEqual(self.intervals(w)[-1]['to_ms'], int(w.now*1000))
+
+    def test_closed_result_and_delayed_endpoint_cash_survive_restart_without_stop(self):
+        for leg in (0, 1):
+            with self.subTest(leg=leg):
+                w = self.world(); venue = w.venues[leg]
+                own = venue.quantity
+                venue.quantity *= 9; w.advance()
+                venue.settle('-1'); venue.settle('20'); w.advance()
+                venue.quantity = own; w.advance()
+                end = int(w.now*1000)
+                venue.settle('-1'); venue.settle('30')  # late at clean endpoint
+                self.recover_samples(w)
+                self.assert_income(w, '-2', can_open=True)
+                self.assertEqual(self.intervals(w, leg)[-1]['to_ms'], end)
+                saved = w.store.meta('external_income')
+                self.assertEqual(saved['funding_attribution'], 'adverse_only_mixed_interval')
+                self.assertEqual(dec(saved['program_funding_total']), -2)
+                intervals = self.intervals(w, leg)
+                w.restart(); w.advance()
+                self.assert_income(w, '-2', can_open=True)
+                self.assertEqual(self.intervals(w, leg), intervals)
+                # Once outside the closed interval, ordinary program income counts.
+                venue.settle('3'); w.advance()
+                self.assert_income(w, '1', can_open=True)
+
+    def test_overlapping_intervals_count_one_expense_and_active_interval_still_blocks(self):
+        interval = dict(from_ms=1000, to_ms=2000)
+        state = dict(contracts={'route|raw': dict(intervals=[interval, dict(interval)])})
+        row = dict(id='cash', symbol='raw')
+        self.assertEqual(allocate_funding(state, 'route', row, 1500, dec(-1)), (dec(-1), True))
+        state['contracts']['route|raw']['intervals'][1]['to_ms'] = None
+        with self.assertRaisesRegex(ValueError, 'program_funding_attribution_unverifiable'):
+            allocate_funding(state, 'route', row, 1500, dec(-1))
+
+    def test_clean_program_retains_both_income_and_expense(self):
+        w = self.world()
+        w.venues[0].settle('9'); w.venues[1].settle('-1'); w.advance()
+        self.assert_income(w, '8', can_open=True)
+        self.assertEqual(w.store.meta('external_income')['funding_attribution'], 'exclusive_program')
+
 
 if __name__ == '__main__':
     unittest.main()
