@@ -8,6 +8,7 @@ from .program_risk import debt_attribution
 from .funding import certify_daily
 from .ownership import ProgramOwnership
 from .program_accounting import read_program_snapshot, ProgramAccounting
+from .flatness import require_local_flat, flat_projection
 
 
 POSITION_LOCKS = frozenset(('position_mismatch','unhedged_position','repair_stopped',
@@ -43,22 +44,7 @@ class EquityAdmin:
         locks=engine.stops.reasons if engine else store.meta('stop_locks',{})
         if store.meta('position_mismatch') or POSITION_LOCKS.intersection(locks):
             raise ValueError('position_or_order_lock')
-        positions={}
-        for row in store.iter_orders():
-            if row.get('state') not in ('TERMINAL','REJECTED','SHADOW','UNSENT') or row.get('accounting_pending',False):
-                raise ValueError('local_orders_pending')
-            if row['state'] in ('SHADOW','UNSENT'):
-                continue
-            qty=dec(row.get('filled',0))
-            if qty:
-                key=(row['instrument']['market']['exchange'],row['instrument']['symbol'],row['position_side'])
-                positions[key]=positions.get(key,dec(0))+qty*(-1 if row['reduce_only'] else 1)
-        if any(positions.values()):
-            raise ValueError('local_positions')
-        for pair in store.iter_pairs(exclude_states=('SHADOW','SKIPPED')):
-            if (pair['state']!='CLOSED' or pair.get('remote_pending') or pair.get('accounting_pending')
-                    or any(dec(q) for field in ('remaining','remote_remaining') for q in pair.get(field,()))):
-                raise ValueError('local_positions')
+        require_local_flat(store,engine.executor if engine else None)
 
     def state_check(self,confirm,release_halt):
         state=self.store.meta('state')
@@ -86,7 +72,7 @@ class EquityAdmin:
             raise ValueError('account_read_unavailable') from None
         if registry.records():
             self.store.set_meta('external_admin_snapshot',plain(snapshot))
-        projection=(ProgramOwnership(self.store,self.clock).split(snapshot) if self.program_scope
+        projection=(flat_projection(ProgramOwnership(self.store,self.clock),snapshot,program_scope=True) if self.program_scope
                     else registry.split(snapshot) if registry.records() else snapshot)
         if not isinstance(projection.get('positions'),dict) or projection['positions']:
             raise ValueError('remote_positions')
@@ -186,7 +172,8 @@ class EquityAdmin:
                         locks.pop(key,None)
                 audit=dict(old=old,new=new,at=self.clock(),captured_at=captured,reason=reason,
                            source=source,halt_reason=cause,revision=revision+1)
-                external_projection=ProgramOwnership(store,self.clock).split(snapshot) if self.program_scope else None
+                external_projection=(flat_projection(ProgramOwnership(store,self.clock),snapshot,program_scope=True)
+                                     if self.program_scope else None)
                 if external_projection is not None:
                     # Audit the full account and exact excluded positions. These
                     # operations reset an explicit epoch, never erase ownership.

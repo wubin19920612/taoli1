@@ -24,6 +24,7 @@ from .external_accounting import ExternalAccounting
 from .ownership import (ProgramOwnership, bounded_pair_positions, retain_crash_claims,
                         journal_positions, require_program_observation)
 from .program_accounting import ProgramAccounting, read_program_snapshot
+from .flatness import flat_projection
 from .external_fx import NATIVE_USD, require_fresh_fx
 from .position_values import key_currency, notional_values, value_snapshot, usd_value
 from .program_risk import require_program_proof, program_notionals
@@ -1507,18 +1508,29 @@ class Engine:
                     captured=raw.get('captured_at',captured)
                     if not 0<=self.clock()-captured<=10:
                         raise ValueError('flatten_snapshot_stale')
-                    projection=self.external.split(raw,pnl=False)
-                    remote=projection['positions']
-                    program_flat=(not self.store.pairs(active=True) and not remote and not self.executor.pending_writes
-                        and next(self.executor.iter_orders(states=(*NONTERMINAL,'INTENT')),None) is None
-                        and next(self.executor.iter_orders(accounting_pending=True),None) is None)
-                    status=dict(status,verified=True,program_flat=program_flat,
-                        account_flat=program_flat and not bool(raw['positions']),
-                        external_positions=plain(projection['external_positions']),captured_at=captured,
-                        remaining_positions=plain(remote),local_active_pairs=len(self.store.pairs(active=True)))
-                    self.store.set_meta('flatten_status',status)
-                    if program_flat and projection['external_positions']:
-                        self.store.event('PROGRAM_FLATTENED_EXTERNAL_REMAINS',status)
+                    with self.executor.lock,self.store.lock:
+                        try:
+                            projection=flat_projection(self.external,raw,program_scope=self.limits.program_scope,
+                                executor=self.executor,pnl=False)
+                            program_flat=not projection['positions']
+                        except ValueError as error:
+                            if str(error) not in ('local_positions','local_orders_pending'):
+                                raise
+                            projection=self.external.split(raw,pnl=False)
+                            program_flat=False
+                        remote=projection['positions']
+                        status=dict(status,verified=True,program_flat=program_flat,
+                            account_flat=program_flat and not bool(raw['positions']),
+                            external_positions=plain(projection['external_positions']),captured_at=captured,
+                            remaining_positions=plain(remote),local_active_pairs=len(self.store.pairs(active=True)))
+                        self.store.set_meta('flatten_status',status)
+                        if program_flat and projection['external_positions']:
+                            self.store.event('PROGRAM_FLATTENED_EXTERNAL_REMAINS',status)
+                        if program_flat:
+                            # HALTING ticks need no PnL certificate to prove a
+                            # successful final position read. Never release HALTED.
+                            for lock in ('flatten_retry_pending','flatten_snapshot_unavailable'):
+                                self.stops.recovered(lock,'CLOSE_OBSERVATION_RECOVERED',status)
                 except Exception:
                     status=dict(status,verified=False,program_flat=False,account_flat=False)
                     self.store.set_meta('flatten_status',status)

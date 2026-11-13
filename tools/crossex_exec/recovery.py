@@ -3,6 +3,7 @@ from tools.fill_sim.core import dec, walk
 from .policy import Instrument
 from .program_risk import journal_fingerprint, require_program_proof
 from .ownership import journal_positions
+from .flatness import flat_projection
 
 
 READ_LOCKS = frozenset(('funding_settlement_accounting_required', 'funding_refresh_failed',
@@ -26,9 +27,19 @@ def recover_observed_stops(engine, snapshot, income):
     closing=[p for p in pairs if p.get('exit_reason')]
     if 'close_incomplete' in reasons and (not active or closing and all(p['state']=='CLOSED' for p in closing)):
         ready['close_incomplete']='CLOSE_OBSERVATION_RECOVERED'
-    if not active and not owned:
-        ready.update({reason:'CLOSE_OBSERVATION_RECOVERED' for reason in
-                      reasons.intersection(('flatten_retry_pending','flatten_snapshot_unavailable'))})
+    flatten_reasons=reasons.intersection(('flatten_retry_pending','flatten_snapshot_unavailable'))
+    if flatten_reasons and not active and not owned:
+        try:
+            projection=flat_projection(engine.external,snapshot,program_scope=engine.limits.program_scope,
+                                       executor=engine.executor,pnl=False)
+            flat=not projection['positions']
+        except ValueError as error:
+            if str(error) not in ('local_positions','local_orders_pending'):
+                raise
+            flat=False
+        if flat:
+            ready.update({reason:'CLOSE_OBSERVATION_RECOVERED' for reason in
+                          flatten_reasons})
     if ('funding_settlement_accounting_required' in reasons and income
             and income.get('funding_verified') and income.get('funding_daily_verified')
             and all(p.get('closed_at',0)<=snapshot.get('accounting_at',snapshot['captured_at'])
@@ -51,23 +62,6 @@ def recover_observed_stops(engine, snapshot, income):
             ready['funding_refresh_failed']='FUNDING_REFRESH_RECOVERED'
         except Exception:
             pass  # an unsuccessful retry cannot manufacture recovery
-    if 'exit_pricing_unavailable' in reasons:
-        try:
-            for pair in active:
-                instruments=[Instrument.load(i) for i in pair['instruments']]
-                books=engine.market.books(instruments)
-                if len(books)!=len(instruments):
-                    raise ValueError('exit_books_incomplete')
-                for n,(instrument,book) in enumerate(zip(instruments,books)):
-                    if book is None or not 0<=engine.clock()-book.received_at<=1:
-                        raise ValueError('exit_book_stale')
-                    quantity=engine.quantities(pair)[n]
-                    if quantity:
-                        common=instrument.common_book(book)
-                        walk(common.bids if n==0 else common.asks,quantity=quantity)
-            ready['exit_pricing_unavailable']='EXIT_PRICING_RECOVERED'
-        except Exception:
-            pass
     if 'halting_startup_account_unavailable' in reasons:
         try:
             engine.accounts.validate_startup()
@@ -80,9 +74,36 @@ def recover_observed_stops(engine, snapshot, income):
                 ready['foreign_bitget_unfilled_orders']='FOREIGN_ORDERS_RECOVERED'
         except Exception:
             pass
+    book_times=[]
+    if 'exit_pricing_unavailable' in reasons:
+        try:
+            for pair in active:
+                instruments=[Instrument.load(i) for i in pair['instruments']]
+                books=engine.market.books(instruments)
+                if len(books)!=len(instruments):
+                    raise ValueError('exit_books_incomplete')
+                for n,(instrument,book) in enumerate(zip(instruments,books)):
+                    if book is None or not 0<=engine.clock()-book.received_at<=1:
+                        raise ValueError('exit_book_stale')
+                    book_times.append(book.received_at)
+                    quantity=engine.quantities(pair)[n]
+                    if quantity:
+                        common=instrument.common_book(book)
+                        walk(common.bids if n==0 else common.asks,quantity=quantity)
+            ready['exit_pricing_unavailable']='EXIT_PRICING_RECOVERED'
+        except Exception:
+            pass
     with store.lock:
         if journal!=journal_fingerprint(store):
             return
+        # Books prove their own availability, independent of account versions.
+        # Recheck their actual age and quantity owners at the commit boundary.
+        if ('exit_pricing_unavailable' in ready and all(0<=engine.clock()-at<=1 for at in book_times)
+                and pairs==list(store.iter_pairs(exclude_states=('SHADOW','SKIPPED')))):
+            reason='exit_pricing_unavailable'
+            engine.stops.recovered(reason,ready[reason],dict(reason=reason,
+                book_received_at=book_times,completed_at=engine.clock()))
+        ready.pop('exit_pricing_unavailable',None)
         # These reads prove their own failures gone. A slow successful retry
         # may expire PnL; leaving its lock would force the same slow read forever.
         # Releasing only these reasons never renews or bypasses the PnL proof.
