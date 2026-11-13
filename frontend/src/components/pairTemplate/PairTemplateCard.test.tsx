@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createInstrumentAstroCard, lookupInstrumentAstroCard, previewInstrumentAstroPair, updateInstrumentAstroCard } from "../../api/client";
 import type { AstroCardLookup, AstroPairPlan, PairSpreadCurrentSnapshot, PairSpreadQueryResult } from "../../api/types";
@@ -46,6 +46,81 @@ describe("PairTemplateCard", () => {
     expect(lookupInstrumentAstroCard).toHaveBeenCalledWith(expect.objectContaining({ buy_raw_symbol: "BTCUSDT", sell_raw_symbol: "BTCUSDT" }));
     expect(onLinesChange).toHaveBeenCalledWith({ open: expect.any(Number), close: expect.any(Number) });
   });
+  it("rounds recommended inputs to two decimals, steps by 0.01 and restores displayed recommendations", async () => {
+    const result = fixture();
+    const onLinesChange = vi.fn();
+    render(<PairTemplateCard result={result} onLinesChange={onLinesChange} />);
+    await waitFor(() => expect(button("修改卡片").hasAttribute("disabled")).toBe(false));
+    const recommendation = recommend(result.points, result.current);
+    const checkInputs = () => {
+      for (const template of recommendation.templates) {
+        for (const [field, label] of [["open", "开仓"], ["close", "平仓"]] as const) {
+          const input = screen.getByLabelText(`${template.label}${label}`) as HTMLInputElement;
+          expect(input.value).toBe(template[field].toFixed(2));
+          expect(input.getAttribute("step")).toBe("0.01");
+        }
+      }
+    };
+    checkInputs();
+    const open = screen.getByLabelText("均衡（推荐）开仓") as HTMLInputElement;
+    const initialOpen = Number(open.value);
+    fireEvent.keyDown(open, { key: "ArrowUp" });
+    fireEvent.keyUp(open, { key: "ArrowUp" });
+    expect(open.value).toBe((initialOpen + 0.01).toFixed(2));
+    fireEvent.click(button("恢复推荐值"));
+    checkInputs();
+    const balanced = recommendation.templates[1];
+    expect(onLinesChange).toHaveBeenLastCalledWith(chartLines({
+      open: Number(balanced.open.toFixed(2)), close: Number(balanced.close.toFixed(2))
+    }, recommendation.h, recommendation.direction));
+  });
+  it("formats percentages and validation thresholds to two decimals and hourly funding to four", async () => {
+    const result = fixture();
+    result.current!.leg1.funding_rate_pct = 0.03;
+    render(<PairTemplateCard result={result} onLinesChange={vi.fn()} />);
+    await waitFor(() => expect(button("修改卡片").hasAttribute("disabled")).toBe(false));
+    const recommendation = recommend(result.points, result.current, 0.16, 0.15,
+      fundingMetrics(result.current?.leg1, result.current?.leg2).hourly);
+    expect(screen.getByText("半边成本 h=0.10% · 净资金费率 -0.0012%/小时（按当前费率估算）")).toBeTruthy();
+    for (const template of recommendation.templates) {
+      const card = within(screen.getByText(template.label).closest(".ant-card")! as HTMLElement);
+      const open = Number((card.getByLabelText(`${template.label}开仓`) as HTMLInputElement).value);
+      const close = Number((card.getByLabelText(`${template.label}平仓`) as HTMLInputElement).value);
+      expect(card.getByText(`间距 ${(open - close).toFixed(2)}% · 资金费调整 ${template.fundingAdjustment.toFixed(2)}%`)).toBeTruthy();
+      expect(card.getByText(`距开仓线 ${(open - recommendation.openExec!).toFixed(2)}%`)).toBeTruthy();
+      const summaries = card.getAllByText(/笔 · 胜率/);
+      for (const [index, stats] of [template.inSample, template.outOfSample].entries()) {
+        expect(summaries[index].textContent).toBe(`${stats.trades} 笔 · 胜率 ${stats.winRate?.toFixed(0) ?? "—"}${stats.winRate === null ? "" : "%"} · 总净 ${stats.totalNetPct.toFixed(2)}%`);
+        expect(card.getAllByText(`平均持仓 ${stats.averageHours.toFixed(2)}h · 最长 ${stats.longestHours.toFixed(2)}h`).length).toBeGreaterThan(0);
+        if (stats.holding) expect(card.getAllByText(`末尾仍持仓 · 浮盈亏 ${stats.floatingNetPct!.toFixed(2)}%`).length).toBeGreaterThan(0);
+      }
+      expect(card.getByText(`验证方向 左多右空 · 开 ${template.validationThresholds.open.toFixed(2)}% / 平 ${template.validationThresholds.close.toFixed(2)}%`)).toBeTruthy();
+    }
+  });
+  it("rounds fractional win rates to an integer and preserves missing values", async () => {
+    const result = fixture();
+    result.current!.leg1.funding_rate_pct = null;
+    result.points = result.points.map((point, i) => ({ ...point, spread_pct: [1.311, 0.8, 1.211, 0.8, 1.111, 0.8][i] ?? 0.8 }));
+    render(<PairTemplateCard result={result} onLinesChange={vi.fn()} />);
+    await screen.findByText("资金费数据不足，资金费调整按 0 估算");
+    expect(screen.getByText("半边成本 h=0.10% · 净资金费率 —/小时（按当前费率估算）")).toBeTruthy();
+    expect(screen.getAllByText("0 笔 · 胜率 — · 总净 0.00%").length).toBeGreaterThan(0);
+    fireEvent.change(screen.getByLabelText("均衡（推荐）开仓"), { target: { value: "0.91" } });
+    fireEvent.change(screen.getByLabelText("均衡（推荐）平仓"), { target: { value: "0.90" } });
+    expect(screen.getByText("3 笔 · 胜率 67% · 总净 0.15%")).toBeTruthy();
+  });
+  it("rejects thresholds that become equal at the displayed precision", async () => {
+    const onLinesChange = vi.fn();
+    render(<PairTemplateCard result={fixture()} onLinesChange={onLinesChange} />);
+    await waitFor(() => expect(button("修改卡片").hasAttribute("disabled")).toBe(false));
+    fireEvent.change(screen.getByLabelText("均衡（推荐）开仓"), { target: { value: "1.234" } });
+    fireEvent.change(screen.getByLabelText("均衡（推荐）平仓"), { target: { value: "1.231" } });
+    expect((screen.getByLabelText("均衡（推荐）开仓") as HTMLInputElement).value).toBe("1.23");
+    expect((screen.getByLabelText("均衡（推荐）平仓") as HTMLInputElement).value).toBe("1.23");
+    expect(button("快捷建卡").hasAttribute("disabled")).toBe(true);
+    expect(button("修改卡片").hasAttribute("disabled")).toBe(true);
+    expect(onLinesChange).toHaveBeenLastCalledWith(null);
+  });
   it.each([0, 2])("disables modification for %s matching cards", async (count) => {
     vi.mocked(lookupInstrumentAstroCard).mockResolvedValue({ ...existing, found: count > 0, count });
     render(<PairTemplateCard result={fixture()} onLinesChange={vi.fn()} />);
@@ -76,17 +151,30 @@ describe("PairTemplateCard", () => {
     expect(screen.getByText("模板平仓价差")).toBeTruthy();
     expect(screen.queryByText("arb-mvp live")).toBeNull();
     const [route, , thresholds] = vi.mocked(previewInstrumentAstroPair).mock.calls[0];
+    expect(thresholds).toEqual({
+      open_spread_pct: Number((screen.getByLabelText("均衡（推荐）开仓") as HTMLInputElement).value),
+      close_spread_pct: Number((screen.getByLabelText("均衡（推荐）平仓") as HTMLInputElement).value)
+    });
     fireEvent.click(button("确认创建"));
     await waitFor(() => expect(createInstrumentAstroCard).toHaveBeenCalledWith(route, 0.8, expect.objectContaining(thresholds!)));
   });
   it("confirms updates with expected positions, only after reviewing the change", async () => {
+    vi.mocked(lookupInstrumentAstroCard).mockResolvedValue({ ...existing, open_spread_pct: 2.126, close_spread_pct: -0.126 });
     render(<PairTemplateCard result={fixture()} onLinesChange={vi.fn()} />);
     await waitFor(() => expect(button("修改卡片").hasAttribute("disabled")).toBe(false));
+    fireEvent.change(screen.getByLabelText("均衡（推荐）开仓"), { target: { value: "1.236" } });
+    fireEvent.change(screen.getByLabelText("均衡（推荐）平仓"), { target: { value: "-0.124" } });
+    expect((screen.getByLabelText("均衡（推荐）开仓") as HTMLInputElement).value).toBe("1.24");
+    expect((screen.getByLabelText("均衡（推荐）平仓") as HTMLInputElement).value).toBe("-0.12");
+    expect(screen.getByText("已有卡片 BTC：开 2.13% → 1.24% / 平 -0.13% → -0.12%")).toBeTruthy();
     fireEvent.click(button("修改卡片"));
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.getByText("开仓 2.13% → 1.24%")).toBeTruthy();
+    expect(dialog.getByText("平仓 -0.13% → -0.12%")).toBeTruthy();
     expect(updateInstrumentAstroCard).not.toHaveBeenCalled();
     fireEvent.click(button("确认修改"));
     await waitFor(() => expect(updateInstrumentAstroCard).toHaveBeenCalledWith(expect.objectContaining({
-      expected_open_position: "0.020000", expected_close_position: "0.001000", open_spread_pct: expect.any(Number), close_spread_pct: expect.any(Number)
+      expected_open_position: "0.020000", expected_close_position: "0.001000", open_spread_pct: 1.24, close_spread_pct: -0.12
     })));
   });
   it("shows warnings alongside the successful update message", async () => {
@@ -125,11 +213,14 @@ describe("PairTemplateCard", () => {
       const recommendation = recommend(result.points, result.current, 0.16, 0.15,
         fundingMetrics(result.current?.leg1, result.current?.leg2).hourly);
       for (const template of recommendation.templates) {
-        expect(Number((screen.getByLabelText(`${template.label}开仓`) as HTMLInputElement).value)).toBeCloseTo(template.open);
-        expect(Number((screen.getByLabelText(`${template.label}平仓`) as HTMLInputElement).value)).toBeCloseTo(template.close);
+        expect((screen.getByLabelText(`${template.label}开仓`) as HTMLInputElement).value).toBe(template.open.toFixed(2));
+        expect((screen.getByLabelText(`${template.label}平仓`) as HTMLInputElement).value).toBe(template.close.toFixed(2));
       }
       expect(screen.queryByText("样本内（手调后）")).toBeNull();
-      expect(onLinesChange).toHaveBeenLastCalledWith(chartLines(recommendation.templates[1], recommendation.h, recommendation.direction));
+      const balanced = recommendation.templates[1];
+      expect(onLinesChange).toHaveBeenLastCalledWith(chartLines({
+        open: Number(balanced.open.toFixed(2)), close: Number(balanced.close.toFixed(2))
+      }, recommendation.h, recommendation.direction));
     }
   });
   it("preserves manual thresholds during refreshes within the same query and direction", async () => {

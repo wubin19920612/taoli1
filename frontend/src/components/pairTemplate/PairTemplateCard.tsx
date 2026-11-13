@@ -8,7 +8,9 @@ import { backtest, chartLines, recommend, type Backtest, type Direction, type Te
 import "./pairTemplate.css";
 
 const feeKey = "taoli1.pairTemplate.roundTripFee.v1";
-const pct = (n: number | null | undefined) => typeof n === "number" && Number.isFinite(n) ? `${n.toFixed(4)}%` : "—";
+const pct = (n: number | null | undefined, digits = 2) => typeof n === "number" && Number.isFinite(n) ? `${n.toFixed(digits)}%` : "—";
+// Use the displayed precision for chart lines, validation and action snapshots too.
+const displayThresholds = ({ open, close }: Thresholds): Thresholds => ({ open: Number(open.toFixed(2)), close: Number(close.toFixed(2)) });
 const directionLabel = (d: Direction) => d === "long1_short2" ? "左多右空" : "右多左空";
 function readFee() {
   try {
@@ -29,7 +31,7 @@ export function templateRoute(result: PairSpreadQueryResult, direction: Directio
 
 function BacktestSummary({ label, value }: { label: string; value: Backtest }) {
   return <div className="pair-template-backtest"><strong>{label}</strong>
-    <div>{value.trades} 笔 · 胜率 {pct(value.winRate)} · 总净 {pct(value.totalNetPct)}</div>
+    <div>{value.trades} 笔 · 胜率 {pct(value.winRate, 0)} · 总净 {pct(value.totalNetPct)}</div>
     <div>平均持仓 {value.averageHours.toFixed(2)}h · 最长 {value.longestHours.toFixed(2)}h</div>
     <div>{value.holding ? `末尾仍持仓 · 浮盈亏 ${pct(value.floatingNetPct)}` : "末尾空仓"}</div>
   </div>;
@@ -99,7 +101,7 @@ export function PairTemplateCard({ result, onLinesChange }: {
   const edits = manual.context === editContext ? manual.values : {};
   const setEdits = (values: Record<string, Thresholds>) => setManual({ context: editContext, values });
   const template = recommendation.templates.find((t) => t.id === selected);
-  const thresholds = template ? edits[selected] ?? template : null;
+  const thresholds = template ? displayThresholds(edits[selected] ?? template) : null;
   const routeJson = JSON.stringify(templateRoute(result, recommendation.direction));
   const route = useMemo(() => JSON.parse(routeJson) as AstroInstrumentRouteRequest | null, [routeJson]);
   const [lookup, setLookup] = useState<AstroCardLookup | null>(null);
@@ -148,18 +150,18 @@ export function PairTemplateCard({ result, onLinesChange }: {
         if (v !== null) { setFee(v); try { localStorage.setItem(feeKey, String(v)); } catch { /* storage optional */ } }
       }} /></label>
       <label>最小净利 % <InputNumber aria-label="模板最小净利" value={profit} min={0} max={50} step={0.01} onChange={(v) => { if (v !== null) setProfit(v); }} /></label>
-      <span>半边成本 h={pct(recommendation.h)} · 净资金费率 {pct(recommendation.netHourly)}/小时（按当前费率估算）</span>
+      <span>半边成本 h={pct(recommendation.h)} · 净资金费率 {pct(recommendation.netHourly, 4)}/小时（按当前费率估算）</span>
     </Space>
     <p>基于历史回测，不代表未来。分钟收盘价近似中间价；样本内使用整个查询区间。样本外仅用前 2/3 拟合方向、分位和持仓时长，在后 1/3 从空仓验证。盘口成本固定为当前 h；净收益扣手续费，不计资金费实收实付。</p>
     {recommendation.netHourly === null ? <Alert type="warning" message="资金费数据不足，资金费调整按 0 估算" /> : null}
     {recommendation.insufficient ? <Alert type="info" message="数据不足：至少需要 120 个有效点且覆盖 6 小时，请扩大查询区间" /> : <div className="pair-template-grid">
       {recommendation.templates.map((item) => {
-        const values = edits[item.id] ?? item;
+        const values = displayThresholds(edits[item.id] ?? item);
         const stats = edits[item.id] ? backtest(recommendation.directed, values, recommendation.h, fee) : item.inSample;
         return <Card key={item.id} size="small" title={item.label} className={selected === item.id ? "pair-template-selected" : ""}
           extra={<Button size="small" type={selected === item.id ? "primary" : "default"} onClick={() => setSelected(item.id)}>选用</Button>}>
-          <label>开仓≥ <InputNumber aria-label={`${item.label}开仓`} value={values.open} min={-50} max={50} step={0.01} onChange={(v) => { if (v !== null) setEdits({ ...edits, [item.id]: { ...values, open: v } }); }} /> %</label>
-          <label>平仓≤ <InputNumber aria-label={`${item.label}平仓`} value={values.close} min={-50} max={50} step={0.01} onChange={(v) => { if (v !== null) setEdits({ ...edits, [item.id]: { ...values, close: v } }); }} /> %</label>
+          <label>开仓≥ <InputNumber aria-label={`${item.label}开仓`} value={values.open} min={-50} max={50} step={0.01} precision={2} onChange={(v) => { if (v !== null) setEdits({ ...edits, [item.id]: { ...values, open: v } }); }} /> %</label>
+          <label>平仓≤ <InputNumber aria-label={`${item.label}平仓`} value={values.close} min={-50} max={50} step={0.01} precision={2} onChange={(v) => { if (v !== null) setEdits({ ...edits, [item.id]: { ...values, close: v } }); }} /> %</label>
           <p>间距 {pct(values.open - values.close)} · 资金费调整 {pct(item.fundingAdjustment)}</p>
           <p>距开仓线 {recommendation.openExec === null ? "盘口不可用" : recommendation.openExec >= values.open ? "已达到" : pct(values.open - recommendation.openExec)}</p>
           <BacktestSummary label={edits[item.id] ? "样本内（手调后）" : "样本内"} value={stats} />
