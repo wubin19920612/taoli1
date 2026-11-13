@@ -189,8 +189,9 @@ class NotionalTests(FXFixture,unittest.TestCase):
         self.assertEqual(self.engine.limits.exposure(snapshot),dec('100.000'))
         # Own pending orders still enforce the unchanged hard ceiling.
         self.store.save_order(dict(intent('cap',ex='bitget',quantity='5.01'),state='UNKNOWN',filled='0'))
-        with self.assertRaisesRegex(ValueError,'total_notional_limit'):
-            self.engine.limits.check_order(self.store.order('a'))
+        for cid in ('a','b'):
+            with self.assertRaisesRegex(ValueError,'total_notional_limit'):
+                self.engine.limits.check_order(self.store.order(cid))
 
     def test_notional_requires_fx_even_with_zero_external_income(self):
         self.rows=[position('HYPERLIQUID_FUTURE_xyz:OAI_USDC')]
