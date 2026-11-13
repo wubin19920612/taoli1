@@ -836,6 +836,9 @@ class Engine:
                     self.stops.recovered(reason,'PROGRAM_ACCOUNTING_RECOVERED',
                         dict(captured_at=self.snapshot['captured_at']))
             daily,total=self.totals()
+            if same is True:
+                from .recovery import recover_observed_stops
+                recover_observed_stops(self,self.snapshot,income)
             current_day=day(self.clock())
             if self.store.meta('daily_loss_day') not in (None,current_day):
                 self.store.set_meta('daily_loss_day',None)
