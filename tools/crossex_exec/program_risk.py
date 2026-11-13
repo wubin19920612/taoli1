@@ -5,6 +5,11 @@ from .external_fx import require_fresh_fx
 from .position_values import key_currency
 
 
+# Independent account/position reads may straddle a mark-price update. Use the
+# smaller native margin as both the relative-error base and the debt ceiling.
+EXTERNAL_MARGIN_RELATIVE_TOLERANCE = dec('0.01')
+
+
 def journal_fingerprint(store):
     # New unfilled INTENT/SENT rows are admitted by the existing shared barrier.
     # Any subsequent fill/accounting change revokes the old income proof.
@@ -77,7 +82,8 @@ def debt_attribution(store,snapshot,now):
     """Exemption requires one exact exchange/coin domain used only by externals.
 
     Compare native liability with native external initial margin, cross-checked
-    against the asset's futures_initial_margin. Missing/ambiguous evidence blocks.
+    against the asset's futures_initial_margin with bounded relative read skew.
+    Debt must fit BOTH margins. Missing/ambiguous evidence still blocks.
     No cross-coin conversion, equity netting or ticker matching is permitted.
     """
     debts=snapshot['liabilities']
@@ -120,10 +126,14 @@ def debt_attribution(store,snapshot,now):
                 matched=[a for a in assets if (a['exchange_type'],a['coin'])==group]
                 if (debt.get('route')!='crossex' or debt.get('source_field')!='liability'
                         or group in mixed or amount<=0 or amount>budgets.get(group,dec(0))
-                        or len(matched)!=1 or dec(matched[0]['liability'])!=amount
-                        or dec(matched[0]['futures_initial_margin'])!=budgets[group]):
+                        or len(matched)!=1 or dec(matched[0]['liability'])!=amount):
                     raise ValueError('external_debt_unverifiable')
-                allowed.append(dict(debt,external_initial_margin=str(budgets[group])))
+                asset_margin=dec(matched[0]['futures_initial_margin'])
+                external_margin=min(asset_margin,budgets[group])
+                if (amount>external_margin or abs(asset_margin-budgets[group])>
+                        external_margin*EXTERNAL_MARGIN_RELATIVE_TOLERANCE):
+                    raise ValueError('external_debt_unverifiable')
+                allowed.append(dict(debt,external_initial_margin=str(external_margin)))
             except (KeyError,TypeError,ValueError,ArithmeticError):
                 blocked.append(debt)
     except (KeyError,TypeError,ValueError,ArithmeticError):
