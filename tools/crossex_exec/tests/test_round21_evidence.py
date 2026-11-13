@@ -118,12 +118,15 @@ class AdditionalSafetyTests(unittest.TestCase):
 
     def test_mixed_contract_funding_does_not_contaminate_program_metrics(self):
         w=self.world();w.advance();w.open();w.advance()
-        prior=w.store.meta('account_loss_current')
         w.venues[0].quantity+=3
         w.venues[0].settle('-90')
         w.advance()
-        self.assertFalse(w.store.meta('external_income')['verified'])
-        self.assertEqual(w.store.meta('account_loss_current'),prior)
+        # Mixed inventory no longer refuses global proof; the whole expense
+        # counts against the unchanged daily cap, with no external profit credit.
+        self.assertTrue(w.store.meta('external_income')['verified'])
+        self.assertEqual(w.engine.totals(), (dec(-90), dec(-90)))
+        self.assertIn('daily_loss', w.store.meta('stop_locks'))
+        self.assertFalse(w.store.meta('position_mismatch'))
         self.assertFalse(w.engine.can_open())
 
     def test_own_float_uses_journal_entry_and_mark_not_remote_pnl(self):

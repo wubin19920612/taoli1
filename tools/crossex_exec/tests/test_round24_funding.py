@@ -133,7 +133,7 @@ class AdverseFundingTests(unittest.TestCase):
                 origin = min(int(r['created_at']*1000) for r in w.store.iter_orders()
                              if '|'.join(route_symbol(r['instrument'])) == name)
                 self.assertEqual(self.intervals(w, leg)[0]['from_ms'], origin)
-                self.assertEqual(w.store.meta(OWNERSHIP_KEY)['version'], 3)
+                self.assertEqual(w.store.meta(OWNERSHIP_KEY)['version'], 4)
 
     def test_closed_uncertain_interval_and_both_endpoints_are_final_adverse_values(self):
         state = dict(contracts={'route|raw': dict(intervals=[dict(
@@ -281,14 +281,14 @@ class AdverseFundingTests(unittest.TestCase):
                 venue.settle('3'); w.advance()
                 self.assert_income(w, '1', can_open=True)
 
-    def test_overlapping_intervals_count_one_expense_and_active_interval_still_blocks(self):
+    def test_overlapping_and_active_intervals_count_one_full_expense_and_zero_income(self):
         interval = dict(from_ms=1000, to_ms=2000)
         state = dict(contracts={'route|raw': dict(intervals=[interval, dict(interval)])})
         row = dict(id='cash', symbol='raw')
         self.assertEqual(allocate_funding(state, 'route', row, 1500, dec(-1)), (dec(-1), True))
         state['contracts']['route|raw']['intervals'][1]['to_ms'] = None
-        with self.assertRaisesRegex(ValueError, 'program_funding_attribution_unverifiable'):
-            allocate_funding(state, 'route', row, 1500, dec(-1))
+        self.assertEqual(allocate_funding(state, 'route', row, 1500, dec(-1)), (dec(-1), True))
+        self.assertEqual(allocate_funding(state, 'route', row, 1500, dec(90)), (dec(0), True))
 
     def test_clean_program_retains_both_income_and_expense(self):
         w = self.world()

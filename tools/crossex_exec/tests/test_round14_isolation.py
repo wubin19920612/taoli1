@@ -72,6 +72,28 @@ class ProgramIsolationTests(IsolationFixture, unittest.TestCase):
                 self.assertEqual(self.store.meta('account_equity_current')['crossex'], self.equity)
 
     def test_own_funding_daily_and_cumulative_survive_external_profit_midnight_and_restart(self):
+        episodes = []
+        original_activity = self.accounts.activity
+        def activity(start_ms, end_ms):
+            result = original_activity(start_ms, end_ms)
+            result['bitget_position_history'] = [dict(row) for row in episodes
+                if start_ms <= int(row['updatedTime']) <= end_ms]
+            return result
+        self.accounts.activity = activity
+        def funding_episode(identity, amount):
+            # A claimed but permanently zero-fill order is no longer evidence
+            # that a later day's fee belongs to the program. Supply real fills
+            # and independent lifetime counters; keep every loss/halt assertion.
+            entry=dict(intent(identity, ex='bitget', side='sell'), pair_id=identity,
+                leg=1, position_side='short', state='TERMINAL', created_at=self.now,
+                filled='1', vwap='100', fee='0', fill_ms=int((self.now+.1)*1000), accounting_pending=False)
+            self.store.save_order(entry)
+            self.store.save_order(dict(entry, cid=identity+'-close', reduce_only=True, side='buy',
+                created_at=self.now+.9, fill_ms=int((self.now+.9)*1000)))
+            episodes.append(dict(symbol='BTCUSDT', posSide='short', positionId=identity,
+                category='USDT-FUTURES', marginCoin='USDT', totalFunding=amount,
+                createdTime=str(entry['fill_ms']), updatedTime=str(int((self.now+.9)*1000))))
+        funding_episode('first-episode', '-60')
         self.own_funding('-60')
         self.rows[0]['upnl'] = '9000'; self.equity = '10000'
         loss = self.reconcile()
@@ -85,6 +107,7 @@ class ProgramIsolationTests(IsolationFixture, unittest.TestCase):
             engine = Engine(reopened, self.market, self.accounts, clock=lambda:self.now,
                             stop_file=self.engine.stop_file)
             try:
+                funding_episode('second-episode', '-41')
                 self.own_funding('-41', 'next-day')
                 self.now += 1; engine.reconcile()
                 self.assertEqual(dec(reopened.meta('account_loss_current')['total']), -101)

@@ -66,8 +66,11 @@ class AutomaticOwnershipTests(PositionFixture, unittest.TestCase):
         self.http.responses['/api/v4/crossex/positions']=[unitree(order['instrument']['symbol'],margin_mode='CROSS')]
         with patch.object(self.engine,'start_background'):
             self.engine.startup()
-        self.assertTrue(self.store.meta('position_mismatch'))
+        self.assertFalse(self.store.meta('position_mismatch'))
         self.assertFalse(self.engine.can_open())
+        self.assertIn('program_income_unverifiable', self.store.meta('stop_locks'))
+        with self.assertRaisesRegex(ValueError, 'external_contract_forbidden'):
+            self.engine.external.check_order(order)
         self.assertFalse(self.engine.external.split(self.accounts.snapshot())['external_positions'])
 
     def test_unrelated_account_cash_and_missing_full_history_do_not_block_rebaseline(self):
@@ -127,8 +130,10 @@ class ProgramAccountingTests(unittest.TestCase):
         owned = dec(pair['remaining'][0])
         w.venues[0].quantity += dec(3)
         w.advance()
-        self.assertFalse(w.engine.can_open())
-        self.assertTrue(w.store.meta('position_mismatch'))
+        self.assertTrue(w.engine.can_open())
+        self.assertFalse(w.store.meta('position_mismatch'))
+        with self.assertRaisesRegex(ValueError, 'external_contract_forbidden'):
+            w.engine.external.check_order(next(w.store.iter_orders(reduce_only=False)))
         self.assertTrue(w.store.meta('program_contract_conflicts'))
         pair = w.store.get_pair(pair['id'])
         self.assertEqual(dec(pair['remote_remaining'][0]),owned)
