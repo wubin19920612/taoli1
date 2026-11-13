@@ -91,17 +91,15 @@ class ProgramOwnership(ExternalRegistry):
 
 
 def bounded_pair_positions(store,pair,snapshot):
-    """Bound resolved exposure by the journal; unresolved IOC keeps recovery.
-
-    Unknown orders can have fills not yet in the journal. Preserve their original
-    conservative remote recovery bound. Admission prevented outside positions on
-    that contract before the first send; resolved fills must never absorb extras.
-    """
+    """Only confirmed net fills authorize closes; unknown opens only need queries."""
     rows = list(store.iter_orders(pair_id=pair['id'],exclude_states=('SHADOW','UNSENT')))
     owned = journal_positions(store,pair_id=pair['id'])
     for row in rows:
-        if not row['reduce_only'] and row['state'] in ('INTENT','SENT','ACK','UNKNOWN'):
+        if row['reduce_only'] and row['state'] in ('INTENT','SENT','ACK','UNKNOWN'):
+            # An unresolved close may already have consumed this inventory.
+            # Reserve its unconfirmed remainder so retries cannot spend it twice.
             key='|'.join((*route_symbol(row['instrument']),row['position_side']))
-            owned[key]=owned.get(key,dec(0))+max(dec(0),dec(row['quantity'])-dec(row.get('filled',0)))
+            pending=max(dec(0),dec(row['quantity'])-dec(row.get('filled',0)))
+            owned[key]=max(dec(0),owned.get(key,dec(0))-pending)
     return dict(snapshot,positions={k:min(dec(q),owned.get(k,dec(0)))
                                    for k,q in snapshot['positions'].items()})
