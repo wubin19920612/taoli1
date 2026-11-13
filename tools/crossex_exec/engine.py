@@ -21,10 +21,10 @@ from .sizing import size_plan
 from .universe import Universe, check_mapping_ratio
 from .external import ExternalRegistry, ExternalAdmin, ExternalUnverifiable, plain
 from .external_accounting import ExternalAccounting
-from .ownership import ProgramOwnership, bounded_pair_positions, retain_crash_claims
+from .ownership import ProgramOwnership, bounded_pair_positions, retain_crash_claims, journal_positions
 from .program_accounting import ProgramAccounting, read_program_snapshot
 from .external_fx import NATIVE_USD, require_fresh_fx
-from .position_values import key_currency, notional_values, value_snapshot
+from .position_values import key_currency, notional_values, value_snapshot, usd_value
 from .program_risk import require_program_proof, program_notionals
 
 
@@ -671,6 +671,9 @@ class Engine:
         """Persist a per-position exit-price estimate before any tracking close."""
         if not all(books):
             return
+        if self.limits.program_scope:
+            self.save_program_tracking_upnl(pair,books,now)
+            return
         positions=dict((self.store.meta('last_upnl') or {}).get('positions',{}))
         entries={o['leg']:o for o in self.executor.iter_orders(pair_id=pair['id'],reduce_only=False)}
         try:
@@ -686,13 +689,38 @@ class Engine:
         except (KeyError,ValueError,TypeError):
             return
         self.roll_daily_upnl(dict(upnl=str(sum(map(dec,positions.values()),dec(0))),upnl_by_position=positions),now)
-        if self.limits.program_scope:
-            program={k:v for k,v in positions.items() if not self.external.forbidden(*k.split('|')[:2])}
+
+    def save_program_tracking_upnl(self,pair,books,now):
+        with self.store.lock:
             try:
-                self.roll_program_upnl(dict(upnl=str(sum(map(dec,program.values()),dec(0))),upnl_by_position=program),now)
-            except ExternalUnverifiable:
-                # Missing administrative epochs block opening, never reduction.
-                self.alert('external_income_unverifiable')
+                # Never seed a program observation from whole-account last_upnl.
+                # Project exact contracts, then use only their confirmed fills.
+                owned=self.external.split(dict(positions=journal_positions(self.store)),pnl=False)['positions']
+                prior=self.store.meta('program_last_upnl') or {}
+                positions={k:v for k,v in prior.get('positions',{}).items() if k in owned}
+                quantities=journal_positions(self.store,pair_id=pair['id'])
+                entries={o['leg']:o for o in self.executor.iter_orders(pair_id=pair['id'],reduce_only=False)}
+                fx=(self.store.meta('account_snapshot') or {}).get('external_fx',{})
+                for n in (0,1):
+                    key=self.position_key(pair,n)
+                    native=quantities.get(key,dec(0))
+                    if not native:
+                        positions.pop(key,None)
+                        continue
+                    entry=entries[n]
+                    multiplier=Instrument.load(entry['instrument']).multiplier
+                    price=dec(entry['vwap'])/multiplier
+                    quantity=native*multiplier
+                    mark=dec(walk(books[n].bids if n==0 else books[n].asks,quantity=quantity)['vwap'])
+                    value=quantity*(mark-price)*(1 if n==0 else -1)
+                    positions[key]=str(usd_value(value,key_currency(key),fx,now,upper=False))
+                if set(positions)!=set(owned):
+                    raise ValueError('program_position_mark_unknown')
+                self.roll_program_upnl(dict(upnl=str(sum(map(dec,positions.values()),dec(0))),
+                    upnl_by_position=positions),now)
+            except (KeyError,ValueError,TypeError,ArithmeticError):
+                # Missing program observations stop openings, never recovery.
+                self.alert('program_income_unverifiable')
 
     def reconcile_positions(self,snapshot):
         if self.limits.program_scope or self.external.records():

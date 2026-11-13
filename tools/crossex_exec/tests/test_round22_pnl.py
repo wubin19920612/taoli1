@@ -2,6 +2,7 @@
 import unittest
 
 from tools.fill_sim.core import day, dec
+from baseline_fixtures import seed_baseline
 from round15_simulator import ProgramWorld
 from test_exec import setUpModule, tearDownModule
 from test_round20_positions import unitree, ASTER
@@ -24,6 +25,7 @@ class TrackingPnlTests(unittest.TestCase):
         self.assertEqual(w.engine.totals(), (dec(0), dec(0)))
         self.assertEqual(dec(w.store.meta('program_daily_upnl')['upnl']), 0)
         self.assertNotIn('crossex|'+ASTER+'|long', w.store.meta('program_last_upnl')['positions'])
+        seed_baseline(w.store, w.now, '5')
         w.open(); w.advance()
         w.venues[0].settle('-21'); w.advance()
         self.assertEqual(w.engine.totals(), (dec(-21), dec(-21)))
