@@ -73,7 +73,9 @@ def allocate_funding(ownership,route,row,at,value):
         return value,False
     values=[]
     for interval in matches:
-        if not interval['certain']:
+        if not interval['certain'] or (value and at==interval['to_ms']):
+            # At the clean boundary the cash and quantity observations have no
+            # sub-millisecond ordering proof. Do not discount a new program loss.
             raise ValueError('program_funding_attribution_unverifiable')
         ratio=interval['upper' if value<0 else 'lower']
         own,total=dec(ratio['owned']),dec(ratio['remote'])

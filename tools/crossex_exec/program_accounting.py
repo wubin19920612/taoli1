@@ -2,7 +2,7 @@
 from tools.fill_sim.core import dec, day
 from .external import ExternalUnverifiable, plain, route_symbol
 from .external_accounting import midnight, history_index, settlement_state, BITGET_FUNDING
-from .ownership import program_contracts, journal_positions
+from .ownership import program_contracts, journal_positions, require_program_observation
 from .program_risk import journal_pnl, journal_fingerprint
 from .funding import funding_continuity, daily_continuity, certify_daily
 from .cash_identity import cash_identity, program_contract_identity
@@ -222,6 +222,8 @@ class ProgramAccounting:
             floating+=usd_value(value,coin,snapshot.get('external_fx',{}),now,upper=False)
         baseline=store.meta('program_daily_upnl')
         last=store.meta('program_last_upnl')
+        require_program_observation(store,baseline)
+        require_program_observation(store,last)
         if not baseline:
             # No external anchor is needed. A new program starts from zero;
             # historical open inventory needs a proven prior observation.

@@ -21,7 +21,8 @@ from .sizing import size_plan
 from .universe import Universe, check_mapping_ratio
 from .external import ExternalRegistry, ExternalAdmin, ExternalUnverifiable, plain
 from .external_accounting import ExternalAccounting
-from .ownership import ProgramOwnership, bounded_pair_positions, retain_crash_claims, journal_positions
+from .ownership import (ProgramOwnership, bounded_pair_positions, retain_crash_claims,
+                        journal_positions, require_program_observation)
 from .program_accounting import ProgramAccounting, read_program_snapshot
 from .external_fx import NATIVE_USD, require_fresh_fx
 from .position_values import key_currency, notional_values, value_snapshot, usd_value
@@ -637,6 +638,8 @@ class Engine:
         today=day(self.clock())
         baseline=self.store.meta('program_daily_upnl')
         last=self.store.meta('program_last_upnl')
+        require_program_observation(self.store,baseline)
+        require_program_observation(self.store,last)
         observation=dict(upnl=projection['upnl'],positions=projection['upnl_by_position'],captured_at=captured)
         if not baseline or baseline['day']!=today:
             if not last:

@@ -114,3 +114,14 @@ def bounded_pair_positions(store,pair,snapshot):
             owned[key]=max(dec(0),owned.get(key,dec(0))-pending)
     return dict(snapshot,positions={k:min(dec(q),owned.get(k,dec(0)))
                                    for k,q in snapshot['positions'].items()})
+
+
+def require_program_observation(store,observation):
+    """Reject previously persisted outside PnL; never silently rewrite an epoch."""
+    if observation is None:
+        return
+    positions=observation['positions']
+    projection=ProgramOwnership(store,lambda:0).split(dict(positions={k:dec(1) for k in positions}),pnl=False)
+    if (set(projection['positions'])!=set(positions)
+            or sum(map(dec,positions.values()),dec(0))!=dec(observation['upnl'])):
+        raise ValueError('program_baseline_unverifiable')
