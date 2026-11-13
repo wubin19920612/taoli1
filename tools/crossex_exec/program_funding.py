@@ -31,6 +31,23 @@ def _maximum_program_positions(rows):
     return result
 
 
+def funding_flat_contracts(store):
+    """Closed mixed lifecycles may leave outside inventory, not program risk.
+
+    Keep raw contract ownership/admission unchanged. This exemption is only for
+    reconciliation after a stable program-flat observation and settled orders.
+    """
+    with store.lock:
+        contracts=store.meta(OWNERSHIP_KEY,{}).get('contracts',{})
+        flat={tuple(name.split('|')) for name,record in contracts.items()
+              if any(v.get('closed_by')=='program_flat' for v in record.get('intervals',[]))
+              and all(v.get('to_ms') is not None for v in record.get('intervals',[]))}
+        flat-={tuple(k.split('|')[:2]) for k in journal_positions(store)}
+        flat-={route_symbol(r['instrument']) for r in store.iter_orders(exclude_states=('SHADOW','UNSENT'))
+               if r['state'] not in ('TERMINAL','REJECTED') or r.get('accounting_pending')}
+        return flat
+
+
 def observe_funding_ownership(store,snapshot,at,orders):
     """Persist even when history is unavailable or income certification fails."""
     with store.transaction():
@@ -85,6 +102,15 @@ def observe_funding_ownership(store,snapshot,at,orders):
                 for interval in intervals:
                     if interval['to_ms'] is None:
                         interval['to_ms']=now
+                        interval['closed_by']='program_flat' if flat else 'clean_sample'
+            for interval in intervals:
+                if interval.get('closed_by')=='program_flat' and interval['to_ms'] is not None:
+                    # Beyond the clean flat sample, remaining cash is external
+                    # until the next program entry. Include its opening ms in
+                    # program attribution even if the entry is still pending.
+                    end=interval['to_ms']
+                    interval['flat_until_ms']=min((int(float(r['created_at'])*1000) for r in rows
+                        if not r['reduce_only'] and int(float(r['created_at'])*1000)>=end),default=None)
             record=dict(old,last_ms=now,intervals=intervals)
             if stable and (not mixed or flat):
                 record['last_clean_ms']=now
@@ -99,6 +125,9 @@ def allocate_funding(ownership,route,row,at,value):
     intervals=ownership.get('contracts',{}).get(route+'|'+row['symbol'],{}).get('intervals',[])
     matches=[v for v in intervals if v['from_ms']<=at and (v['to_ms'] is None or at<=v['to_ms'])]
     if not matches:
+        if any(v.get('closed_by')=='program_flat' and v['to_ms']<at
+               and (v.get('flat_until_ms') is None or at<v['flat_until_ms']) for v in intervals):
+            return dec(0),True
         return value,False
     if any(v['to_ms'] is None for v in matches):
         raise ValueError('program_funding_attribution_unverifiable')

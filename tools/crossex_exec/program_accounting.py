@@ -8,7 +8,8 @@ from .funding import funding_continuity, daily_continuity, certify_daily
 from .cash_identity import cash_identity, program_contract_identity
 from .position_values import key_currency, usd_value, position_identity
 from .external_fx import NATIVE_USD, quote_band
-from .program_funding import ADVERSE_POLICY, OWNERSHIP_KEY, observe_funding_ownership, allocate_funding
+from .program_funding import (ADVERSE_POLICY, OWNERSHIP_KEY, observe_funding_ownership,
+                              allocate_funding, funding_flat_contracts)
 
 
 def funding_view(snapshot,contracts,orders):
@@ -160,7 +161,8 @@ class ProgramAccounting:
         ownership=store.meta(OWNERSHIP_KEY,{})
         original_journal=journal_fingerprint(store)
         daily,realized=journal_pnl(store,cutoff,fx=snapshot.get('external_fx',{}))
-        if {k:dec(q) for k,q in projection['positions'].items()}!=journal_positions(store):
+        flat=funding_flat_contracts(store)
+        if {k:dec(q) for k,q in projection['positions'].items() if tuple(k.split('|')[:2]) not in flat}!=journal_positions(store):
             # Keep openings stopped while quantities disagree. Durable ownership
             # intervals survive this failure and still apply once extras leave.
             raise ValueError('program_position_mismatch')

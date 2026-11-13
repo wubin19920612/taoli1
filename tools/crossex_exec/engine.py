@@ -748,7 +748,7 @@ class Engine:
                     self.clear_repair_locks(pair)
                 yield pair
         expected=local_positions(reconciled_pairs())
-        same=snapshot['positions']==expected
+        observed=snapshot['positions']
         if self.limits.program_scope:
             conflicts={k:dict(expected=str(expected.get(k,0)),observed=str(q),
                 reason='该合约远端仓位超出程序账本，禁止混仓；仅按程序数量减仓')
@@ -759,6 +759,10 @@ class Engine:
                     from .alerts import emit
                     emit(self.store,self.clock,'program_contract_mixed',dict(contracts=conflicts),
                          event_kind='PROGRAM_CONTRACT_MIXED',sink=self.alert_sink,status=conflicts)
+            from .program_funding import funding_flat_contracts
+            flat=funding_flat_contracts(self.store)
+            observed={k:q for k,q in observed.items() if tuple(k.split('|')[:2]) not in flat}
+        same=observed==expected
         previous=self.store.meta('position_snapshot_at',0)
         if captured>previous:
             self.store.set_meta('position_snapshot_at',captured)
