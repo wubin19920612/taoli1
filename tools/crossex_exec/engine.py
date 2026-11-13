@@ -491,16 +491,14 @@ class Engine:
             mids,bases=self.market.sample_quotes(self.settings.read()['values']['sampling_min_quote_volume_usd'])
         except Exception:
             # Even a whole-round failure invalidates the old reference set.
-            with self._lifecycle_lock:
-                if not self._closed:
-                    self.baseline.record({},bases,at=started)
+            self.baseline.record({},bases,at=started,active=lambda: not self._closed)
             raise
-        with self._lifecycle_lock:
-            if not self._closed:
-                # Never combine a delayed round with newly captured quotes.
-                if not 0<=self.clock()-started<=20:
-                    mids={}
-                self.baseline.record(mids,bases,at=started)
+        # Computation never owns the account/admission lock. Every bounded write
+        # checks _closed under that same lock, including final quote publication.
+        if not 0<=self.clock()-started<=20:
+            mids={}
+        self.baseline.record(mids,bases,at=started,active=lambda: not self._closed,
+                             quotes_valid=lambda: 0<=self.clock()-started<=20)
 
     def start_background(self,bases):
         self.bases=tuple(bases)

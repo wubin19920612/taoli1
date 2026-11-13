@@ -150,11 +150,20 @@ class PublicStore:
                 'ON CONFLICT(key) DO UPDATE SET '+','.join(k+'=excluded.'+k for k in fields)+
                 ' WHERE '+' OR '.join('baseline_state.'+k+' IS NOT excluded.'+k for k in fields),row)
 
-    def prune_baseline_states(self, bases):
+    def prune_baseline_states(self, bases, active=lambda: True):
         bases = set(bases)
-        with self.lock:
-            removed = [(r[0],) for r in self.db.execute('SELECT key FROM baseline_state') if r[0].split('|')[0] not in bases]
-            self.db.executemany('DELETE FROM baseline_state WHERE key=?',removed)
+        after = ''
+        while True:
+            with self.transaction():
+                if not active():
+                    return
+                keys = [r[0] for r in self.db.execute(
+                    'SELECT key FROM baseline_state WHERE key>? ORDER BY key LIMIT 64', (after,))]
+                self.db.executemany('DELETE FROM baseline_state WHERE key=?',
+                    ((key,) for key in keys if key.split('|')[0] not in bases))
+            if len(keys) < 64:
+                return
+            after = keys[-1]
 
     def latest_baseline(self, base):
         with self.lock:

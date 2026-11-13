@@ -3,6 +3,7 @@ import json
 import sqlite3
 import threading
 import time
+from itertools import islice
 from pathlib import Path
 from weakref import WeakValueDictionary
 from contextlib import contextmanager
@@ -59,6 +60,26 @@ class Store(PublicStore):
                 pair_key TEXT NOT NULL, bucket INTEGER NOT NULL, at REAL NOT NULL, bps TEXT NOT NULL,
                 PRIMARY KEY(pair_key,bucket));
             CREATE INDEX IF NOT EXISTS baseline_samples_at ON baseline_samples(at);
+            CREATE TABLE IF NOT EXISTS baseline_revision (
+                pair_key TEXT PRIMARY KEY, inserted INTEGER NOT NULL DEFAULT 0,
+                edited INTEGER NOT NULL DEFAULT 0, edited_at REAL);
+            CREATE TRIGGER IF NOT EXISTS baseline_insert AFTER INSERT ON baseline_samples BEGIN
+                INSERT INTO baseline_revision(pair_key,inserted) VALUES (NEW.pair_key,1)
+                ON CONFLICT(pair_key) DO UPDATE SET inserted=inserted+1;
+            END;
+            CREATE TRIGGER IF NOT EXISTS baseline_delete AFTER DELETE ON baseline_samples BEGIN
+                INSERT INTO baseline_revision(pair_key,edited,edited_at) VALUES (OLD.pair_key,1,OLD.at)
+                ON CONFLICT(pair_key) DO UPDATE SET edited=edited+1,
+                    edited_at=max(coalesce(edited_at,excluded.edited_at),excluded.edited_at);
+            END;
+            CREATE TRIGGER IF NOT EXISTS baseline_update AFTER UPDATE ON baseline_samples BEGIN
+                INSERT INTO baseline_revision(pair_key,edited,edited_at) VALUES (OLD.pair_key,1,OLD.at)
+                ON CONFLICT(pair_key) DO UPDATE SET edited=edited+1,
+                    edited_at=max(coalesce(edited_at,excluded.edited_at),excluded.edited_at);
+                INSERT INTO baseline_revision(pair_key,edited,edited_at) VALUES (NEW.pair_key,1,NEW.at)
+                ON CONFLICT(pair_key) DO UPDATE SET edited=edited+1,
+                    edited_at=max(coalesce(edited_at,excluded.edited_at),excluded.edited_at);
+            END;
             CREATE INDEX IF NOT EXISTS orders_pair ON orders(json_extract(value,'$.pair_id'));
             CREATE INDEX IF NOT EXISTS orders_state ON orders(json_extract(value,'$.state'));
             CREATE INDEX IF NOT EXISTS orders_sent ON orders(coalesce(json_extract(value,'$.sent_ms'),0));
@@ -199,10 +220,62 @@ class Store(PublicStore):
                     rows[key] = until
                     self.set_meta('pair_cooldowns', rows)
 
-    def add_baseline_samples(self, rows, now):
-        with self.transaction():
-            self.db.executemany('INSERT OR IGNORE INTO baseline_samples VALUES (?,?,?,?)', rows)
-            self.db.execute('DELETE FROM baseline_samples WHERE at < ?', (now-RETENTION_SECONDS,))
+    def add_baseline_samples(self, rows, now, active=lambda: True):
+        rows = iter(rows)
+        while True:
+            batch = list(islice(rows, 64))
+            if not batch:
+                break
+            with self.transaction():
+                if not active():
+                    return False
+                self.db.executemany('INSERT OR IGNORE INTO baseline_samples VALUES (?,?,?,?)', batch)
+        # A restart can leave millions of expired rows. Never delete them in a
+        # single account-blocking transaction. Tombstone revisions prevent ABA.
+        while True:
+            with self.transaction():
+                if not active():
+                    return False
+                removed = self.db.execute('DELETE FROM baseline_samples WHERE rowid IN '
+                    '(SELECT rowid FROM baseline_samples WHERE at < ? LIMIT 128)',
+                    (now-RETENTION_SECONDS,)).rowcount
+            if removed < 128:
+                return True
+
+    def baseline_revision(self, key):
+        with self.lock:
+            row = self.db.execute('SELECT inserted,edited,edited_at FROM baseline_revision WHERE pair_key=?',
+                                  (key,)).fetchone()
+            return tuple(row) if row else (0, 0, None)
+
+    def baseline_window(self, key, since, until, previous=None):
+        """At most 721 rows copied while locked, usually just the new bucket.
+
+        A SQLite read transaction also covers writers from other connections.
+        Backfill, raw SQL edits, time reversal and cache eviction all fall back
+        to a complete exact window. No migration scan of historical samples.
+        """
+        with self.lock:
+            own = not self.db.in_transaction
+            if not own:
+                # Never cache uncommitted data: rollback can reuse the same
+                # revision number with different rows (including in send gates).
+                return None, False, self.baseline_samples(key, since, until)
+            if own:
+                self.db.execute('BEGIN')
+            try:
+                revision = self.baseline_revision(key)
+                if (previous is not None and previous.since <= since <= previous.until <= until
+                        and revision[0] >= previous.revision[0]
+                        and (revision[1] == previous.revision[1]
+                             or revision[2] < previous.since)):
+                    rows = [r for r in self.baseline_samples(key, previous.until, until) if r[0] > previous.until]
+                    if len(rows) == revision[0]-previous.revision[0]:
+                        return revision, True, rows
+                return revision, False, self.baseline_samples(key, since, until)
+            finally:
+                if own:
+                    self.db.execute('ROLLBACK')
 
     def baseline_samples(self, key, since, until):
         with self.lock:

@@ -3,12 +3,14 @@
 No account reads, order calls or network transport. Sampling uses the existing
 public queue; SQLite retains one observation per unordered pair / 30s bucket.
 """
-from itertools import combinations
+from itertools import combinations, islice
 from statistics import median
+import threading
 import time
 
 from tools.fill_sim.core import dec
 from tools.fill_sim.exchanges import check_response
+from .baseline_cache import WindowCache, arithmetic_context
 
 
 BATCH_URLS = {
@@ -104,8 +106,16 @@ def cooldown_for(pair):
 class Baseline:
     def __init__(self, store, clock=time.time):
         self.store, self.clock = store, clock
+        self._cache = WindowCache()
+        # Only sampling rounds serialize here. Admission/status/account reads
+        # never wait for this lock, nor does Engine.close().
+        self._record_lock = threading.Lock()
 
-    def record(self, mids, bases, at=None):
+    def record(self, mids, bases, at=None, *, active=lambda: True, quotes_valid=lambda: True):
+        with self._record_lock:
+            self._record(mids, bases, at, active, quotes_valid)
+
+    def _record(self, mids, bases, at, active, quotes_valid):
         now = self.clock() if at is None else at
         # Public catalogs can contain identities unsupported by this strategy.
         # Isolate them before quotes, samples AND empty-round status writes;
@@ -121,59 +131,138 @@ class Baseline:
                 except (KeyError, TypeError, ValueError, ArithmeticError):
                     continue
         mids = clean
-        rows = []
-        for base in bases:
-            for a, b in combinations(sorted(BATCH_URLS), 2):
-                if base not in mids.get(a, {}) or base not in mids.get(b, {}):
-                    continue
-                ma, mb = dec(mids[a][base]), dec(mids[b][base])
-                if ma <= 0 or mb <= 0:
-                    continue
-                rows.append((pair_key(base,a,b), int(now//SAMPLE_SECONDS), now, str((mb/ma-1)*10000)))
-        self.store.add_baseline_samples(rows, now)
-        # Remove observations of a removed whitelist base from the API counts.
-        with self.store.transaction():
-            # Replace the entire round, including failed/empty venues. Never
-            # merge old quotes into evidence of three simultaneously observed venues.
-            self.store.set_meta('baseline_quotes', dict(at=now, mids=mids))
-            self.store.prune_baseline_states(bases)
+        def samples():
             for base in bases:
                 for a, b in combinations(sorted(BATCH_URLS), 2):
-                    self.status(base, a, b, now)
+                    if base not in mids.get(a, {}) or base not in mids.get(b, {}):
+                        continue
+                    ma, mb = dec(mids[a][base]), dec(mids[b][base])
+                    yield (pair_key(base,a,b), int(now//SAMPLE_SECONDS), now, str((mb/ma-1)*10000))
+        # Revoke references before exposing any new samples or partial results.
+        # Only a completed round can publish the captured reference set again.
+        with self.store.transaction():
+            if not active():
+                return
+            self.store.set_meta('baseline_quotes', dict(at=now, mids={}))
+        versioned = hasattr(self.store, 'baseline_window')
+        if versioned:
+            if not self.store.add_baseline_samples(samples(), now, active):
+                return
+        else:  # The existing in-memory simulator implements the original Store protocol.
+            with self.store.lock:
+                if not active():
+                    return
+                self.store.add_baseline_samples(samples(), now)
+        keys = (pair_key(base,a,b) for base in bases for a,b in combinations(sorted(BATCH_URLS), 2))
+        while True:
+            batch = list(islice(keys, 64))
+            if not batch:
+                break
+            computed = []
+            for key in batch:
+                result = self._calculate(key, now, active=active)
+                if result is None:
+                    return
+                computed.append((key, *result))
+            retry = []
+            with self.store.transaction():
+                if not active():
+                    return
+                for key, stats, revision, _ in computed:
+                    if revision is not None and self.store.baseline_revision(key) != revision:
+                        retry.append(key)
+                        continue
+                    previous = self.store.baseline_state(key)
+                    # An on-demand check may have already published a newer
+                    # window. Do not roll its latch back with this slow round.
+                    if previous.get('at', now) > now and self.clock() >= previous['at']:
+                        continue
+                    self.store.save_baseline_state(self._state(key, stats, previous, now))
+            for key in retry:
+                base, a, b = key.split('|')
+                self.status(base, a, b, now, active=active, preserve_newer=True)
+        if versioned:
+            self.store.prune_baseline_states(bases, active)
+        else:
+            with self.store.lock:
+                if not active():
+                    return
+                self.store.prune_baseline_states(bases)
+        with self.store.transaction():
+            if not active():
+                return
+            self.store.set_meta('baseline_quotes', dict(at=now, mids=mids if quotes_valid() else {}))
+
+    def _calculate(self, key, now, reverse=False, active=lambda: True):
+        since = now-WINDOW_SECONDS
+        entry = self._cache.get(key)
+        with self.store.lock:
+            if not active():
+                return None
+            if hasattr(self.store, 'baseline_window'):
+                revision, incremental, added = self.store.baseline_window(key, since, now, entry)
+            else:
+                revision, incremental = None, False
+                added = self.store.baseline_samples(key, since, now)
+        unchanged = (incremental and not added and entry.context == arithmetic_context()
+                     and (entry.stats['first_at'] is None or entry.stats['first_at'] >= since))
+        rows = None
+        if unchanged:
+            stats = dict(entry.stats)
+        else:
+            rows = ([r for r in entry.rows() if since <= r[0] <= now]+added) if incremental else added
+            values = [dec(value) for _, value in rows]
+            center = median(values) if values else None
+            mad = median([abs(v-center) for v in values]) if values else None
+            stats = dict(baseline_bps=str(center) if center is not None else None,
+                         mad_bps=str(mad) if mad is not None else None, count=len(rows),
+                         first_at=rows[0][0] if rows else None, latest_at=rows[-1][0] if rows else None)
+            if revision is not None:
+                self._cache.put(key, since, now, revision, rows, stats)
+        reversed_stats = None
+        if reverse and stats['count']:
+            if rows is None:
+                rows = entry.rows()
+            values = [(1/(1+dec(v)/10000)-1)*10000 for _, v in rows]
+            center = median(values)
+            reversed_stats = dict(baseline_bps=str(center), mad_bps=str(median(abs(v-center) for v in values)))
+        return stats, revision, reversed_stats
+
+    @staticmethod
+    def _state(key, stats, previous, now):
+        latest = stats['latest_at']
+        ready = bool(stats['count'] >= 300 and latest-stats['first_at'] >= 10800
+                     and 0 <= now-latest <= FRESH_SECONDS)
+        checked = previous.get('checked_at')
+        blocked = previous.get('blocked', False)
+        if ready and (checked is None or now < checked or now-checked >= RECHECK_SECONDS):
+            blocked = abs(dec(stats['baseline_bps'])) >= 80 or dec(stats['mad_bps']) >= 40
+            checked = now
+        return dict(stats, key=key, ready=ready, blocked=blocked, checked_at=checked, at=now)
 
     def latest(self, base):
         return self.store.latest_baseline(base)
 
-    def status(self, base, buy, sell, now=None):
+    def status(self, base, buy, sell, now=None, *, active=lambda: True, preserve_newer=False):
         now = self.clock() if now is None else now
         key = pair_key(base, buy, sell)
-        with self.store.lock:
-            rows = self.store.baseline_samples(key, now-WINDOW_SECONDS, now)
-            values = [dec(value) for _,value in rows]
-            center = median(values) if values else None
-            mad = median([abs(v-center) for v in values]) if values else None
-            latest = rows[-1][0] if rows else None
-            ready = bool(len(rows) >= 300 and latest-rows[0][0] >= 10800 and 0 <= now-latest <= FRESH_SECONDS)
-            previous = self.store.baseline_state(key)
-            checked = previous.get('checked_at')
-            blocked = previous.get('blocked', False)
-            # Missing history never clears a structural latch. Reevaluate once
-            # warm and then every ten minutes, including after restart.
-            if ready and (checked is None or now < checked or now-checked >= RECHECK_SECONDS):
-                blocked = abs(center) >= 80 or mad >= 40
-                checked = now
-            state = dict(key=key, baseline_bps=str(center) if center is not None else None,
-                         mad_bps=str(mad) if mad is not None else None, count=len(rows),
-                         first_at=rows[0][0] if rows else None, latest_at=latest,
-                         ready=ready, blocked=blocked, checked_at=checked, at=now)
-            self.store.save_baseline_state(state)
-        if buy > sell and values:
-            # Reversing a ratio is not just negating bp; transform observations
-            # before the median (including the even-sample case).
-            reverse = [(1/(1+v/10000)-1)*10000 for v in values]
-            value = median(reverse)
-            state = dict(state, baseline_bps=str(value), mad_bps=str(median(abs(v-value) for v in reverse)))
-        return state
+        for _ in range(3):
+            result = self._calculate(key, now, buy > sell, active)
+            if result is None:
+                return None
+            stats, revision, reversed_stats = result
+            with self.store.transaction() if revision is not None else self.store.lock:
+                if not active():
+                    return None
+                if revision is not None and self.store.baseline_revision(key) != revision:
+                    continue
+                previous = self.store.baseline_state(key)
+                if preserve_newer and previous.get('at', now) > now and self.clock() >= previous['at']:
+                    return previous
+                state = self._state(key, stats, previous, now)
+                self.store.save_baseline_state(state)
+            return dict(state, **reversed_stats) if reversed_stats else state
+        raise ValueError('baseline_changed')
 
     def require(self, base, buy, sell):
         now = self.clock()

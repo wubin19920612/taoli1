@@ -1,17 +1,18 @@
 """Bounded baseline work must not own the account/admission lock for a round."""
 from concurrent.futures import ThreadPoolExecutor
+from decimal import localcontext
 from itertools import combinations
 from pathlib import Path
 import random
 import tempfile
 import threading
-import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from tools.crossex_exec import baseline as module
 from tools.crossex_exec.baseline import Baseline, BATCH_URLS, pair_key
+from tools.crossex_exec.baseline_cache import WindowCache
 from tools.crossex_exec.engine import Engine
 from tools.crossex_exec.storage import Store
 from round27_fixtures import LegacyBaseline
@@ -176,6 +177,150 @@ class BaselineTests(unittest.TestCase):
         engine.market.sample_quotes = delayed
         engine.refresh_baselines()
         self.assertEqual(self.baseline.latest('BTC')['mids'], {})
+
+    def test_warm_window_reads_only_new_buckets_and_unchanged_round_skips_statistics(self):
+        self.seed(('BTC',))
+        self.baseline.status('BTC', 'binance', 'bitget')
+        self.legacy.status('BTC', 'binance', 'bitget')
+        observed = []
+        original = self.store.baseline_samples
+
+        def read(*args):
+            rows = original(*args)
+            observed.append(len(rows))
+            return rows
+
+        key = pair_key('BTC', 'binance', 'bitget')
+        self.now += 30
+        for store in (self.store, self.old):
+            store.add_baseline_samples([(key, int(self.now//30), self.now, '0.000000000000000000000000001')], self.now)
+        with patch.object(self.store, 'baseline_samples', side_effect=read):
+            self.assertEqual(self.baseline.status('BTC', 'binance', 'bitget'),
+                             self.legacy.status('BTC', 'binance', 'bitget'))
+        self.assertLessEqual(max(observed), 2)
+        with patch.object(module, 'median', side_effect=AssertionError('unchanged_window_recalculated')):
+            self.baseline.status('BTC', 'binance', 'bitget')
+
+    def test_cache_eviction_stays_within_budget_and_recovers_from_database(self):
+        self.baseline._cache = WindowCache(32*1024)
+        self.seed(('BTC', 'ETH'))
+        self.compare(('BTC', 'ETH'))
+        self.assertLessEqual(self.baseline._cache.bytes, 32*1024)
+        self.assertLess(len(self.baseline._cache.entries), 30)
+        self.compare(('BTC', 'ETH'))
+
+    def test_rolled_back_observation_cannot_poison_reused_database_revision(self):
+        key = pair_key('BTC', 'binance', 'bitget')
+        with self.assertRaisesRegex(RuntimeError, 'rollback'):
+            with self.store.transaction():
+                self.store.add_baseline_samples([(key, int(NOW//30), NOW, '79')], NOW)
+                self.assertEqual(self.baseline.status('BTC', 'binance', 'bitget')['baseline_bps'], '79')
+                raise RuntimeError('rollback')
+        for store in (self.store, self.old):
+            store.add_baseline_samples([(key, int(NOW//30), NOW, '0')], NOW)
+        self.compare(('BTC',))
+
+    def test_sample_changed_during_statistics_retries_without_publishing_stale_result(self):
+        self.seed(('BTC',), 361)
+        key = pair_key('BTC', 'binance', 'bitget')
+        original = module.median
+        changed = []
+
+        def mutate(values):
+            if not changed:
+                changed.append(True)
+                for store in (self.store, self.old):
+                    store.db.execute('UPDATE baseline_samples SET bps=? WHERE pair_key=?', ('80', key))
+            return original(values)
+
+        with patch.object(module, 'median', mutate):
+            self.assertEqual(self.baseline.status('BTC', 'binance', 'bitget'),
+                             self.legacy.status('BTC', 'binance', 'bitget'))
+        self.assertTrue(self.store.baseline_state(key)['blocked'])
+
+    def test_failed_calculation_leaves_reference_set_revoked(self):
+        engine = self.engine(('BTC',))
+        engine.refresh_baselines()
+        self.assertTrue(self.baseline.latest('BTC')['mids'])
+        self.now += 30
+        with patch.object(module, 'median', side_effect=RuntimeError('statistics_failed')):
+            with self.assertRaises(RuntimeError):
+                engine.refresh_baselines()
+        self.assertEqual(self.baseline.latest('BTC')['mids'], {})
+
+    def test_retention_is_batched_and_closed_callback_stops_before_more_writes(self):
+        key = pair_key('BTC', 'binance', 'bitget')
+        rows = [(key, int((NOW-90000-n*30)//30), NOW-90000-n*30, '0') for n in range(400)]
+        self.store.db.executemany('INSERT INTO baseline_samples VALUES (?,?,?,?)', rows)
+        calls = []
+
+        def active():
+            calls.append(True)
+            return len(calls) == 1
+
+        self.assertFalse(self.store.add_baseline_samples([], NOW, active))
+        self.assertEqual(self.store.db.execute('SELECT count(*) FROM baseline_samples').fetchone()[0], 272)
+        self.store.add_baseline_samples([], NOW)
+        self.assertEqual(self.store.db.execute('SELECT count(*) FROM baseline_samples').fetchone()[0], 0)
+
+    def test_decimal_context_and_noncanonical_imports_never_reuse_wrong_statistics(self):
+        key = pair_key('BTC', 'binance', 'bitget')
+        rows = [(key, int((NOW-n*30)//30), NOW-n*30, value) for n, value in enumerate(
+            ('1.12345678901234567890123456789', '2.12345678901234567890123456789'))]
+        for store in (self.store, self.old):
+            store.add_baseline_samples(rows, NOW)
+        for precision in (28, 12, 38):
+            with localcontext() as context:
+                context.prec = precision
+                self.compare(('BTC',))
+        for store in (self.store, self.old):
+            store.db.execute('UPDATE baseline_samples SET bps=? WHERE pair_key=?', ('1\n', key))
+        self.compare(('BTC',))
+        self.compare(('BTC',))
+
+    def test_empty_combinations_do_not_displace_windows_and_entry_limit_is_independent(self):
+        self.seed(('BTC',), 1)
+        with patch('tools.crossex_exec.baseline_cache.CACHE_ENTRIES', 3):
+            self.compare(('BTC',))
+            self.assertEqual(len(self.baseline._cache.entries), 3)
+            self.compare(('EMPTY',))
+            self.assertEqual(len(self.baseline._cache.entries), 3)
+
+    def test_computation_delay_revokes_quotes_without_retimestamping_samples(self):
+        engine = self.engine(('BTC',))
+        original = module.median
+        delayed = []
+
+        def slow(values):
+            if not delayed:
+                delayed.append(True)
+                self.now += 21
+            return original(values)
+
+        with patch.object(module, 'median', slow):
+            engine.refresh_baselines()
+        self.assertEqual(self.baseline.latest('BTC'), dict(at=NOW, mids={}))
+        self.assertEqual(self.store.baseline_state(pair_key('BTC', 'binance', 'bitget'))['latest_at'], NOW)
+
+    def test_round_retry_cannot_overwrite_a_newer_on_demand_window(self):
+        self.seed(('BTC',), 361)
+        key = pair_key('BTC', 'binance', 'bitget')
+        original = self.baseline._calculate
+        changed = []
+        newer = []
+
+        def calculate(identity, *args, **kwargs):
+            result = original(identity, *args, **kwargs)
+            if identity == key and not changed:
+                changed.append(True)
+                self.now += 30
+                self.store.add_baseline_samples([(key, int(self.now//30), self.now, '81')], self.now)
+                newer.append(Baseline(self.store, lambda: self.now).status('BTC', 'binance', 'bitget'))
+            return result
+
+        with patch.object(self.baseline, '_calculate', side_effect=calculate):
+            self.baseline.record({}, ('BTC',), at=NOW)
+        self.assertEqual(self.store.baseline_state(key), newer[0])
 
 
 if __name__ == '__main__':
