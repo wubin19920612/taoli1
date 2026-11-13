@@ -13,6 +13,7 @@ from .external_fx import NATIVE_USD, quote_band, upper_contribution
 from .program_risk import journal_pnl, journal_fingerprint
 from .position_values import key_currency, usd_value
 from .funding import funding_positions, funding_continuity, daily_continuity, certify_daily
+from .cash_identity import cash_identity, program_contract_identity
 
 BITGET_FUNDING = frozenset(('CONTRACT_MAIN_SETTLE_FEE_USER_IN','CONTRACT_MAIN_SETTLE_FEE_USER_OUT'))
 BITGET_TRADING = frozenset(('OPEN_LONG','OPEN_SHORT','CLOSE_LONG','CLOSE_SHORT','BUY_DEAL','SELL_DEAL'))
@@ -60,14 +61,14 @@ def program_activity(store,activity,captured,anchor=None):
     start,end=activity['from_ms'],activity['to_ms']
     if start>midnight(captured)*1000 or end<int(captured*1000):
         raise ValueError('history_coverage')
-    owned=set()
+    owned={}
     expected,actual=defaultdict(lambda:dec(0)),defaultdict(lambda:dec(0))
     @lru_cache(maxsize=64)
     def entries(pair_id):
         return {r['leg']:r for r in store.iter_orders(pair_id=pair_id,reduce_only=False) if r.get('vwap')}
     for row in store.iter_orders(exclude_states=('SHADOW','UNSENT')):
         key=route_symbol(row['instrument'])
-        owned.add(key)
+        owned[key]=program_contract_identity(row['instrument']) if key[0]=='crossex' else None
         if row['state'] not in ('TERMINAL','REJECTED') or row.get('accounting_pending'):
             raise ValueError('program_accounting_pending')
         value=-dec(row.get('fee') or 0)
@@ -94,8 +95,7 @@ def program_activity(store,activity,captured,anchor=None):
         key=('crossex',row['symbol'])
         if key not in owned:
             continue
-        if row['coin']!='USDT' or not row['symbol'].startswith(row['exchange_type']+'_FUTURE_'):
-            raise ValueError('program_cash_identity')
+        cash_identity(row,owned[key])
         kind=row['statement_type']
         value=dec(row['change'])
         if kind in ('TRANSACTION','TRADING_FEE'):
@@ -377,9 +377,10 @@ class ExternalAccounting:
                 native[coin]+=sign*amount
                 if amount and coin not in NATIVE_USD:
                     required.add(coin)
-        owned=set()
+        owned={}
         for row in self.store.iter_orders(exclude_states=('SHADOW','UNSENT')):
-            owned.add(route_symbol(row['instrument']))
+            key=route_symbol(row['instrument'])
+            owned[key]=program_contract_identity(row['instrument']) if key[0]=='crossex' else None
         epoch=int(anchor['captured_at']*1000)
         funding=dec(0)
         ledger=defaultdict(lambda:dec(0))
@@ -397,8 +398,7 @@ class ExternalAccounting:
                 raise ValueError('unattributed_cashflow')
             if symbol in external:
                 i=external[symbol]
-                if row['exchange_type']!=i['exchange_type'] or row['coin']!=i['quote']:
-                    raise ValueError('cash_identity')
+                cash_identity(row,i)
                 if row['id'] not in anchor['history_index']['crossex_book']:
                     coin=i['quote']
                     cash_by_currency[coin]+=value
@@ -413,8 +413,7 @@ class ExternalAccounting:
                         if value>0:
                             raise ValueError('liquidation_fee_sign')
             elif ('crossex',symbol) in owned:
-                if row['coin']!='USDT' or not symbol.startswith(row['exchange_type']+'_FUTURE_'):
-                    raise ValueError('program_cash_identity')
+                cash_identity(row,owned[('crossex',symbol)])
                 if kind=='FUNDING_FEE' and at>=midnight(captured)*1000:
                     funding+=value
             else:

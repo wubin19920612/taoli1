@@ -10,6 +10,7 @@ from tools.fill_sim.core import dec
 from .accounts import remote_positions
 from .position_values import position_identity
 from .external import route_symbol, digest
+from .cash_identity import cash_identity
 
 
 DAILY_PROOF_VERSION = 1
@@ -151,7 +152,7 @@ def funding_continuity(store,anchor,snapshot):
             kind=row['statement_type' if route=='crossex' else 'type']
             if kind not in ('FUNDING_FEE','CONTRACT_MAIN_SETTLE_FEE_USER_IN','CONTRACT_MAIN_SETTLE_FEE_USER_OUT'):
                 continue
-            i=position_identity(route,row['symbol'],row)
+            i=cash_identity(row) if route=='crossex' else position_identity(route,row['symbol'],row)
             if row['coin']!=i['quote']:
                 raise ValueError('funding_currency_mismatch')
             key='|'.join((route,row['symbol'],row['coin']))

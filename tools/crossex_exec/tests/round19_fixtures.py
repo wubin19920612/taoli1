@@ -2,6 +2,7 @@
 from tools.fill_sim.core import dec
 from round15_simulator import ProgramWorld
 from test_round11_external import ExternalFixture, SYMBOL, position
+from test_round12_fx import quotes
 
 
 BINANCE = 'BINANCE_FUTURE_OPENAI_USDT'
@@ -15,6 +16,7 @@ class ObservedFixture(ExternalFixture):
                          ('HYPERLIQUID', 'USDC'): dec(1000),
                          ('LIGHTER', 'USDC'): dec(100)}
         super().setUp()
+        self.market.spot_fx = lambda coins: {coin: quotes(self.now, coin=coin) for coin in coins}
         self.now += 100
         self.catalog((BINANCE, SYMBOL))
         self.change(symbol=BINANCE)
