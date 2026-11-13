@@ -24,7 +24,7 @@ from .external_accounting import ExternalAccounting
 from .ownership import (ProgramOwnership, bounded_pair_positions, retain_crash_claims,
                         journal_positions, require_program_observation)
 from .program_accounting import ProgramAccounting, read_program_snapshot
-from .flatness import flat_projection
+from .flatness import flat_projection, FINAL_FLAT_LOCKS
 from .external_fx import NATIVE_USD, require_fresh_fx
 from .position_values import key_currency, notional_values, value_snapshot, usd_value
 from .program_risk import require_program_proof, program_notionals
@@ -1510,7 +1510,7 @@ class Engine:
                         raise ValueError('flatten_snapshot_stale')
                     with self.executor.lock,self.store.lock:
                         try:
-                            projection=flat_projection(self.external,raw,program_scope=self.limits.program_scope,
+                            projection=flat_projection(self.external,dict(raw,captured_at=captured),program_scope=self.limits.program_scope,
                                 executor=self.executor,pnl=False)
                             program_flat=not projection['positions']
                         except ValueError as error:
@@ -1529,8 +1529,9 @@ class Engine:
                         if program_flat:
                             # HALTING ticks need no PnL certificate to prove a
                             # successful final position read. Never release HALTED.
-                            for lock in ('flatten_retry_pending','flatten_snapshot_unavailable'):
-                                self.stops.recovered(lock,'CLOSE_OBSERVATION_RECOVERED',status)
+                            for lock in sorted(FINAL_FLAT_LOCKS):
+                                self.stops.recovered(lock,'CLOSE_OBSERVATION_RECOVERED',
+                                    dict(status,reason=lock,flatten_reason=reason))
                 except Exception:
                     status=dict(status,verified=False,program_flat=False,account_flat=False)
                     self.store.set_meta('flatten_status',status)

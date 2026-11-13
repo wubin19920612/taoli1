@@ -8,7 +8,7 @@ from .program_risk import debt_attribution
 from .funding import certify_daily
 from .ownership import ProgramOwnership
 from .program_accounting import read_program_snapshot, ProgramAccounting
-from .flatness import require_local_flat, flat_projection
+from .flatness import require_local_flat, flat_projection, FLATTEN_LOCKS
 
 
 POSITION_LOCKS = frozenset(('position_mismatch','unhedged_position','repair_stopped',
@@ -37,12 +37,13 @@ class EquityAdmin:
         self.store,self.accounts,self.engine,self.clock=store,accounts,engine,clock
         self.program_scope=engine.limits.program_scope if engine else scope=='program' or bool(store.meta('external_contracts',{}))
 
-    def local_flat(self):
+    def local_flat(self,*,recover_flatten=False):
         engine,store=self.engine,self.store
         if engine and (engine.executor.pending_writes or engine.executor.owned):
             raise ValueError('local_orders_pending')
         locks=engine.stops.reasons if engine else store.meta('stop_locks',{})
-        if store.meta('position_mismatch') or POSITION_LOCKS.intersection(locks):
+        blockers=POSITION_LOCKS-FLATTEN_LOCKS if recover_flatten else POSITION_LOCKS
+        if store.meta('position_mismatch') or blockers.intersection(locks):
             raise ValueError('position_or_order_lock')
         require_local_flat(store,engine.executor if engine else None)
 
@@ -58,7 +59,10 @@ class EquityAdmin:
                 raise ValueError('confirmation_required')
             if state in ('HALTED','HALTING'):
                 raise ValueError('halted_requires_release')
-        self.local_flat()
+        # A persisted HALTED process has no more coordinator ticks. Only these
+        # two read/retry latches may proceed to the SAME fresh flat proof below.
+        # All other position/order locks still refuse before any epoch change.
+        self.local_flat(recover_flatten=release_halt)
 
     def read_flat_accounts(self):
         started=self.clock()
@@ -166,10 +170,19 @@ class EquityAdmin:
                     risk_pnl_baseline=self.pnl_offset(fx=snapshot.get('external_fx',{})) if self.program_scope else self.pnl_offset())
                 cause=halt_reason(store) if release_halt else None
                 locks={k:set(v) for k,v in (engine.stops.reasons if engine else store.meta('stop_locks',{})).items()}
+                recovered_flatten=[]
                 if release_halt:
-                    # ONLY equity halt latches belong to this administrative action.
+                    # Equity halt release is explicit. Stale flatten latches
+                    # additionally require the just-completed flat account proof.
                     for key in ('account_equity_drop','total_loss'):
                         locks.pop(key,None)
+                    for key in sorted(FLATTEN_LOCKS):
+                        owners=locks.get(key,set())
+                        if 'global' in owners:
+                            owners.remove('global')
+                            recovered_flatten.append(key)
+                            if not owners:
+                                locks.pop(key)
                 audit=dict(old=old,new=new,at=self.clock(),captured_at=captured,reason=reason,
                            source=source,halt_reason=cause,revision=revision+1)
                 external_projection=(flat_projection(ProgramOwnership(store,self.clock),snapshot,program_scope=True)
@@ -214,6 +227,9 @@ class EquityAdmin:
                         store.set_meta('stop_locks',{k:sorted(v) for k,v in locks.items()})
                         preferred=store.meta('stop_reason')
                         store.set_meta('stop_reason',preferred if preferred in locks else next(iter(locks),None))
+                        for key in recovered_flatten:
+                            store.event('CLOSE_OBSERVATION_RECOVERED',dict(reason=key,captured_at=captured,
+                                source=source,program_flat=True,equity_revision=revision+1))
                     store.event('HALT_RELEASED' if release_halt else 'EQUITY_REBASELINED',audit)
                     if not 0<=self.clock()-captured<=10:
                         raise ValueError('account_snapshot_stale')

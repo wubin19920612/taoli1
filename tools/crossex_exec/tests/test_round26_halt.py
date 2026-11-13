@@ -135,6 +135,46 @@ class HaltRecoveryTests(unittest.TestCase):
         self.assertNotIn('flatten_snapshot_unavailable', w.engine.stops.reasons)
         release(w)
 
+    def test_offline_flatten_recovery_audit_failure_rolls_back_epoch_and_locks(self):
+        w = world(self, opened=False)
+        w.engine.alert('flatten_snapshot_unavailable')
+        w.store.set_meta('state', 'HALTED')
+        w.store.set_meta('halt_reason', 'total_loss')
+        admin = EquityAdmin(w.store, w.accounts, clock=lambda:w.now)
+        original = w.store.event
+        revision = w.store.meta('equity_baseline_revision', 0)
+        baseline = w.store.meta('account_equity_baseline')
+
+        def event(kind, *args, **kwargs):
+            if kind == 'CLOSE_OBSERVATION_RECOVERED':
+                raise OSError('recovery audit failed')
+            return original(kind, *args, **kwargs)
+
+        with patch.object(w.store, 'event', side_effect=event), self.assertRaises(OSError):
+            admin.apply(confirm='total_loss', reason='retry', source='cli', release_halt=True)
+        self.assertEqual(w.store.meta('state'), 'HALTED')
+        self.assertEqual(w.store.meta('equity_baseline_revision', 0), revision)
+        self.assertEqual(w.store.meta('account_equity_baseline'), baseline)
+        self.assertIn('flatten_snapshot_unavailable', w.store.meta('stop_locks'))
+        admin.apply(confirm='total_loss', reason='retry', source='cli', release_halt=True)
+        self.assertEqual(w.store.meta('state'), 'RUNNING')
+
+    def test_persisted_flatten_lock_does_not_bypass_pending_orders_or_real_inventory(self):
+        for fault in ('pending', 'inventory'):
+            with self.subTest(fault=fault):
+                w = world(self)
+                if fault == 'pending':
+                    w.engine.close_pair(w.store.pairs(active=True)[0], 'completed_close')
+                    order = next(w.store.iter_orders(reduce_only=True))
+                    w.store.save_order(dict(order, accounting_pending=True))
+                w.engine.alert('flatten_snapshot_unavailable')
+                w.store.set_meta('state', 'HALTED')
+                w.store.set_meta('halt_reason', 'total_loss')
+                with self.assertRaisesRegex(ValueError, 'local_orders_pending|local_positions'):
+                    release(w)
+                self.assertEqual(w.store.meta('state'), 'HALTED')
+                self.assertIn('flatten_snapshot_unavailable', w.store.meta('stop_locks'))
+
 
 if __name__ == '__main__':
     unittest.main()

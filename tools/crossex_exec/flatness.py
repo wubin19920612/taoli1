@@ -3,6 +3,12 @@ from tools.fill_sim.core import dec
 from .ownership import journal_positions
 
 
+FLATTEN_LOCKS = frozenset(('flatten_retry_pending','flatten_snapshot_unavailable'))
+FINAL_FLAT_LOCKS = FLATTEN_LOCKS | frozenset(('unknown_order','unknown_close','accounting_pending',
+    'fills_pending','entry_accounting_unknown','negative_local_position','close_incomplete',
+    'unknown_exposure_unavailable'))
+
+
 def require_local_flat(store, executor=None):
     if executor and (executor.pending_writes or executor.owned):
         raise ValueError('local_orders_pending')
@@ -30,6 +36,12 @@ def flat_projection(registry, snapshot, *, program_scope, executor=None, pnl=Tru
     ProgramOwnership.check_order continues to reject the mixed raw contract.
     """
     require_local_flat(registry.store,executor)
+    latest=max((max(float(row.get('fill_observed_at',0)),float(row.get('fill_ms') or 0)/1000,
+                    float(row.get('terminal_ms') or 0)/1000)
+                for row in registry.store.iter_orders(exclude_states=('SHADOW','UNSENT'))
+                if dec(row.get('filled',0))>0),default=0)
+    if snapshot['captured_at']<latest:
+        raise ValueError('account_snapshot_stale')
     projection=registry.split(snapshot,pnl=pnl)
     if program_scope:
         projection=dict(projection,positions={},external_positions=dict(snapshot['positions']))
