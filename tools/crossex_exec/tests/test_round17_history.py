@@ -86,7 +86,11 @@ class EmptyHistoryTests(unittest.TestCase):
                 http.request.return_value = ((None if null else []) if index<3 else
                     dict(list=None,cursor=None) if null else dict(list=[],cursor=''))
                 with self.subTest(endpoint=index, null=null):
-                    if null:
+                    if null and index == 3:
+                        # Observed on production 2026-11-13: Bitget history-position
+                        # returns {"list":null,"cursor":null} for an empty window.
+                        self.assertEqual(call(CrossEx(http),Bitget(http)), [])
+                    elif null:
                         with self.assertRaises(APIError): call(CrossEx(http),Bitget(http))
                     else:
                         value = call(CrossEx(http),Bitget(http))

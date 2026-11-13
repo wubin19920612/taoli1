@@ -68,11 +68,11 @@ class RealShapeTests(unittest.TestCase):
             self.assertEqual(len(read_bitget(http, path, 2)), 2)
             self.assertEqual(len(http.calls), 2)
 
-    def test_null_list_exception_stays_financial_only_and_requires_both_keys(self):
+    def test_null_list_exception_stays_financial_and_positions_only_and_requires_both_keys(self):
         for path in BITGET_PATHS:
             with self.subTest(path=path):
                 http = Pages([dict(list=None, cursor=None)])
-                if path == FINANCIAL:
+                if path in (FINANCIAL, POSITIONS):
                     self.assertEqual(read_bitget(http, path), [])
                 else:
                     with self.assertRaises(APIError): read_bitget(http, path)
@@ -165,3 +165,17 @@ class CrossExShapeTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+class ObservedPositionHistoryNullTests(unittest.TestCase):
+    def test_position_history_null_null_terminal_on_first_and_final_page(self):
+        for prefix in ([], [dict(list=[row(POSITIONS, 1)], cursor='next')]):
+            with self.subTest(pages=len(prefix)+1):
+                http = Pages(prefix+[dict(list=None, cursor=None)])
+                self.assertEqual(len(Bitget(http).position_history(100, 200)), len(prefix))
+                self.assertEqual(len(http.calls), len(prefix)+1)
+
+    def test_position_history_null_list_with_cursor_still_rejected(self):
+        for data in (dict(list=None, cursor=''), dict(list=None, cursor='more'), {'list':None}):
+            with self.subTest(shape=str(data)):
+                with self.assertRaises(APIError): Bitget(Pages([data])).position_history(100, 200)

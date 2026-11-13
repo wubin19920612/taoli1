@@ -11,14 +11,17 @@ MAX_PAGES = 1024
 MAX_ROWS = 250000
 READ_SECONDS = 8
 WINDOW_MS = 30*86400000
-NULL_TERMINAL_ENDPOINTS = frozenset(('/api/v3/account/financial-records',))
+# Both observed on the production UTA account (2026-11-13) for empty windows.
+NULL_TERMINAL_ENDPOINTS = frozenset(('/api/v3/account/financial-records',
+                                    '/api/v3/position/history-position'))
 
 
 def page_rows(data, endpoint, *, cursor, limit):
     """Parse successful Transport data; do not turn malformed data into zero.
 
     UTA empty arrays with explicit null cursors are observed terminal pages.
-    Only financial-records has an observed null LIST/null cursor exception.
+    Only financial-records and history-position have the observed null LIST/null
+    cursor exception.
     Transport must validate the outer success code BEFORE returning this data.
     """
     if cursor and (not isinstance(data,dict) or 'list' not in data):
