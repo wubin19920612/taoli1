@@ -8,6 +8,7 @@ from .funding import funding_continuity, daily_continuity, certify_daily
 from .cash_identity import cash_identity, program_contract_identity
 from .position_values import key_currency, usd_value, position_identity
 from .external_fx import NATIVE_USD, quote_band
+from .program_funding import OWNERSHIP_KEY, observe_funding_ownership, allocate_funding
 
 
 def funding_view(snapshot,contracts,orders):
@@ -52,6 +53,13 @@ def read_program_snapshot(accounts,store,clock):
     started=clock()
     first=accounts.snapshot()
     cutoff=clock()
+    ownership_failure=None
+    try:
+        observe_funding_ownership(store,first,cutoff,orders)
+    except (ValueError,KeyError,TypeError,ArithmeticError):
+        # Keep the raw account/FX observation available for diagnostics and
+        # physical protection; invalid ownership cannot certify program income.
+        ownership_failure=dict(condition='program_ownership_observation_failed')
     activity=dict(from_ms=int(start*1000),to_ms=int(cutoff*1000),complete=True,
         crossex_book=[],bitget_book=[],crossex_trades=[],crossex_position_history=[],bitget_position_history=[])
     snapshot=first
@@ -59,6 +67,7 @@ def read_program_snapshot(accounts,store,clock):
         try:
             activity=accounts.program_activity(contracts,int(start*1000),int(cutoff*1000))
             snapshot=accounts.snapshot()
+            observe_funding_ownership(store,snapshot,clock(),orders)
             if _program_state(first,contracts)!=_program_state(snapshot,contracts):
                 activity=dict(activity,complete=False,failure=dict(condition='program_settlement_changed_during_read'))
         except Exception as error:
@@ -66,6 +75,8 @@ def read_program_snapshot(accounts,store,clock):
             diagnostic=error.diagnostic if isinstance(error,HistoryError) else dict(
                 condition='program_funding_read_failed',**error_details(error))
             activity=dict(activity,complete=False,failure=diagnostic)
+    if ownership_failure:
+        activity=dict(activity,complete=False,failure=ownership_failure)
     return dict(snapshot,captured_at=started,accounting_at=cutoff,activity=activity,
                 program_contracts=[list(k) for k in sorted(contracts)],program_origin=origin)
 
@@ -126,7 +137,7 @@ class ProgramAccounting:
                 'funding_counter_ledger_mismatch','funding_lifetime_missing','program_funding_lifetime_missing',
                 'funding_collection_counter_conflict','funding_late_checkpoint_history',
                 'program_funding_incomplete','program_history_revised_or_missing','program_snapshot_superseded',
-                'program_position_mismatch',
+                'program_position_mismatch','program_funding_attribution_unverifiable',
                 'program_accounting_pending','program_position_mark_unknown','program_baseline_unverifiable'}
             failure.diagnostic=dict(stage='program_income_verification',
                 condition=str(error) if str(error) in safe else 'program_evidence_invalid')
@@ -146,11 +157,12 @@ class ProgramAccounting:
                 or day(cutoff)!=day(now) or activity['to_ms']!=int(cutoff*1000)):
             raise ValueError('program_funding_incomplete')
         revision=store.meta('equity_baseline_revision',0)
+        ownership=store.meta(OWNERSHIP_KEY,{})
         original_journal=journal_fingerprint(store)
         daily,realized=journal_pnl(store,cutoff,fx=snapshot.get('external_fx',{}))
         if {k:dec(q) for k,q in projection['positions'].items()}!=journal_positions(store):
-            # A merged lifetime's funding cannot be split by user/program after
-            # the fact. Preserve the last verified metrics until reconciled.
+            # Keep openings stopped while quantities disagree. Durable ownership
+            # intervals survive this failure and still apply once extras leave.
             raise ValueError('program_position_mismatch')
         index=history_index(activity,self._history_hashes)
         previous=store.meta('program_verified_history',{})
@@ -175,6 +187,7 @@ class ProgramAccounting:
             for r in store.iter_orders(exclude_states=('SHADOW','UNSENT'))
             if route_symbol(r['instrument'])[0]=='crossex'}
         funding=daily_funding=dec(0)
+        estimated=False
         required=set(snapshot.get('margin_coverage',{}).get('currencies',()))-NATIVE_USD
         required|={key_currency('|'.join((*route_symbol(r['instrument']),r['position_side'])))
                    for r in store.iter_orders(exclude_states=('SHADOW','UNSENT')) if dec(r.get('filled',0))}
@@ -192,6 +205,8 @@ class ProgramAccounting:
                         raise ValueError('program_funding_identity')
                 coin=row['coin']
                 required.add(coin)
+                value,allocated=allocate_funding(ownership,route,row,at,value)
+                estimated=estimated or allocated
                 value=usd_value(value,coin,snapshot.get('external_fx',{}),now,upper=False)
                 funding+=value
                 if day(at/1000)==day(cutoff):
@@ -227,6 +242,8 @@ class ProgramAccounting:
             program_total=str(realized+total_funding+floating),program_upnl=str(floating),
             program_funding=str(daily_funding),program_funding_total=str(total_funding),
             program_journal=original_journal,funding_verified=True,funding_daily_verified=True,
+            funding_attribution='observed_quantity_ratio_estimate' if estimated else 'exclusive_program',
+            funding_attribution_estimated=estimated,funding_ownership_revision=ownership.get('revision',0),
             external_fx=fx,valuation='public_spot_lower_bound' if fx else 'native_usd',
             external_cash=None,external_contribution=None,equity_daily=None,
             external_cash_by_currency={},external_contribution_by_currency={})
@@ -243,6 +260,7 @@ class ProgramAccounting:
                     or original_anchor!=store.meta('program_funding_anchor')
                     or original_checkpoint!=store.meta('program_funding_checkpoint')
                     or previous!=store.meta('program_verified_history',{})
+                    or ownership!=store.meta(OWNERSHIP_KEY,{})
                     or not 0<=self.clock()-captured<=10):
                 raise ValueError('program_snapshot_superseded')
             store.set_meta('program_funding_anchor',anchor)

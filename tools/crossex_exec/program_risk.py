@@ -54,6 +54,7 @@ def require_program_proof(store,snapshot,now):
             or store.meta('account_snapshot_error')
             or value.get('revision')!=store.meta('external_attribution_revision',0)
             or value.get('equity_revision')!=store.meta('equity_baseline_revision',0)
+            or value.get('funding_ownership_revision',0)!=store.meta('program_funding_ownership',{}).get('revision',0)
             or value.get('day')!=day(now) or not 0<=now-value.get('captured_at',0)<=10
             or value.get('program_journal')!=journal_fingerprint(store)):
         raise ValueError('external_income_unverifiable')
