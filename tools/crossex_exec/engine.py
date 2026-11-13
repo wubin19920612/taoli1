@@ -726,7 +726,7 @@ class Engine:
 
     def reconcile_positions(self,snapshot):
         if self.limits.program_scope or self.external.records():
-            snapshot=self.external.split(snapshot)
+            snapshot=self.external.split(snapshot,pnl=False)
         captured=snapshot['captured_at']
         if (self.executor.pending_writes or next(self.executor.iter_orders(states=NONTERMINAL),None) is not None
                 or next(self.executor.iter_orders(accounting_pending=True),None) is not None):
@@ -767,13 +767,15 @@ class Engine:
                 self.store.set_meta('position_mismatch',True)
                 self.store.set_meta('position_match_streak',0)
                 self.alert('position_mismatch')
-            elif self.store.meta('position_mismatch') or self.store.meta('stop_reason')=='position_mismatch':
+            elif self.store.meta('position_mismatch') or 'position_mismatch' in self.stops.reasons:
+                # The flag may already be clear after a crash. The durable lock
+                # still needs recovery even when another reason owns the UI.
                 streak=self.store.meta('position_match_streak',0)+1
                 self.store.set_meta('position_match_streak',streak)
                 if streak>=3:
                     self.store.set_meta('position_mismatch',False)
-                    self.stops.discard('position_mismatch')
-                    self.store.event('POSITION_MATCH_RECOVERED',dict(consecutive=streak,captured_at=captured))
+                    self.stops.recovered('position_mismatch','POSITION_MATCH_RECOVERED',
+                        dict(consecutive=streak,captured_at=captured))
         if same:
             for reason in ('unknown_order','unknown_close','accounting_pending','fills_pending','entry_accounting_unknown'):
                 self.stops.discard(reason)

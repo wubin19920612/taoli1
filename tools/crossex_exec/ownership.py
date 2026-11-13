@@ -81,8 +81,14 @@ class ProgramOwnership(ExternalRegistry):
                           external_positions=external,ownership_mode='local_order_history')
             if pnl:
                 floating = snapshot.get('upnl_by_position',{})
+                if not isinstance(floating,dict) or any(k not in floating for k in result['positions']):
+                    raise ExternalUnverifiable('program_income_unverifiable')
                 program = {k:floating[k] for k in result['positions']}
-                result.update(upnl_by_position=program,upnl=str(sum(map(dec,program.values()),dec(0))),
+                try:
+                    upnl = str(sum(map(dec,program.values()),dec(0)))
+                except (ValueError,TypeError,ArithmeticError):
+                    raise ExternalUnverifiable('program_income_unverifiable') from None
+                result.update(upnl_by_position=program,upnl=upnl,
                     external_upnl_by_position={k:floating.get(k) for k in external},
                     external_upnl=None)  # observation only; never a risk input
             return result
