@@ -3157,3 +3157,68 @@ Python 3.10 fill_sim: Ran 158 tests in 33.626s — OK
 只提交本轮两个实现文件、新测试和交接/验收文件；原有工作区产物未清理。被忽略的 `output/crossex-r28-logdir.txt`、`output/validate-round28.py`、`output/document-round28.py` 和临时目录中的日志/范围审计保留，不入库。没有未跟踪的非忽略任务文件、凭据或数据库需要提交。
 
 按当前协作约束未委派代理；验收为源码自审、Git/AST 审计和本地全量测试，不声称独立终审或服务器验证。下一模块/独立终审应另开任务，先读本节、任务书与验收 JSON；服务器影子验收须遵守新任务授权范围。
+
+
+<a id="round29"></a>
+
+## 第二十九轮（2026-11-13，外部负债保证金读取时序容差）
+
+### 范围、基线与小步提交
+
+先读本交接第二十七、二十八轮，按 [第二十九轮任务书](crossex-exec-round29-2026-11-13.md) 修复外部负债归属的保证金交叉校验。固定工作树 `C:/Users/wubin/Desktop/code/codex/taoli1/.worktrees/crossex-exec-r8`，分支 `codex/crossex-exec-r8`。起始 HEAD `5a2fa20e365e54250199ee0c83c1ae642c0f803a`，工作区干净，与远端同步。
+
+| 提交 | 内容 |
+|---|---|
+| `db49648` | 测试先行，复现真实 USDC 空仓保证金读取偏差、保守覆盖边界与告警抖动 |
+| `2134c1b` | 为保证金交叉校验加入相对 1% 容差，负债始终受两份保证金较小值约束 |
+
+最终代码/测试验收提交为 `2134c1bc50e169c613846401975dfa1dcbcc48a3`。本节与验收 JSON 单独提交；推送目标固定 `origin codex/crossex-exec-r8`，普通推送回执与交接提交号见最终报告。
+
+### 实现与业务边界
+
+- 唯一生产修改为 `tools/crossex_exec/program_risk.py` 的 `debt_attribution`，新增命名常量 `EXTERNAL_MARGIN_RELATIVE_TOLERANCE = Decimal('0.01')`；常量不放入 `limits.py`，不增加运行时可调入口。
+- 令 `A` 为资产 `futures_initial_margin`、`P` 为同一 `(exchange_type, coin)` 组内外部持仓 `initial_margin` 之和、`M = min(A, P)`。只有 `abs(A - P) <= M * 0.01` 且 `0 < liability <= M` 才允许归属外部负债。容差以较小值为分母、两种读取顺序对称，恰好 1% 接受；没有绝对金额保底、float 转换或负债覆盖容差。
+- 返回的 `external_initial_margin` 也使用 `M`，不把较高一侧当作已证明的债务覆盖额度。任务书数值 `266.5940728 / 266.6139872` 的差额为 `0.0199144`，负债 `146.85` 可归属；负债 `266.5940729` 即使低于较高值仍 blocking。
+- 原生币种、完整 route/raw symbol/DEX 和资产负债精确匹配规则保留；不跨币种或交易所合并、不用权益抵债。同组程序仓位及 `INTENT/SENT/ACK/UNKNOWN` 订单、超过容差、缺字段、重复资产、非有限或非法金额仍 blocking。无关组的订单不被误算为该组混仓。
+- 告警代码未改，沿用 `external_liability_active`。容差内的保证金来回变化不再让归属在 external/blocking 间跳转，因此 active key 保持；20 次金额/保证金波动加 SQLite 关闭重开只推送一次外部负债告警，没有停开/恢复告警。既有一小时提醒与真实清债后再次负债的新事件提醒保留，不把实际超容差风险静默吞掉。
+- 真实超容差仍触发 `account_liability`；恢复仍要求连续三份不同、时效合格的快照。重放同一快照不增加计数，其他原因的锁保留，未改变开仓、下单、减仓或人工解锁路径。
+
+### 测试先行与范围审计
+
+新增 `tools/crossex_exec/tests/test_round29_debt.py` 共 **15 个测试方法**。生产修改前原始红灯为 `Ran 15 tests in 0.399s` / `FAILED (failures=16)`，退出码 1，无导入或夹具异常；实现后同组为 `Ran 15 tests in 0.431s` / `OK`。
+
+回归覆盖真实 `HYPERLIQUID_FUTURE_io:OAI_USDC` 空仓/快照 3460、双向偏差、1% 精确边界、小额/大额比例、负债超过较小值、缺失/非法/非有限保证金、身份冲突与重复资产、同组多个外部合约累加、币种/交易所隔离、同组程序仓位和四种在途订单状态、告警去重及文件重启、真实清债和三份快照恢复。
+
+相对起始提交，原有 **127 个 crossex_exec 测试及 fill_sim 文件** Git 对象全部未变，无删测、跳过或放宽。AST 审计确认生产代码仅改变 `debt_attribution`；两个变化 Python 文件通过 3.10 语法解析。`limits.py`、`execution.py`、`transport.py`、`adapters.py`、`admission.py`、`accounts.py`、`engine.py`、`alerts.py`、`stops.py`、`ownership.py`、`equity.py`、`flatness.py`、`background.py`、`policy.py`、`program_accounting.py`、`settings.py` 均未改。
+
+### 双版本全量验收与原始汇总
+
+四套完整测试串行运行，无过滤或跳过：
+
+```text
+python -m unittest discover -s tools/crossex_exec/tests -v
+python -m unittest discover -s tools/fill_sim/tests -v
+```
+
+Python 3.12.10：`C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe`。
+
+Python 3.10.20：`C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe`，即用户指定解释器。
+
+```text
+Python 3.12 crossex_exec: Ran 817 tests in 228.756s — OK
+Python 3.12 fill_sim: Ran 158 tests in 30.788s — OK
+Python 3.10 crossex_exec: Ran 817 tests in 239.656s — OK
+Python 3.10 fill_sim: Ran 158 tests in 32.910s — OK
+```
+
+四次退出码均为 0，无 skip。两个解释器的 INVARIANTS 与 PROGRAM_INVARIANTS 均通过 `20261111 / 20261112 / 20261113` 三种子：每个 INVARIANTS 种子 2712 轮（2400 随机轮），十项不变量各检查 2712 次；每个 PROGRAM_INVARIANTS 种子 12 个场景。
+
+完整命令、解释器版本、最终代码提交、原始汇总块、日志 SHA256、全部模拟器输出、范围审计与红/绿灯记录见 [第二十九轮验收 JSON](crossex-exec-r29-validation-2026-11-13.json)。原始日志通过 subprocess 二进制输出保存于 `C:\Users\wubin\AppData\Local\Temp\crossex-r29-ny2drlun`，未经过 PowerShell 文本重写。
+
+### 线上状态、产物与下一任务
+
+按用户明确要求，全程使用 Windows 原生 Python；未运行 WSL，未访问服务器、真实账户或交易接口，没有线上备份、部署或健康检查。任务书提供的影子版本及线上现象未重新核验，推送不代表线上验收或实盘授权。
+
+本轮只提交一个生产文件、一个新测试文件以及交接/验收文件；已有 `output/` 产物原样保留。新产物 `output/crossex-r29-logdir.txt`、`output/validate-round29.py`、`output/audit-round29.py`、`output/document-round29.py` 及临时目录日志/审计被忽略，未提交数据库或凭据。最终非忽略工作区状态及远端同步由推送后检查确认。
+
+按当前协作限制未委派代理；验收为源码自审、Git/AST 范围审计与本地全量测试，不声称独立终审。下一模块或独立终审另开任务，先读本节、任务书与验收 JSON；如需服务器影子验证，在新的授权范围内确认快照连续性、停开/恢复次数与告警频率。
