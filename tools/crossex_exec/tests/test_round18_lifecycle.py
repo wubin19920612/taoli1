@@ -21,7 +21,7 @@ from tools.crossex_exec.accounts import Accounts
 from tools.crossex_exec.adapters import Bitget, CrossEx
 from tools.crossex_exec.engine import Engine
 from tools.crossex_exec.storage import Store
-from test_exec import setUpModule, tearDownModule
+from test_exec import intent, setUpModule, tearDownModule
 from round18_fixtures import OfflineAccountHTTP, OPEN, POSITIONS, FINANCIAL
 
 
@@ -106,6 +106,28 @@ class LifecycleTests(unittest.TestCase):
         self.assertTrue(all(method=='GET' for method,_,_ in self.http.calls))
         with Store(self.path) as reopened:
             self.assertTrue(reopened.meta('flatten_status')['program_flat'])
+            # POSITIONS is Bitget's history-position endpoint. Keep the empty
+            # program assertions above, then exercise it through an owned,
+            # confirmed zero-fill lifecycle (still no remote orders/sends).
+            reopened.save_order(dict(intent('history-owner', ex='bitget'), leg=0,
+                state='TERMINAL', filled='0', fee='0', vwap=None, fill_ms=None, accounting_pending=False))
+            engine = Engine(reopened, self.market, accounts, config=self.config,
+                            stop_file=self.config['CROSSEX_STOP_FILE'])
+            try:
+                engine.startup()
+                self.stop_workers(engine)
+                engine.refresh_accounts()
+                engine.tick()
+                self.assertTrue(reopened.meta('external_income')['verified'])
+                with patch.object(cli, 'emit'):
+                    self.assertEqual(cli.finish_shutdown(engine), 0)
+                self.assertTrue(reopened.meta('flatten_status')['program_flat'])
+            finally:
+                engine.close()
+                self.stop_workers(engine)
+        paths = {p for _,p,_ in self.http.calls}
+        self.assertIn(POSITIONS,paths)
+        self.assertTrue(all(method=='GET' for method,_,_ in self.http.calls))
 
     @contextmanager
     def offline_cli(self, sleep=None):
