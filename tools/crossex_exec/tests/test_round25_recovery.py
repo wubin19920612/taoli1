@@ -106,6 +106,44 @@ class RecoveryTests(unittest.TestCase):
         self.assertNotIn('halting_startup_account_unavailable', w.store.meta('stop_locks'))
         self.assertTrue(w.engine.can_open())
 
+    def test_successful_slow_refresh_cannot_be_stranded_by_account_ttl(self):
+        w = self.world()
+        pair = w.store.pairs(active=True)[0]
+        w.engine.close_pair(pair, 'funding_unknown'); w.advance()
+        w.store.pair(dict(w.store.get_pair(pair['id']), id='older_funding_unknown'))
+        w.engine.alert('funding_refresh_failed')
+        def refresh(instruments):
+            w.now += 6
+            return w.funding(instruments)
+        with patch.object(w.market, 'current_funding', side_effect=refresh):
+            w.advance()
+        self.assertNotIn('funding_refresh_failed', w.store.meta('stop_locks'))
+        # An expired PnL certificate still blocks until a new account sample.
+        for _ in range(3):
+            w.advance()
+        self.assertTrue(w.engine.can_open())
+
+    def test_unrelated_open_pair_does_not_strand_a_finished_close_lock(self):
+        w = self.world()
+        pair = w.store.pairs(active=True)[0]
+        w.store.pair(dict(pair, id='finished_close', state='CLOSED', exit_reason='unknown_close',
+                          remaining=['0','0'], remote_remaining=['0','0']))
+        w.engine.alert('close_incomplete')
+        w.advance()
+        self.assertNotIn('close_incomplete', w.store.meta('stop_locks'))
+        self.assertTrue(w.engine.can_open())
+
+    def test_malformed_funding_and_stale_pricing_cannot_release_their_locks(self):
+        w = self.world()
+        w.engine.alert('funding_refresh_failed'); w.engine.alert('exit_pricing_unavailable')
+        with patch.object(w.market, 'current_funding', return_value=[]):
+            with patch.object(w.market, 'books', return_value=[None, None]):
+                w.advance()
+        self.assertIn('funding_refresh_failed', w.store.meta('stop_locks'))
+        self.assertIn('exit_pricing_unavailable', w.store.meta('stop_locks'))
+        w.advance()
+        self.assertTrue(w.engine.can_open())
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from tools.fill_sim.core import dec
-from tools.crossex_exec.program_funding import OWNERSHIP_KEY, allocate_funding
+from tools.crossex_exec.program_funding import OWNERSHIP_KEY, allocate_funding, observe_funding_ownership
 from round15_simulator import ProgramWorld
 from test_exec import setUpModule, tearDownModule
 
@@ -112,6 +112,30 @@ class FundingScopeTests(unittest.TestCase):
         for _ in range(3):
             w.advance()
         self.assert_income(w, '0')
+
+    def test_roundtrip_between_flat_samples_keeps_every_program_expense(self):
+        w = self.world(); venue = w.venues[0]
+        w.engine.close_pair(w.store.pairs(active=True)[0], 'first_close'); w.advance(3601)
+        w.open(); venue.settle('-1')
+        w.engine.close_pair(w.store.pairs(active=True)[0], 'second_close'); w.advance()
+        self.assert_income(w, '-1')
+        w.restart(); w.advance()
+        self.assert_income(w, '-1')
+
+    def test_changed_journal_and_stale_samples_cannot_extend_flat_interior(self):
+        w = self.world()
+        w.engine.close_pair(w.store.pairs(active=True)[0], 'ordinary_close'); w.advance(3601)
+        old_orders = list(w.store.iter_orders())
+        flat_snapshot = w.accounts.snapshot(); flat_at = w.now
+        w.open()
+        observe_funding_ownership(w.store, flat_snapshot, w.now+1, old_orders)
+        state = w.store.meta(OWNERSHIP_KEY)
+        for record in state['contracts'].values():
+            self.assertEqual(record['flat_periods'][-1]['last_flat_ms'], int(flat_at*1000))
+        w.advance(2)
+        state = w.store.meta(OWNERSHIP_KEY)
+        observe_funding_ownership(w.store, flat_snapshot, flat_at, list(w.store.iter_orders()))
+        self.assertEqual(w.store.meta(OWNERSHIP_KEY), state)
 
 
 if __name__ == '__main__':
