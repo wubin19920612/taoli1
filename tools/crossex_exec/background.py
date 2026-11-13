@@ -27,6 +27,26 @@ def exception_details(error):
     return dict(error_type=kind, location=exception_location(error))
 
 
+ACCOUNT_FAILURE_REASONS = frozenset(('crossex_account_mode_mismatch','crossex_equity_invalid',
+    'crossex_margin_unit_mismatch','bitget_margin_invalid','bitget_account_mode_mismatch',
+    'account_liability_unknown','positions_unknown','position_direction_unknown',
+    'position_margin_mode_unknown','duplicate_remote_position','position_mark_missing',
+    'account_snapshot_stale','external_catalog_unavailable','external_identity_unverifiable'))
+
+
+def account_failure_details(error):
+    # Equality against local literals only. Never call str/repr, inspect the
+    # response, or walk the exception chain, even for an unexpected exception.
+    from .transport import APIError
+    reason='account_refresh_unavailable'
+    if isinstance(error,APIError):
+        reason='account_request_failed'
+    elif type(error) is ValueError and len(error.args)==1 and type(error.args[0]) is str:
+        if error.args[0] in ACCOUNT_FAILURE_REASONS:
+            reason=error.args[0]
+    return dict(exception_details(error),reason=reason)
+
+
 class SnapshotCache:
     def __init__(self, clock=time.time, store=None):
         self.clock=clock

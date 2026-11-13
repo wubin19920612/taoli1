@@ -2,9 +2,11 @@
 from .external import digest
 
 
-def emit(store,clock,reason,values,*,event_kind=None,sink=None,status=None,new_incident=False,active_key=None):
+def emit(store,clock,reason,values,*,event_kind=None,sink=None,status=None,new_incident=False,active_key=None,cause=None):
     owner=values.get('pair_id','global') if reason in ('unhedged_position','repair_stopped') else 'global'
     key=reason+'|'+owner
+    if cause is not None:
+        key+='|'+cause
     now=clock()
     signature=digest(status)
     with store.transaction():

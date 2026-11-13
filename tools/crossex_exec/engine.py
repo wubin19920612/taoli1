@@ -12,7 +12,7 @@ from .accounts import local_positions, position_attributes
 from .policy import Instrument, review, exit_reason, risk_decision, limit_price, send_review
 from .execution import Executor, NONTERMINAL
 from .limits import HardLimits, DEFAULT_VAR
-from .background import SnapshotCache, PeriodicWorker
+from .background import SnapshotCache, PeriodicWorker, account_failure_details
 from .stops import StopLocks
 from .baseline import Baseline
 from .admission import OpeningLimits, AdmissionError, BOOK_RETRIES, book_skew_ms, SKIP_REASONS
@@ -77,13 +77,14 @@ class Engine:
     def alert(self,reason,*,details=None,event_kind=None):
         with self._alert_lock:
             values=details or {}
-            if self.limits.program_scope:
+            if self.limits.program_scope or 'account_failure' in values:
                 from .alerts import emit
                 owner=values.get('pair_id','global') if reason in ('unhedged_position','repair_stopped') else 'global'
                 incident=owner not in self.stops.reasons.get(reason,())
                 self.stops.add(reason,owner)
                 emit(self.store,self.clock,reason,values,event_kind=event_kind,
                      sink=self.alert_sink,new_incident=incident,
+                     cause=values.get('account_failure',{}).get('reason'),
                      status={name:{k:v for k,v in values[name].items() if k in
                          ('stage','route','endpoint','page','condition','error_kind','http_status','api_code')}
                          for name in ('activity_failure','income_failure') if name in values} or None)
@@ -322,7 +323,9 @@ class Engine:
                     self.last_reconcile=0
                     self.account_cache.invalidate()
                     self.preserve_account_failure(error)
-                    self.store.event('ACCOUNT_REFRESH_FAILED')
+                    diagnostic=account_failure_details(error)
+                    self.store.event('ACCOUNT_REFRESH_FAILED',diagnostic)
+                    self.alert('account_snapshot_unavailable',details=dict(account_failure=diagnostic))
 
     def preserve_account_failure(self,error):
         evidence=getattr(error,'account_snapshot',None)
