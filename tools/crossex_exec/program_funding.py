@@ -19,7 +19,7 @@ def observe_funding_ownership(store,snapshot,at,orders):
         current=list(store.iter_orders(exclude_states=('SHADOW','UNSENT')))
         stable=orders==current
         previous=store.meta(OWNERSHIP_KEY,{})
-        state=dict(previous,version=1,contracts=dict(previous.get('contracts',{})))
+        state=dict(previous,version=2,contracts=dict(previous.get('contracts',{})))
         now=int(at*1000)
         for contract in sorted(program_contracts(store)):
             name='|'.join(contract)
@@ -45,7 +45,8 @@ def observe_funding_ownership(store,snapshot,at,orders):
                     # Already verified rows at the inclusive boundary keep their
                     # previous allocation; late rows at that millisecond do not.
                     history=store.meta('program_verified_history',{}).get(contract[0]+'_book',{})
-                    active=dict(from_ms=start,to_ms=None,lower=ratio,upper=ratio,certain=certain,
+                    active=dict(from_ms=start,first_mixed_ms=now,to_ms=None,
+                                lower=ratio,upper=ratio,certain=certain,
                                 prior_ids=sorted(k for k,v in history.items() if v['at']>=start))
                     intervals.append(active)
                 else:
@@ -77,9 +78,21 @@ def allocate_funding(ownership,route,row,at,value):
             # At the clean boundary the cash and quantity observations have no
             # sub-millisecond ordering proof. Do not discount a new program loss.
             raise ValueError('program_funding_attribution_unverifiable')
+        first,last=interval.get('first_mixed_ms'),interval.get('observed_ms')
+        if (type(first) is not int or type(last) is not int
+                or not interval['from_ms']<=first<=last
+                or interval['to_ms'] is not None and last>interval['to_ms']):
+            # Legacy intervals did not retain their first mixed observation.
+            # A later sample cannot reconstruct that missing entry boundary.
+            raise ValueError('program_funding_attribution_unverifiable')
         ratio=interval['upper' if value<0 else 'lower']
         own,total=dec(ratio['owned']),dec(ratio['remote'])
         if not 0<=own<total:
             raise ValueError('program_funding_attribution_unverifiable')
-        values.append(value*own/total)
+        # The first/last mixed observations bracket only the mixed interior.
+        # Between clean and mixed samples the program may pay the entire fee.
+        # Keep observed endpoint/prior-ID semantics and the clean-end refusal
+        # above; positive cash always takes the smallest observed mixed share.
+        gap=interval['from_ms']<at<first or last<at
+        values.append(value if value<0 and gap else value*own/total)
     return min(values),True
