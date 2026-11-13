@@ -324,3 +324,21 @@ class Accounts:
                     raise ValueError('bitget_risk_units_unconfirmed')
             elif dec(self.leverages.get(i.symbol,0))!=3:
                 raise ValueError('crossex_leverage_mismatch')
+
+    def program_activity(self,contracts,start_ms,end_ms):
+        """Only funding and independent counters for exact program symbols.
+
+        Bill endpoints document type filters, not symbol filters. Filter exact
+        symbols locally as well; never infer that a requested symbol was honored.
+        """
+        result=dict(from_ms=start_ms,to_ms=end_ms,complete=False,crossex_trades=[])
+        for route,venue in (('crossex',self.cross),('bitget',self.bitget)):
+            symbols={symbol for r,symbol in contracts if r==route}
+            result[route+'_book']=([r for r in venue.funding_records(start_ms,end_ms)
+                                   if r.get('symbol') in symbols] if symbols else [])
+            rows=[]
+            for symbol in sorted(symbols):
+                rows.extend(r for r in venue.position_history(start_ms,end_ms,symbol=symbol)
+                            if r.get('symbol')==symbol)
+            result[route+'_position_history']=rows
+        return dict(result,complete=True)

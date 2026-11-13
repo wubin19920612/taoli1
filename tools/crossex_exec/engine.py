@@ -21,6 +21,8 @@ from .sizing import size_plan
 from .universe import Universe, check_mapping_ratio
 from .external import ExternalRegistry, ExternalAdmin, ExternalUnverifiable, plain
 from .external_accounting import ExternalAccounting, read_snapshot
+from .ownership import ProgramOwnership, bounded_pair_positions, journal_positions
+from .program_accounting import ProgramAccounting, read_program_snapshot
 from .external_fx import NATIVE_USD, require_fresh_fx
 from .position_values import key_currency, notional_values, value_snapshot
 from .program_risk import require_program_proof, program_notionals
@@ -70,6 +72,9 @@ class Engine:
         self.account_cache=SnapshotCache(clock,store)
         self.stops=StopLocks(store)
         self.limits=HardLimits(store,self.account_cache.read,config,alert=self.alert,clock=clock)
+        if self.limits.program_scope:
+            self.external=ProgramOwnership(store,clock)
+            self.external_accounting=ProgramAccounting(store,self.external,clock)
         self.executor=Executor(store,{'crossex':accounts.cross,'bitget':accounts.bitget},live=live,
                                can_open=self.can_open,check_order=self.check_order,check_pair=self.check_pair,
                                check_release=self.check_release,alert=self.alert,clock=clock)
@@ -380,7 +385,11 @@ class Engine:
                 self._equity_admin_active=True
             try:
                 self.invalidate_external_income('external_admin_pending')
-                return ExternalAdmin(self.store,self.accounts,engine=self,clock=self.clock).apply(**kwargs)
+                result=ExternalAdmin(self.store,self.accounts,engine=self,clock=self.clock).apply(**kwargs)
+                if self.limits.program_scope and not isinstance(self.external,ProgramOwnership):
+                    self.external=ProgramOwnership(self.store,self.clock)
+                    self.external_accounting=ProgramAccounting(self.store,self.external,self.clock)
+                return result
             finally:
                 with self.store.lock:
                     self._equity_admin_active=False
@@ -394,7 +403,7 @@ class Engine:
             self.store.set_meta('external_income',dict(verified=False,reason=reason,at=self.clock()))
 
     def read_account_snapshot(self):
-        snapshot=(read_snapshot(self.accounts,self.store,self.clock) if self.limits.program_scope
+        snapshot=(read_program_snapshot(self.accounts,self.store,self.clock) if self.limits.program_scope
                   else self.accounts.snapshot())
         currencies={r['identity']['quote'] for r in self.external.records().values()}-NATIVE_USD
         try:
@@ -680,7 +689,7 @@ class Engine:
                 self.alert('external_income_unverifiable')
 
     def reconcile_positions(self,snapshot):
-        if self.external.records():
+        if self.limits.program_scope or self.external.records():
             snapshot=self.external.split(snapshot)
         captured=snapshot['captured_at']
         if (self.executor.pending_writes or next(self.executor.iter_orders(states=NONTERMINAL),None) is not None
@@ -701,7 +710,18 @@ class Engine:
                     self.save_remote(pair,snapshot)
                     self.clear_repair_locks(pair)
                 yield pair
-        same=snapshot['positions']==local_positions(reconciled_pairs())
+        expected=local_positions(reconciled_pairs())
+        same=snapshot['positions']==expected
+        if self.limits.program_scope:
+            conflicts={k:dict(expected=str(expected.get(k,0)),observed=str(q),
+                reason='该合约远端仓位超出程序账本，禁止混仓；仅按程序数量减仓')
+                for k,q in snapshot['positions'].items() if dec(q)>expected.get(k,dec(0))}
+            if conflicts!=self.store.meta('program_contract_conflicts',{}):
+                self.store.set_meta('program_contract_conflicts',conflicts)
+                if conflicts:
+                    from .alerts import emit
+                    emit(self.store,self.clock,'program_contract_mixed',dict(contracts=conflicts),
+                         event_kind='PROGRAM_CONTRACT_MIXED',sink=self.alert_sink,status=conflicts)
         previous=self.store.meta('position_snapshot_at',0)
         if captured>previous:
             self.store.set_meta('position_snapshot_at',captured)
@@ -773,6 +793,9 @@ class Engine:
                     dict(captured_at=self.snapshot['captured_at']))
                 self.stops.recovered('external_income_unverifiable','EXTERNAL_INCOME_RECOVERED',
                     dict(captured_at=self.snapshot['captured_at']))
+                for reason in ('external_baseline_unverifiable','history_coverage','program_income_unverifiable'):
+                    self.stops.recovered(reason,'PROGRAM_ACCOUNTING_RECOVERED',
+                        dict(captured_at=self.snapshot['captured_at']))
             daily,total=self.totals()
             current_day=day(self.clock())
             if self.store.meta('daily_loss_day') not in (None,current_day):
@@ -823,7 +846,9 @@ class Engine:
             self.risk='STOP'
         except ExternalUnverifiable as error:
             self.risk='STOP'
-            reason='external_identity_unverifiable' if str(error) in ('external_identity_unverifiable','external_catalog_unavailable') else 'external_income_unverifiable'
+            reason=('program_income_unverifiable' if isinstance(self.external_accounting,ProgramAccounting)
+                    else 'external_identity_unverifiable' if str(error) in ('external_identity_unverifiable','external_catalog_unavailable')
+                    else 'external_income_unverifiable')
             details={}
             if self.snapshot.get('activity',{}).get('failure'):
                 details['activity_failure']=self.snapshot['activity']['failure']
@@ -1074,6 +1099,8 @@ class Engine:
         return list(map(dec,pair.get('remote_remaining',pair['remaining'])))
 
     def save_remote(self,pair,snapshot):
+        if self.limits.program_scope:
+            snapshot=bounded_pair_positions(self.store,pair,snapshot)
         quantities=[str(dec(snapshot['positions'].get(self.position_key(pair,n),0))*Instrument.load(pair['instruments'][n]).multiplier) for n in (0,1)]
         if any(dec(q)<0 for q in quantities):
             raise ValueError('negative_remote_position')

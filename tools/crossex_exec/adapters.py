@@ -135,9 +135,14 @@ class CrossEx:
     def positions(self):
         return self.http.request('GET','/api/v4/crossex/positions',group='position')
 
-    def position_history(self,start_ms,end_ms):
+    def funding_records(self,start_ms,end_ms):
+        return history(self.http,'crossex','/api/v4/crossex/account_book',start_ms,end_ms,
+            key=lambda r:r['id'],limit=1000,filters=dict(statement_type='FUNDING_FEE'))
+
+    def position_history(self,start_ms,end_ms,*,symbol=None):
         return history(self.http,'crossex','/api/v4/crossex/history_positions',start_ms,end_ms,
-            key=lambda r:(r['position_id'],r['update_time'],r['closed_type']),limit=1000)
+            key=lambda r:(r['position_id'],r['update_time'],r['closed_type']),limit=1000,
+            filters=dict(symbol=symbol) if symbol else None)
 
     def open_orders(self):
         # Documented complete current list; no symbol/venue filter may hide debt
@@ -220,9 +225,17 @@ class Bitget:
         return history(self.http,'bitget','/api/v3/account/financial-records',start_ms,end_ms,
                        key=lambda r:r['id'],limit=100,cursor=True)
 
-    def position_history(self,start_ms,end_ms):
+    def funding_records(self,start_ms,end_ms):
+        rows=[]
+        for kind in ('CONTRACT_MAIN_SETTLE_FEE_USER_IN','CONTRACT_MAIN_SETTLE_FEE_USER_OUT'):
+            rows.extend(history(self.http,'bitget','/api/v3/account/financial-records',start_ms,end_ms,
+                key=lambda r:r['id'],limit=100,cursor=True,filters=dict(type=kind)))
+        return rows
+
+    def position_history(self,start_ms,end_ms,*,symbol=None):
         return history(self.http,'bitget','/api/v3/position/history-position',start_ms,end_ms,
-                       key=lambda r:r['positionId'],limit=100,cursor=True)
+                         key=lambda r:r['positionId'],limit=100,cursor=True,
+                         filters=dict(symbol=symbol) if symbol else None)
 
     def settings(self):
         return self.http.request('GET','/api/v3/account/settings',group='account')

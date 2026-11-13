@@ -12,7 +12,7 @@ def journal_fingerprint(store):
                    if dec(r.get('filled',0)) or r['state'] in ('TERMINAL','REJECTED')])
 
 
-def journal_pnl(store, now):
+def journal_pnl(store, now, *, fx=None):
     entries={}
     for r in store.iter_orders(reduce_only=False,exclude_states=('SHADOW','UNSENT')):
         if dec(r.get('filled',0)):
@@ -30,6 +30,11 @@ def journal_pnl(store, now):
         value=-dec(r['fee'])
         if qty and r['reduce_only']:
             value+=qty*(dec(r['vwap'])-entries[(r['pair_id'],r['leg'])])*(1 if r['leg']==0 else -1)
+        if fx is not None and value:
+            from .external import route_symbol
+            from .position_values import usd_value
+            coin=key_currency('|'.join((*route_symbol(r['instrument']),r['position_side'])))
+            value=usd_value(value,coin,fx,now,upper=False)
         total+=value
         if day((r.get('fill_ms') or r['created_at']*1000)/1000)==day(now):
             daily+=value
@@ -59,10 +64,12 @@ def require_program_proof(store,snapshot,now):
 
 
 def program_notionals(store,snapshot,now):
-    registry=ExternalRegistry(store,lambda:now)
-    projection=registry.split(snapshot,pnl=False) if registry.records() else snapshot
-    external=projection.get('external_positions',{})
-    return dict(snapshot,notionals={k:v for k,v in snapshot['notionals'].items() if k not in external})
+    from .ownership import ProgramOwnership, journal_positions
+    projection=ProgramOwnership(store,lambda:now).split(snapshot,pnl=False)
+    owned=journal_positions(store)
+    notionals={k:str(dec(v)*min(owned.get(k,dec(0)),dec(snapshot['positions'][k]))/dec(snapshot['positions'][k]))
+               for k,v in snapshot['notionals'].items() if k in projection['positions'] and k in owned}
+    return dict(snapshot,notionals=notionals)
 
 
 def debt_attribution(store,snapshot,now):
@@ -78,7 +85,8 @@ def debt_attribution(store,snapshot,now):
     allowed,blocked=[],[]
     if not debts:
         return dict(external=allowed,blocking=blocked)
-    registry=ExternalRegistry(store,lambda:now)
+    from .ownership import ProgramOwnership
+    registry=ProgramOwnership(store,lambda:now)
     try:
         projection=registry.split(snapshot,pnl=False)
         external=projection.get('external_positions',{})

@@ -93,6 +93,7 @@ class ProgramWorld(World):
         self.venues = [ProgramVenue(self,n) for n in (0,1)]
         self.accounts.cross, self.accounts.bitget = self.venues
         self.accounts.activity = self.activity
+        self.accounts.program_activity = lambda contracts,start,end:self.accounts.activity(start,end)
         self.engine_config = {}  # actual default; no dedicated_account override
         self.path = path
         if path is not None:

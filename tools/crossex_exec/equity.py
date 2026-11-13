@@ -7,6 +7,8 @@ from .external import ExternalRegistry, plain
 from .external_accounting import anchor_value, read_snapshot, program_activity, verified_history
 from .program_risk import debt_attribution
 from .funding import funding_positions, funding_continuity, daily_continuity, certify_daily
+from .ownership import ProgramOwnership
+from .program_accounting import read_program_snapshot, ProgramAccounting
 
 
 POSITION_LOCKS = frozenset(('position_mismatch','unhedged_position','repair_stopped',
@@ -15,6 +17,7 @@ POSITION_LOCKS = frozenset(('position_mismatch','unhedged_position','repair_stop
 BASELINE_KEYS = ('account_equity_baseline','equity_baseline','daily_equity','daily_upnl','risk_pnl_baseline',
     'external_equity_anchor','program_daily_upnl','program_last_upnl','external_verified_history','funding_checkpoint',
     'last_upnl','account_loss_current','external_income')
+PROGRAM_KEYS = ('program_funding_anchor','program_funding_checkpoint','program_verified_history','program_funding_baseline')
 ADMIN_REFUSALS = frozenset(('local_orders_pending','position_or_order_lock','local_positions',
     'not_halted','halt_confirmation','confirmation_required','halted_requires_release',
     'account_read_unavailable','remote_positions','remote_orders_unavailable','remote_orders',
@@ -22,7 +25,7 @@ ADMIN_REFUSALS = frozenset(('local_orders_pending','position_or_order_lock','loc
     'equity_revision_changed','database_not_found','release_requires_stopped_service',
     'running_executor_admin_required','admin_response_invalid','running_rebaseline_refused',
     'external_income_unverifiable','external_identity_unverifiable','external_catalog_unavailable',
-    'margin_open_limit'))
+    'program_income_unverifiable','margin_open_limit'))
 
 
 def halt_reason(store):
@@ -77,14 +80,15 @@ class EquityAdmin:
         registry=ExternalRegistry(self.store,self.clock)
         try:
             snapshot=(self.engine.read_account_snapshot() if self.program_scope and self.engine else
-                      read_snapshot(self.accounts,self.store,self.clock) if self.program_scope else self.accounts.snapshot())
+                      read_program_snapshot(self.accounts,self.store,self.clock) if self.program_scope else self.accounts.snapshot())
         except Exception as error:
             if registry.records() and getattr(error,'account_snapshot',None) is not None:
                 self.store.set_meta('external_failed_snapshot',plain(error.account_snapshot))
             raise ValueError('account_read_unavailable') from None
         if registry.records():
             self.store.set_meta('external_admin_snapshot',plain(snapshot))
-        projection=registry.split(snapshot) if registry.records() else snapshot
+        projection=(ProgramOwnership(self.store,self.clock).split(snapshot) if self.program_scope
+                    else registry.split(snapshot) if registry.records() else snapshot)
         if not isinstance(projection.get('positions'),dict) or projection['positions']:
             raise ValueError('remote_positions')
         for venue in (self.accounts.cross,self.accounts.bitget):
@@ -104,15 +108,12 @@ class EquityAdmin:
             raise ValueError('margin_open_limit')
         if self.program_scope:
             try:
-                funding_positions(snapshot)
-                previous=self.store.meta('external_equity_anchor')
-                if previous and 'funding_positions' in previous:
-                    funding_continuity(self.store,previous,snapshot)
-                    daily_continuity(self.store,previous,snapshot)
-                snapshot['program_funding_at_epoch']=str(program_activity(self.store,snapshot['activity'],
-                    snapshot.get('accounting_at',started)))
+                # Pure preparation; only the final audited transaction publishes.
+                income=ProgramAccounting(self.store,ProgramOwnership(self.store,self.clock),self.clock).evaluate(
+                    snapshot,projection,persist=False)
+                snapshot['program_funding_at_epoch']=income
             except (ValueError,KeyError,TypeError,ArithmeticError):
-                raise ValueError('external_income_unverifiable') from None
+                raise ValueError('program_income_unverifiable') from None
         try:
             equities={v:str(dec(snapshot['equity_by_venue'][v])) for v in ('crossex','bitget')}
             if any(dec(v)<=0 for v in equities.values()) or dec(projection['upnl'])!=0:
@@ -167,7 +168,7 @@ class EquityAdmin:
                     raise ValueError('equity_revision_changed')
                 if not 0<=self.clock()-captured<=10:
                     raise ValueError('account_snapshot_stale')
-                old={k:store.meta(k) for k in BASELINE_KEYS}
+                old={k:store.meta(k) for k in (*BASELINE_KEYS,*PROGRAM_KEYS)}
                 total=str(sum(map(dec,equities.values()),dec(0)))
                 new=dict(account_equity_baseline=equities,equity_baseline=total,
                     daily_equity=dict(day=day(self.clock()),equity=total),
@@ -182,20 +183,22 @@ class EquityAdmin:
                 audit=dict(old=old,new=new,at=self.clock(),captured_at=captured,reason=reason,
                            source=source,halt_reason=cause,revision=revision+1)
                 registry=ExternalRegistry(store,self.clock)
-                external_projection=registry.split(snapshot) if self.program_scope else None
+                external_projection=ProgramOwnership(store,self.clock).split(snapshot) if self.program_scope else None
                 if external_projection is not None:
                     # Audit the full account and exact excluded positions. These
                     # operations reset an explicit epoch, never erase ownership.
                     audit['external_snapshot']=plain(external_projection)
-                    new['external_equity_anchor']=anchor_value(store,snapshot,external_projection,captured)
-                    new['external_equity_anchor']['program_funding_offset']=snapshot['program_funding_at_epoch']
-                    new['external_equity_anchor']=certify_daily(new['external_equity_anchor'],
-                        'audited_baseline',revision+1)
-                    new['funding_checkpoint']={k:new['external_equity_anchor'][k] for k in
-                        ('captured_at','revision','funding_positions','history_index')}
-                    new['funding_checkpoint']['equity_revision']=revision+1
-                    new['funding_checkpoint']=certify_daily(new['funding_checkpoint'],
-                        'audited_baseline',revision+1)
+                    income=snapshot['program_funding_at_epoch']
+                    new.update(income['prepared'])
+                    prior=store.meta('program_funding_baseline',{})
+                    new['program_funding_baseline']=dict(day=income['day'],
+                        total=str(dec(income['program_funding_total'])+dec(prior.get('total',0))),
+                        daily=str(dec(income['program_funding'])+dec(prior.get('daily',0)
+                            if prior.get('day')==income['day'] else 0)))
+                    for key in ('program_funding_anchor','program_funding_checkpoint'):
+                        value=new[key]
+                        value=dict(value,equity_revision=revision+1)
+                        new[key]=certify_daily(value,'audited_baseline',revision+1)
                     new['program_daily_upnl']=dict(day=day(self.clock()),upnl='0',positions={},captured_at=captured)
                     new['program_last_upnl']=dict(upnl='0',positions={},captured_at=captured)
                     new['daily_upnl']=dict(day=day(self.clock()),upnl=str(snapshot['upnl']),
@@ -207,12 +210,7 @@ class EquityAdmin:
                         raise ValueError('equity_revision_changed')
                     # Capture old values in the same write transaction as the
                     # replacement and audit, including external attribution.
-                    audit['old']={k:store.meta(k) for k in BASELINE_KEYS}
-                    if external_projection is not None:
-                        try:
-                            new['external_verified_history']=verified_history(store,snapshot['activity'])
-                        except (ValueError,KeyError,TypeError,ArithmeticError):
-                            raise ValueError('external_income_unverifiable') from None
+                    audit['old']={k:store.meta(k) for k in (*BASELINE_KEYS,*PROGRAM_KEYS)}
                     for key,value in new.items():
                         store.set_meta(key,value)
                     store.set_meta('account_equity_current',equities)

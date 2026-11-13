@@ -33,6 +33,8 @@ class AutomaticOwnershipTests(PositionFixture, unittest.TestCase):
         for state in ('SHADOW','UNSENT','INTENT','SENT','UNKNOWN','TERMINAL','REJECTED'):
             order = dict(intent(),cid='owner-'+state,state=state,filled='0')
             order['instrument']['symbol'] = HL if state in ('SHADOW','UNSENT') else ASTER
+            if state not in ('SHADOW','UNSENT'):
+                order['instrument']['market']['exchange'] = 'aster'
             self.store.save_order(order)
         with Store(self.path) as reopened:
             from tools.crossex_exec.ownership import ProgramOwnership

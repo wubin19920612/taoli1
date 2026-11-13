@@ -62,7 +62,7 @@ def error_details(error):
     return result
 
 
-def history(http,route,endpoint,start,end,*,key,limit,cursor=False):
+def history(http,route,endpoint,start,end,*,key,limit,cursor=False,filters=None):
     context=dict(route=route,endpoint=endpoint,from_ms=start,to_ms=end,page=0,rows_read=0)
     def fail(condition,**extra):
         raise HistoryError(dict(context,condition=condition,**extra)) from None
@@ -77,6 +77,7 @@ def history(http,route,endpoint,start,end,*,key,limit,cursor=False):
         context.update(from_ms=left,to_ms=right,page=0,cursor_used=False)
         params=(dict(category='USDT-FUTURES',startTime=str(left),endTime=str(right),limit=limit)
                 if cursor else {'from':left,'to':right,'limit':limit})
+        params.update(filters or {})
         cursors=set()
         while True:
             context['page']+=1
