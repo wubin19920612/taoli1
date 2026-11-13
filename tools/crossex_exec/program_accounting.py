@@ -10,8 +10,15 @@ from .position_values import key_currency, usd_value, position_identity
 from .external_fx import NATIVE_USD, quote_band
 
 
-def funding_view(snapshot,contracts):
+def funding_view(snapshot,contracts,orders):
     """Remove outside positions and every non-funding cash flow before proof."""
+    starts={}
+    for order in orders:
+        key=route_symbol(order['instrument'])
+        at=int(float(order['created_at'])*1000)
+        starts[key]=min(starts.get(key,at),at)
+    def since_claim(route,row,field):
+        return int(row[field])>=starts.get((route,row['symbol']),int(snapshot['program_origin']*1000))
     activity=dict(snapshot['activity'],crossex_trades=[])
     raw={route:[r for r in snapshot['raw_positions'][route] if (route,r['symbol']) in contracts]
          for route in ('crossex','bitget')}
@@ -19,9 +26,11 @@ def funding_view(snapshot,contracts):
         kinds={'FUNDING_FEE'} if route=='crossex' else BITGET_FUNDING
         activity[route+'_book']=[r for r in activity[route+'_book']
             if (route,r.get('symbol')) in contracts
-            and r.get('statement_type' if route=='crossex' else 'type') in kinds]
+            and r.get('statement_type' if route=='crossex' else 'type') in kinds
+            and since_claim(route,r,'create_time' if route=='crossex' else 'ts')]
         activity[route+'_position_history']=[r for r in activity[route+'_position_history']
-                                            if (route,r['symbol']) in contracts]
+            if (route,r['symbol']) in contracts
+            and since_claim(route,r,'update_time' if route=='crossex' else 'updatedTime')]
     return dict(snapshot,raw_positions=raw,activity=activity)
 
 
@@ -131,7 +140,7 @@ class ProgramAccounting:
         contracts=program_contracts(store)
         if snapshot.get('program_contracts')!=[list(k) for k in sorted(contracts)]:
             raise ValueError('program_snapshot_superseded')
-        view=funding_view(snapshot,contracts)
+        view=funding_view(snapshot,contracts,store.iter_orders(exclude_states=('SHADOW','UNSENT')))
         activity=view['activity']
         if (activity['complete'] is not True or not 0<=now-captured<=10
                 or day(cutoff)!=day(now) or activity['to_ms']!=int(cutoff*1000)):

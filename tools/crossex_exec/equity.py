@@ -4,7 +4,7 @@ import time
 
 from tools.fill_sim.core import dec, day
 from .external import ExternalRegistry, plain
-from .program_risk import debt_attribution, journal_pnl
+from .program_risk import debt_attribution
 from .funding import certify_daily
 from .ownership import ProgramOwnership
 from .program_accounting import read_program_snapshot, ProgramAccounting
@@ -123,8 +123,33 @@ class EquityAdmin:
 
     def pnl_offset(self,*,fx=None):
         """Keep immutable fills/history; reset only the risk measurement epoch."""
-        daily,total=journal_pnl(self.store,self.clock(),fx=fx,apply_baseline=False)
-        return dict(day=day(self.clock()),total=str(total),daily=str(daily))
+        daily=total=dec(0)
+        today=day(self.clock())
+        entries={}
+        for row in self.store.iter_orders(reduce_only=False,exclude_states=('SHADOW','UNSENT')):
+            if dec(row.get('filled',0)):
+                if row.get('vwap') is None:
+                    raise ValueError('local_orders_pending')
+                key=(row['pair_id'],row['leg'])
+                if key in entries:
+                    raise ValueError('local_orders_pending')
+                entries[key]=dec(row['vwap'])
+        for row in self.store.iter_orders(exclude_states=('SHADOW','UNSENT')):
+            value=-dec(row.get('fee') or 0)
+            qty=dec(row.get('filled',0))
+            if row['reduce_only'] and qty:
+                if row.get('vwap') is None or (row['pair_id'],row['leg']) not in entries:
+                    raise ValueError('local_orders_pending')
+                value+=qty*(dec(row['vwap'])-entries[(row['pair_id'],row['leg'])])*(1 if row['leg']==0 else -1)
+            if fx is not None and value:
+                from .external import route_symbol
+                from .position_values import key_currency, usd_value
+                coin=key_currency('|'.join((*route_symbol(row['instrument']),row['position_side'])))
+                value=usd_value(value,coin,fx,self.clock(),upper=False)
+            total+=value
+            if day((row.get('fill_ms') or row['created_at']*1000)/1000)==today:
+                daily+=value
+        return dict(day=today,total=str(total),daily=str(daily))
 
     def apply(self,*,confirm,reason,source,release_halt=False):
         if (source not in ('cli','admin_api') or not isinstance(reason,str) or not reason.strip()
@@ -152,7 +177,7 @@ class EquityAdmin:
                 new=dict(account_equity_baseline=equities,equity_baseline=total,
                     daily_equity=dict(day=day(self.clock()),equity=total),
                     daily_upnl=dict(day=day(self.clock()),upnl='0',positions={},captured_at=captured),
-                    risk_pnl_baseline=self.pnl_offset(fx=snapshot.get('external_fx',{}) if self.program_scope else None))
+                    risk_pnl_baseline=self.pnl_offset(fx=snapshot.get('external_fx',{})) if self.program_scope else self.pnl_offset())
                 cause=halt_reason(store) if release_halt else None
                 locks={k:set(v) for k,v in (engine.stops.reasons if engine else store.meta('stop_locks',{})).items()}
                 if release_halt:

@@ -102,6 +102,20 @@ class FundingReadTests(unittest.TestCase):
 class AdditionalSafetyTests(unittest.TestCase):
     world=r21.ProgramAccountingTests.world
 
+    def test_user_funding_before_first_program_order_is_excluded(self):
+        w=self.world(); w.advance(120)
+        for venue in w.venues:
+            venue.history.append(dict(id='outside-before',created=int((w.now-20)*1000),
+                closed=int((w.now-10)*1000),funding='-90'))
+            venue.book.append(dict(venue.cash_row('outside-before','-90',funding=True),
+                **({'create_time':str(int((w.now-10)*1000))} if venue.leg==0
+                   else {'ts':str(int((w.now-10)*1000))})))
+        w.open(); w.advance()
+        self.assertTrue(w.store.meta('external_income')['verified'])
+        self.assertEqual(w.engine.totals(),(dec(0),dec(0)))
+        w.venues[0].settle('-2');w.advance()
+        self.assertEqual(w.engine.totals(),(dec(-2),dec(-2)))
+
     def test_mixed_contract_funding_does_not_contaminate_program_metrics(self):
         w=self.world();w.advance();w.open();w.advance()
         prior=w.store.meta('account_loss_current')

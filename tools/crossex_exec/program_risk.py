@@ -12,7 +12,7 @@ def journal_fingerprint(store):
                    if dec(r.get('filled',0)) or r['state'] in ('TERMINAL','REJECTED')])
 
 
-def journal_pnl(store, now, *, fx=None, apply_baseline=True):
+def journal_pnl(store, now, *, fx=None):
     entries={}
     for r in store.iter_orders(reduce_only=False,exclude_states=('SHADOW','UNSENT')):
         if dec(r.get('filled',0)):
@@ -38,7 +38,7 @@ def journal_pnl(store, now, *, fx=None, apply_baseline=True):
         total+=value
         if day((r.get('fill_ms') or r['created_at']*1000)/1000)==day(now):
             daily+=value
-    offset=store.meta('risk_pnl_baseline',{}) if apply_baseline else {}
+    offset=store.meta('risk_pnl_baseline',{})
     total-=dec(offset.get('total',0))
     if offset.get('day')==day(now):
         daily-=dec(offset.get('daily',0))
