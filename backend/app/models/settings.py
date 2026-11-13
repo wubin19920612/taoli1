@@ -156,6 +156,11 @@ def default_symbol_aliases() -> list[SymbolAlias]:
 
 
 class RiskSettings(BaseModel):
+    big_spread_alert_enabled: bool = True
+    big_spread_alert_pct: float = Field(default=3.0, gt=0, allow_inf_nan=False)
+    big_spread_alert_hits: int = Field(default=2, ge=1)
+    big_spread_alert_cooldown_seconds: int = Field(default=600, ge=0)
+    big_spread_alert_auto_create: bool = True
     min_volume_24h_usdt: float = Field(default=1_000_000, ge=0)
     stale_after_seconds: int = Field(default=30, ge=5)
     huge_spread_pct: float = Field(default=10.0, ge=0)

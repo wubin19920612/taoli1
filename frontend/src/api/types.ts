@@ -497,6 +497,11 @@ export interface HealthStatus {
 }
 
 export interface RiskSettings {
+  big_spread_alert_enabled?: boolean;
+  big_spread_alert_pct?: number;
+  big_spread_alert_hits?: number;
+  big_spread_alert_cooldown_seconds?: number;
+  big_spread_alert_auto_create?: boolean;
   min_volume_24h_usdt: number;
   min_volume_24h_k?: number;
   stale_after_seconds: number;

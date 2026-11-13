@@ -98,6 +98,11 @@ const defaultAlertMessageTemplate: AlertMessageTemplateSettings = {
 };
 
 const defaultRiskSettings: RiskSettings = {
+  big_spread_alert_enabled: true,
+  big_spread_alert_pct: 3,
+  big_spread_alert_hits: 2,
+  big_spread_alert_cooldown_seconds: 600,
+  big_spread_alert_auto_create: true,
   min_volume_24h_usdt: 1_000_000,
   stale_after_seconds: 30,
   huge_spread_pct: 10,
@@ -921,6 +926,33 @@ export function SettingsPage() {
                         </Typography.Text>
                       ))}
                     </div>
+                    <section className="settings-section">
+                      <div className="form-grid">
+                        <div className="form-grid-heading">
+                          <Typography.Title level={5}>大价差快速提醒</Typography.Title>
+                          <Typography.Paragraph type="secondary">
+                            按可成交开仓价差连续命中触发，不受普通规则的衰减检查和风险标签排除影响，风险仍会写入提醒。
+                            保留类型、黑名单、成交额、行情时效和市场身份限制。冷却期内价差较上次发送值增加至少 50% 时可再次提醒。
+                            自动建卡还需启用全局自动建卡并通过原有校验；创建的卡片始终关闭开仓，需手动开启。
+                          </Typography.Paragraph>
+                        </div>
+                        <Form.Item label="启用大价差提醒" name="big_spread_alert_enabled" valuePropName="checked">
+                          <Switch />
+                        </Form.Item>
+                        <Form.Item label="大价差开仓阈值" name="big_spread_alert_pct" rules={[{ required: true }, { type: "number", min: 0.000001 }]}>
+                          <InputNumber min={0.000001} step={0.1} suffix="%" className="wide-input" />
+                        </Form.Item>
+                        <Form.Item label="大价差连续命中次数" name="big_spread_alert_hits" rules={[{ required: true }, { type: "integer", min: 1 }]}>
+                          <InputNumber min={1} precision={0} className="wide-input" />
+                        </Form.Item>
+                        <Form.Item label="大价差提醒冷却秒数" name="big_spread_alert_cooldown_seconds" rules={[{ required: true }, { type: "integer", min: 0 }]}>
+                          <InputNumber min={0} precision={0} step={60} className="wide-input" />
+                        </Form.Item>
+                        <Form.Item label="大价差提醒自动建卡（不开仓）" name="big_spread_alert_auto_create" valuePropName="checked">
+                          <Switch />
+                        </Form.Item>
+                      </div>
+                    </section>
                     <section className="settings-section">
                       <div className="form-grid">
                         <div className="form-grid-heading">

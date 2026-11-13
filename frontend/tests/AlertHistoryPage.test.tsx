@@ -5,6 +5,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AlertHistoryPage } from "../src/pages/AlertHistoryPage";
 
 describe("AlertHistoryPage", () => {
+  it("identifies big spread alerts by their source", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json([{
+      id: "big-1", rule_id: "big_spread", opportunity_id: "imx", symbol: "IMXUSDT",
+      status: "sent", message: "【大价差提醒】盘口深度薄", created_at: "2026-11-13T03:09:32Z"
+    }])));
+    render(<AlertHistoryPage />);
+    expect(await screen.findByText("大价差提醒")).toBeTruthy();
+    expect(screen.getByText("【大价差提醒】盘口深度薄")).toBeTruthy();
+  });
+
   beforeEach(() => {
     vi.stubGlobal(
       "fetch",

@@ -173,6 +173,15 @@ class AstroAlertService:
             disabled_message="自动创建卡片未开启",
         )
 
+    async def handle_big_spread_alert(self, opportunity: Opportunity) -> AstroAlertActionResult:
+        return await self._handle(
+            opportunity,
+            enabled=self.alert_auto_create_enabled,
+            disabled_message="自动创建卡片未开启",
+            card_settings_override=self.card_settings.model_copy(update={"open_enabled": False}),
+            source="alert",
+        )
+
 
     def pair_lock(self, pair_name: str) -> asyncio.Lock:
         return self._pair_locks.setdefault(pair_name, asyncio.Lock())

@@ -156,6 +156,67 @@ class AlertEngine:
     ) -> bool:
         return opportunity_matches_rule(rule, opportunity, now, settings)
 
+    def rejection_details(self, rule, opportunity, now, settings) -> dict:
+        """Read-only diagnostics of this round, after evaluate has updated hit state."""
+        key = f"{rule.id}:{opportunity.id}"
+        observations = self._observations.get(key, [])
+        count = self._hits.get(key, (0, now))[0]
+        peak = max((item.open_spread_pct for item in observations), default=opportunity.open_spread_pct)
+        volume = known_volume_24h_usdt(opportunity)
+        age = (now - opportunity.last_seen_at).total_seconds()
+        labels = sorted(set(opportunity.risk_labels) & set(rule.excluded_risk_labels))
+        reasons = []
+        if opportunity.identity_enforced and (
+            opportunity.validation is None
+            or not opportunity.validation.capabilities.strategy_alert
+            or opportunity.validation.expires_at <= now
+        ):
+            reasons.append("identity")
+        if opportunity.type not in rule.types:
+            reasons.append("type")
+        exchanges = {opportunity.buy_exchange, opportunity.sell_exchange}
+        if rule.include_exchanges and not exchanges.intersection(rule.include_exchanges):
+            reasons.append("include_exchanges")
+        if exchanges.intersection(rule.exclude_exchanges):
+            reasons.append("exclude_exchanges")
+        if rule.include_symbols and opportunity.symbol not in rule.include_symbols:
+            reasons.append("include_symbols")
+        if suppresses_sf_negative_funding(rule, opportunity):
+            reasons.append("sf_negative_funding")
+        if opportunity.open_spread_pct + EPSILON < required_open_spread_pct(rule, opportunity):
+            reasons.append("open_spread")
+        required_edge = max(rule.min_fee_adjusted_open_pct, settings.min_effective_open_pct)
+        edge = effective_open_edge_pct(opportunity, settings)
+        if edge + EPSILON < required_edge:
+            reasons.append("fee_adjusted_open")
+        if volume is not None and volume < rule.min_volume_24h_usdt:
+            reasons.append("volume")
+        if age > rule.max_data_age_seconds:
+            reasons.append("data_age")
+        if labels:
+            reasons.append("excluded_risk_labels")
+        if count < rule.consecutive_hits:
+            reasons.append("consecutive_hits")
+        stable = observations_are_stable(observations, settings)
+        if not stable:
+            reasons.append("spread_decay")
+        last_sent = self._last_sent.get(key)
+        if last_sent and (now - last_sent).total_seconds() < rule.cooldown_seconds:
+            reasons.append("cooldown")
+        if self._retry_after.get(key, now) > now:
+            reasons.append("delivery_retry")
+        return {
+            "rule_id": rule.id, "reasons": reasons,
+            "hits": count, "required_hits": rule.consecutive_hits,
+            "decay": {"passed": stable, "peak": peak, "latest": opportunity.open_spread_pct,
+                      "max_decay_pct": settings.max_open_spread_decay_pct},
+            "excluded_labels": labels,
+            "required_open_spread_pct": required_open_spread_pct(rule, opportunity),
+            "effective_open_pct": edge, "required_effective_open_pct": required_edge,
+            "known_volume_24h_usdt": volume, "required_volume_24h_usdt": rule.min_volume_24h_usdt,
+            "data_age_seconds": age, "max_data_age_seconds": rule.max_data_age_seconds,
+        }
+
 
 def suppresses_sf_negative_funding(rule: AlertRule, opportunity: Opportunity) -> bool:
     return (

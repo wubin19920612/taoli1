@@ -14,6 +14,39 @@ ALERT_DISPLAY_TIMEZONE = timezone(timedelta(hours=8), "UTC+8")
 HIGH_VOLUME_24H_USDT = 10_000_000
 NEUTRAL_FUNDING_PCT = 0.005
 
+RISK_LABEL_NAMES = {
+    "LOW_VOLUME": "低成交额", "STALE_DATA": "数据过期",
+    "HUGE_SPREAD_VERIFY": "异常大价差", "WIDE_SPREAD": "开平价差宽",
+    "SAME_TICKER_RISK": "同名币风险", "MISSING_FUNDING": "缺资金费率",
+    "FUNDING_AGAINST": "资金费率逆风", "MARK_INDEX_DEVIATION": "标记/指数偏离",
+    "THIN_ORDER_BOOK": "盘口深度薄", "EDGE_AFTER_SLIPPAGE_TOO_SMALL": "有效收益偏小",
+    "TRANSIENT_SIGNAL": "信号不稳定", "MARKET_VALIDATION_BLOCKED": "市场核验未通过",
+    "volume_unknown": "成交额未知",
+}
+
+
+def build_big_spread_message(rule: AlertRule, opportunity: Opportunity) -> str:
+    # This alert always includes the safety context, regardless of template toggles.
+    message = build_compact_alert_message(rule, opportunity, include_rating=False)
+    lines = [f"【大价差提醒】{message}",
+             f"买入侧盘口：bid {opportunity.buy_bid:g} / ask {opportunity.buy_ask:g}",
+             f"卖出侧盘口：bid {opportunity.sell_bid:g} / ask {opportunity.sell_ask:g}"]
+    if _has_mixed_funding_intervals(opportunity):
+        lines.extend(_mixed_interval_funding_lines(opportunity))
+    labels = [f"{label}（{RISK_LABEL_NAMES.get(label, '未定义标签，请核实')}）"
+              for label in opportunity.risk_labels]
+    lines.append(f"全部风险标签：{'、'.join(labels) if labels else '无'}")
+    if "HUGE_SPREAD_VERIFY" in opportunity.risk_labels:
+        lines.append("≥10% 价差，请人工核实")
+    lines.append(
+        f"手续费：买 {opportunity.buy_fee_pct:g}% / 卖 {opportunity.sell_fee_pct:g}%；"
+        f"滑点估算 {opportunity.safety_slippage_pct:g}%；"
+        f"费用{'为估算' if opportunity.fees_are_estimated else '为配置值'}；"
+        f"行情：买{'预估' if opportunity.buy_is_estimated else '非预估'} / "
+        f"卖{'预估' if opportunity.sell_is_estimated else '非预估'}"
+    )
+    return "\n".join(lines)
+
 
 def build_alert_rating_header(
     rule: AlertRule,

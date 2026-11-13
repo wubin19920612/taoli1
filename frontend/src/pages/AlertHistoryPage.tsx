@@ -31,6 +31,14 @@ const columns: ColumnsType<AlertEvent> = [
   { title: "时间(UTC+8)", dataIndex: "created_at", width: 132, render: formatUtcPlus8 },
   { title: "标的", dataIndex: "symbol", width: 120 },
   {
+    title: "来源",
+    dataIndex: "rule_id",
+    width: 120,
+    render: (value: string) => value === "big_spread"
+      ? <Tag color="orange">大价差提醒</Tag>
+      : "普通告警"
+  },
+  {
     title: "状态",
     dataIndex: "status",
     width: 96,

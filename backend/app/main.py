@@ -74,7 +74,7 @@ from app.models.phone_alert import PhonePriceAlertEvent
 from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, RiskSettings
 from app.services.account_positions import AccountPositionService, GateAccountPositionProvider
 from app.services.account_connections import AccountConnectionService
-from app.services.alert_delivery_store import AlertDeliveryStore
+from app.services.alert_delivery_store import AlertDeliveryState, AlertDeliveryStore
 from app.services.alert_engine import (
     AlertEngine,
     AlertMatch,
@@ -83,7 +83,9 @@ from app.services.alert_engine import (
     required_open_spread_pct,
     suppresses_sf_negative_funding,
 )
-from app.services.alert_messages import build_alert_message, build_alert_rating_header
+from app.services.alert_messages import build_alert_message, build_alert_rating_header, build_big_spread_message
+from app.services.alert_reject import AlertRejectLogger
+from app.services.big_spread_alert import BIG_SPREAD_RULE_ID, BigSpreadAlertEngine, big_spread_eligible
 from app.services.alert_metrics import observe_alert_metrics
 from app.services.announcements import (
     AnnouncementMonitor,
@@ -357,8 +359,17 @@ async def _restore_alert_delivery_state(app: FastAPI) -> None:
     now = datetime.now(UTC)
     # Failure to load must prevent the loop from starting with empty cooldowns.
     states = await store.load_all()
-    for key in engine.restore(states, now):
-        state = engine.export_state(key)
+    big_engine = app.state.big_spread_alert_engine = BigSpreadAlertEngine()
+    unknown_keys = engine.restore([s for s in states if not s.key.startswith("big_spread:")], now)
+    unknown_keys += big_engine.restore([s for s in states if s.key.startswith("big_spread:")], now)
+    loaded_by_key = {state.key: state for state in states}
+    for key in unknown_keys:
+        delivery_engine = big_engine if key.startswith("big_spread:") else engine
+        state = delivery_engine.export_state(key)
+        if state.last_sent_at is None:
+            # The bounded fast engine may evict old keys, but their interrupted
+            # delivery still needs an audit event and a durable cooldown.
+            state = AlertDeliveryState(key=key, last_sent_at=loaded_by_key[key].pending_since)
         rule_id, _, opportunity_id = key.partition(":")
         event = AlertEvent(
             # Stable across crashes between event insertion and clearing pending.
@@ -404,6 +415,8 @@ async def _process_alert_match(
 ) -> bool:
     # Only fixed metadata and durations belong in this log, never messages/settings.
     key = f"{match.rule.id}:{match.opportunity.id}"
+    is_big_spread = match.rule.id == BIG_SPREAD_RULE_ID
+    delivery_engine = app.state.big_spread_alert_engine if is_big_spread else app.state.alert_engine
     started = monotonic()
     durations: dict[str, float | None] = {
         "diag_ms": None, "orderbook_ms": None, "astro_ms": None, "feishu_ms": None,
@@ -425,6 +438,11 @@ async def _process_alert_match(
         existing_card_skipped = False
         signal_condition_failure = False
         latest_opportunity = _find_latest_opportunity(app, match.opportunity.id)
+        # Recheck current eligibility, recording a muted event if it changed.
+        fast_eligibility_failed = is_big_spread and (
+            latest_opportunity is None
+            or not big_spread_eligible(latest_opportunity, match.rule, settings, datetime.now(UTC))
+        )
         message = build_alert_message(
             match.rule,
             latest_opportunity or match.opportunity,
@@ -432,6 +450,8 @@ async def _process_alert_match(
             template=alert_template,
             include_rating=False,
         )
+        if is_big_spread:
+            message = build_big_spread_message(match.rule, match.opportunity)
         availability_report = None
         trade_availability_service = getattr(
             app.state,
@@ -469,6 +489,8 @@ async def _process_alert_match(
             settings,
             datetime.now(UTC),
         )
+        if fast_eligibility_failed:
+            validation_failure = "最新机会已不满足大价差提醒的类型、黑名单、成交额、时效或身份条件"
         if validation_failure is not None:
             signal_condition_failure = True
             card_summary = "未创建（最新信号校验未通过）"
@@ -482,12 +504,17 @@ async def _process_alert_match(
             None,
         )
         astro_processing_failed = False
-        if astro_alert_service is not None and not signal_condition_failure:
+        if (astro_alert_service is not None and not signal_condition_failure
+                and (not is_big_spread or settings.big_spread_alert_auto_create)):
             try:
                 card_settings = _astro_card_settings_for_opportunity(
                     astro_alert_service,
                     latest_opportunity,
                 )
+                if is_big_spread:
+                    card_settings = (card_settings or AstroCardSettings()).model_copy(
+                        update={"open_enabled": False},
+                    )
                 plan_failure = _astro_plan_validation_failure(
                     latest_opportunity,
                     card_settings,
@@ -530,7 +557,10 @@ async def _process_alert_match(
                         # No outer wait_for: cancelling add can leave an S7-B attempt
                         # unknown. Astro already enforces its own HTTP timeout.
                         with timed("astro"):
-                            astro_result = await astro_alert_service.handle_alert(latest_opportunity)
+                            if is_big_spread:
+                                astro_result = await astro_alert_service.handle_big_spread_alert(latest_opportunity)
+                            else:
+                                astro_result = await astro_alert_service.handle_alert(latest_opportunity)
                         if astro_result.status == "skipped" and astro_result.action in {
                             "unsupported",
                             "conflict",
@@ -539,7 +569,7 @@ async def _process_alert_match(
                         if astro_result.status == "skipped" and astro_result.action == "existing":
                             existing_card_skipped = True
                         if astro_result.status == "created":
-                            card_summary = "已创建"
+                            card_summary = "已建卡（未开仓，需手动开启）" if is_big_spread else "已创建"
                         elif astro_result.status == "updated":
                             card_summary = "已更新"
                         elif astro_result.action == "existing":
@@ -571,8 +601,11 @@ async def _process_alert_match(
                 )
             ),
         )
-        message = f"{rating_header}\n\n{message}"
-        if alert_template.format == "compact":
+        if is_big_spread:
+            message += f"\n卡片：{card_summary}"
+        else:
+            message = f"{rating_header}\n\n{message}"
+        if alert_template.format == "compact" and not is_big_spread:
             message = build_alert_message(
                 match.rule,
                 latest_opportunity or match.opportunity,
@@ -581,9 +614,9 @@ async def _process_alert_match(
             message += f"\n卡片：{card_summary}"
             if availability_report is not None and availability_report.opening_restricted:
                 message += "\n交易状态：需核实开仓可用性"
-        if signal_condition_failure or existing_card_skipped:
+        if fast_eligibility_failed or (not is_big_spread and (signal_condition_failure or existing_card_skipped)):
             status = "muted"
-        elif alert_template.suppress_when_card_conditions_fail and card_condition_failure:
+        elif not is_big_spread and alert_template.suppress_when_card_conditions_fail and card_condition_failure:
             status = "muted"
         elif not getattr(app.state, "feishu_live_send_enabled", True):
             status = "muted"
@@ -607,6 +640,10 @@ async def _process_alert_match(
                         template=alert_template,
                         prebuilt_text=message,
                     )
+                if not is_big_spread:
+                    sent_ids = getattr(app.state, "alert_round_sent_ids", None)
+                    if sent_ids is not None:
+                        sent_ids.add(match.opportunity.id)
             except Exception as exc:  # noqa: BLE001 - preserve event even when webhook fails.
                 status = "failed"
                 message = f"{message}\n\n飞书发送失败：{exc}"
@@ -618,8 +655,8 @@ async def _process_alert_match(
             message=message,
             created_at=datetime.now(UTC),
         )
-        app.state.alert_engine.record_delivery_result(match, status, now=event.created_at)
-        state = app.state.alert_engine.export_state(key)
+        delivery_engine.record_delivery_result(match, status, now=event.created_at)
+        state = delivery_engine.export_state(key)
         state_write_ok = True
         try:
             async with write_lock:
@@ -693,6 +730,9 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
     last_delivery_prune: datetime | None = None
     filter_timing = _AlertFilterTiming()
     write_lock = asyncio.Lock()
+    if not hasattr(app.state, "big_spread_alert_engine"):
+        app.state.big_spread_alert_engine = BigSpreadAlertEngine()
+    reject_logger = AlertRejectLogger()
     app_settings = getattr(app.state, "settings", Settings())
     while not stop_event.is_set():
         try:
@@ -704,12 +744,14 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 None,
             )
             rules = await repo.list()
+            settings = await settings_repo.get_risk_settings() if settings_repo is not None else RiskSettings()
             delivery_store: AlertDeliveryStore = app.state.alert_delivery_store
             prune_now = datetime.now(UTC)
             if last_delivery_prune is None or prune_now - last_delivery_prune >= timedelta(days=1):
                 retention = max(
                     timedelta(days=7),
-                    timedelta(seconds=max((rule.cooldown_seconds for rule in rules), default=0))
+                    timedelta(seconds=max(settings.big_spread_alert_cooldown_seconds,
+                                          max((rule.cooldown_seconds for rule in rules), default=0)))
                     + timedelta(days=1),
                 )
                 try:
@@ -717,7 +759,6 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 except Exception:
                     logger.exception("alert delivery state prune failed")
                 last_delivery_prune = prune_now
-            settings = await settings_repo.get_risk_settings() if settings_repo is not None else RiskSettings()
             alert_template = (
                 await settings_repo.get_alert_message_template()
                 if settings_repo is not None
@@ -729,9 +770,11 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
             identity_validator = getattr(app.state, "market_validation", None)
             recomputed = 0
             for retries in range(3):  # Initial attempt plus at most two immediate retries.
+                raw_opportunities = app.state.snapshot_store.get_opportunities()
                 opportunities = filter_opportunities(
-                    app.state.snapshot_store.get_opportunities(), settings,
+                    raw_opportunities, settings,
                 )
+                before_identity_ids = {item.id for item in opportunities}
                 try:
                     if identity_validator is not None:
                         opportunities = await identity_validator.filter_opportunities_async(
@@ -753,6 +796,8 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 (monotonic() - filter_started) * 1000, recomputed,
                 retries=retries, skipped=False,
             )
+            fast_opportunities = opportunities
+            identity_rejected_ids = before_identity_ids - {item.id for item in opportunities}
             opportunities = filter_opportunities_by_alert_rules(
                 opportunities,
                 rules,
@@ -760,6 +805,16 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 now=now,
             )
             matches = app.state.alert_engine.evaluate(opportunities, rules, now=now, risk_settings=settings)
+            qualified_by_id = {item.id: item for item in fast_opportunities}
+            reject_logger.log_round(
+                [qualified_by_id.get(item.id, item) for item in raw_opportunities],
+                rules, settings, app.state.alert_engine, matches, now,
+                identity_rejected_ids=identity_rejected_ids,
+            )
+            matches += app.state.big_spread_alert_engine.evaluate(
+                fast_opportunities, rules, now=now, risk_settings=settings,
+            )
+            app.state.alert_round_sent_ids = set()
             concurrency = getattr(
                 app_settings, "alert_match_concurrency", Settings.alert_match_concurrency,
             )
@@ -774,6 +829,9 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 async with semaphore:
                     group_ok = True
                     for match in group:
+                        if (match.rule.id == BIG_SPREAD_RULE_ID
+                                and match.opportunity.id in app.state.alert_round_sent_ids):
+                            continue
                         match_ok = await _process_alert_match(
                             app, match, settings, alert_template,
                             delivery_store, event_repo, write_lock,
