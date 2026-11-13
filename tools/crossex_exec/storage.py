@@ -8,7 +8,7 @@ from pathlib import Path
 from weakref import WeakValueDictionary
 from contextlib import contextmanager
 from .security import REDACTOR
-from .baseline import cooldown_for, RETENTION_SECONDS, SAMPLE_SECONDS
+from .baseline import cooldown_for, RETENTION_SECONDS, SAMPLE_SECONDS, active_transaction
 from .public_store import PublicStore, PUBLIC_KEYS
 
 
@@ -43,7 +43,10 @@ def matches_order(order, *, pair_id=None, states=None, exclude_states=(), sent_s
 
 
 class Store(PublicStore):
+    _baseline_snapshot = False
+
     def __init__(self, path):
+        self._baseline_path = None if str(path) == ':memory:' else Path(path).resolve()
         self.lock = path_lock(path)
         self.db = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         self.db.row_factory = sqlite3.Row
@@ -226,15 +229,15 @@ class Store(PublicStore):
             batch = list(islice(rows, 64))
             if not batch:
                 break
-            with self.transaction():
-                if not active():
+            with active_transaction(self, active) as accepted:
+                if not accepted:
                     return False
                 self.db.executemany('INSERT OR IGNORE INTO baseline_samples VALUES (?,?,?,?)', batch)
         # A restart can leave millions of expired rows. Never delete them in a
         # single account-blocking transaction. Tombstone revisions prevent ABA.
         while True:
-            with self.transaction():
-                if not active():
+            with active_transaction(self, active) as accepted:
+                if not accepted:
                     return False
                 removed = self.db.execute('DELETE FROM baseline_samples WHERE rowid IN '
                     '(SELECT rowid FROM baseline_samples WHERE at < ? LIMIT 128)',
@@ -257,7 +260,7 @@ class Store(PublicStore):
         """
         with self.lock:
             own = not self.db.in_transaction
-            if not own:
+            if not own and not self._baseline_snapshot:
                 # Never cache uncommitted data: rollback can reuse the same
                 # revision number with different rows (including in send gates).
                 return None, False, self.baseline_samples(key, since, until)
@@ -276,6 +279,20 @@ class Store(PublicStore):
             finally:
                 if own:
                     self.db.execute('ROLLBACK')
+
+    @contextmanager
+    def baseline_reader(self):
+        if self._baseline_path is None:
+            yield None
+            return
+        conn = sqlite3.connect(self._baseline_path.as_uri()+'?mode=ro', uri=True,
+                               isolation_level=None, timeout=.05)
+        try:
+            conn.execute('PRAGMA query_only=ON')
+            conn.execute('PRAGMA cache_size=-512')
+            yield BaselineReader(conn)
+        finally:
+            conn.close()
 
     def baseline_samples(self, key, since, until):
         with self.lock:
@@ -318,3 +335,23 @@ class Store(PublicStore):
                 counts[reason] = counts.get(reason, 0)+1
                 self.set_meta('opening_skip_counts', counts)
             self.event('SKIP', dict(id=identity, reason=reason, **details))
+
+
+class BaselineReader:
+    """One thread/round, own bounded page cache and short WAL read snapshots."""
+    _baseline_snapshot = True
+    baseline_samples = Store.baseline_samples
+    baseline_revision = Store.baseline_revision
+    baseline_window = Store.baseline_window
+
+    def __init__(self, conn):
+        self.db = conn
+        self.lock = threading.RLock()
+
+    @contextmanager
+    def snapshot(self):
+        self.db.execute('BEGIN')
+        try:
+            yield
+        finally:
+            self.db.execute('ROLLBACK')

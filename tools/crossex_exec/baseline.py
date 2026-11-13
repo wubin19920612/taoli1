@@ -4,6 +4,8 @@ No account reads, order calls or network transport. Sampling uses the existing
 public queue; SQLite retains one observation per unordered pair / 30s bucket.
 """
 from itertools import combinations, islice
+from contextlib import contextmanager, nullcontext
+from bisect import bisect_right
 from statistics import median
 import threading
 import time
@@ -103,6 +105,64 @@ def cooldown_for(pair):
     return key, float(dec(pair['closed_at'])+RETENTION_SECONDS)
 
 
+@contextmanager
+def active_transaction(store, active, durable=True):
+    """Check lifecycle before even BEGIN: close may have closed the connection."""
+    with store.lock:
+        if not active():
+            yield False
+        else:
+            with store.transaction() if durable else store.lock:
+                yield True
+
+
+def deviation_rank(ordered, center, rank):
+    """Select from two monotone halves without sorting all deviations again."""
+    # Decimal rounding can put an even-count center outside the middle bracket.
+    left = bisect_right(ordered, center)
+    right = len(ordered)-left
+    low, high = max(0, rank+1-right), min(rank+1, left)
+    while low <= high:
+        a = (low+high)//2
+        b = rank+1-a
+        ap = abs(ordered[left-a]-center) if a else None
+        an = abs(ordered[left-a-1]-center) if a < left else None
+        bp = abs(ordered[left+b-1]-center) if b else None
+        bn = abs(ordered[left+b]-center) if b < right else None
+        if ap is not None and bn is not None and ap > bn:
+            high = a-1
+        elif bp is not None and an is not None and bp > an:
+            low = a+1
+        else:
+            return bp if ap is None else ap if bp is None else max(ap, bp)
+    raise AssertionError('baseline_deviation_partition')
+
+
+def median_deviation(values, ordered, center):
+    ranks = ((len(values)-1)//2, len(values)//2)
+    lower = deviation_rank(ordered, center, ranks[0])
+    upper = lower if ranks[0] == ranks[1] else deviation_rank(ordered, center, ranks[1])
+    # Decimal equality can hide different scales. The old stable sort selected
+    # tied deviations in original bucket order, so recover those exact operands
+    # before the even-count average. No float conversion or quantization.
+    less = 0
+    ties = []
+    first_upper = None
+    for value in values:
+        deviation = abs(value-center)
+        if deviation < lower:
+            less += 1
+        elif deviation == lower:
+            ties.append(deviation)
+        elif first_upper is None and deviation == upper:
+            first_upper = deviation
+    first = ties[ranks[0]-less]
+    if len(values) % 2:
+        return first
+    second = ties[ranks[1]-less] if lower == upper else first_upper
+    return median((first, second))
+
+
 class Baseline:
     def __init__(self, store, clock=time.time):
         self.store, self.clock = store, clock
@@ -141,8 +201,8 @@ class Baseline:
                     yield (pair_key(base,a,b), int(now//SAMPLE_SECONDS), now, str((mb/ma-1)*10000))
         # Revoke references before exposing any new samples or partial results.
         # Only a completed round can publish the captured reference set again.
-        with self.store.transaction():
-            if not active():
+        with active_transaction(self.store, active) as accepted:
+            if not accepted:
                 return
             self.store.set_meta('baseline_quotes', dict(at=now, mids={}))
         versioned = hasattr(self.store, 'baseline_window')
@@ -154,20 +214,38 @@ class Baseline:
                 if not active():
                     return
                 self.store.add_baseline_samples(samples(), now)
+        with self.store.baseline_reader() if versioned else nullcontext(None) as reader:
+            self._record_states(bases, now, active, reader)
+        if versioned:
+            self.store.prune_baseline_states(bases, active)
+        else:
+            with self.store.lock:
+                if not active():
+                    return
+                self.store.prune_baseline_states(bases)
+        with active_transaction(self.store, active) as accepted:
+            if not accepted:
+                return
+            self.store.set_meta('baseline_quotes', dict(at=now, mids=mids if quotes_valid() else {}))
+
+    def _record_states(self, bases, now, active, reader):
         keys = (pair_key(base,a,b) for base in bases for a,b in combinations(sorted(BATCH_URLS), 2))
         while True:
             batch = list(islice(keys, 64))
             if not batch:
-                break
+                return
             computed = []
-            for key in batch:
-                result = self._calculate(key, now, active=active)
-                if result is None:
-                    return
-                computed.append((key, *result))
+            # Bound the WAL snapshot lifetime to one batch, with only one pair
+            # decoded at a time. The reader never owns the account Store lock.
+            with reader.snapshot() if reader else nullcontext():
+                for key in batch:
+                    result = self._calculate(key, now, active=active, reader=reader)
+                    if result is None:
+                        return
+                    computed.append((key, *result))
             retry = []
-            with self.store.transaction():
-                if not active():
+            with active_transaction(self.store, active) as accepted:
+                if not accepted:
                     return
                 for key, stats, revision, _ in computed:
                     if revision is not None and self.store.baseline_revision(key) != revision:
@@ -182,29 +260,19 @@ class Baseline:
             for key in retry:
                 base, a, b = key.split('|')
                 self.status(base, a, b, now, active=active, preserve_newer=True)
-        if versioned:
-            self.store.prune_baseline_states(bases, active)
-        else:
-            with self.store.lock:
-                if not active():
-                    return
-                self.store.prune_baseline_states(bases)
-        with self.store.transaction():
-            if not active():
-                return
-            self.store.set_meta('baseline_quotes', dict(at=now, mids=mids if quotes_valid() else {}))
 
-    def _calculate(self, key, now, reverse=False, active=lambda: True):
+    def _calculate(self, key, now, reverse=False, active=lambda: True, reader=None):
         since = now-WINDOW_SECONDS
         entry = self._cache.get(key)
-        with self.store.lock:
+        source = reader or self.store
+        with source.lock:
             if not active():
                 return None
-            if hasattr(self.store, 'baseline_window'):
-                revision, incremental, added = self.store.baseline_window(key, since, now, entry)
+            if hasattr(source, 'baseline_window'):
+                revision, incremental, added = source.baseline_window(key, since, now, entry)
             else:
                 revision, incremental = None, False
-                added = self.store.baseline_samples(key, since, now)
+                added = source.baseline_samples(key, since, now)
         unchanged = (incremental and not added and entry.context == arithmetic_context()
                      and (entry.stats['first_at'] is None or entry.stats['first_at'] >= since))
         rows = None
@@ -213,8 +281,9 @@ class Baseline:
         else:
             rows = ([r for r in entry.rows() if since <= r[0] <= now]+added) if incremental else added
             values = [dec(value) for _, value in rows]
-            center = median(values) if values else None
-            mad = median([abs(v-center) for v in values]) if values else None
+            ordered = sorted(values)
+            center = median(ordered[(len(values)-1)//2:len(values)//2+1]) if values else None
+            mad = median_deviation(values, ordered, center) if values else None
             stats = dict(baseline_bps=str(center) if center is not None else None,
                          mad_bps=str(mad) if mad is not None else None, count=len(rows),
                          first_at=rows[0][0] if rows else None, latest_at=rows[-1][0] if rows else None)
@@ -252,8 +321,8 @@ class Baseline:
             if result is None:
                 return None
             stats, revision, reversed_stats = result
-            with self.store.transaction() if revision is not None else self.store.lock:
-                if not active():
+            with active_transaction(self.store, active, revision is not None) as accepted:
+                if not accepted:
                     return None
                 if revision is not None and self.store.baseline_revision(key) != revision:
                     continue

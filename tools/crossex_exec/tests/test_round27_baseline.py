@@ -4,6 +4,7 @@ from decimal import localcontext
 from itertools import combinations
 from pathlib import Path
 import random
+from statistics import median
 import tempfile
 import threading
 from types import SimpleNamespace
@@ -14,7 +15,8 @@ from tools.crossex_exec import baseline as module
 from tools.crossex_exec.baseline import Baseline, BATCH_URLS, pair_key
 from tools.crossex_exec.baseline_cache import WindowCache
 from tools.crossex_exec.engine import Engine
-from tools.crossex_exec.storage import Store
+from tools.crossex_exec.storage import Store, BaselineReader
+from tools.fill_sim.core import dec
 from round27_fixtures import LegacyBaseline
 from test_exec import setUpModule, tearDownModule
 
@@ -328,11 +330,88 @@ class BaselineTests(unittest.TestCase):
         self.baseline.record({}, ('BTC',))
         keys = set(self.baseline._cache.entries)
         self.assertTrue(keys)
-        with patch.object(self.store, 'baseline_samples', wraps=self.store.baseline_samples) as read:
+        original = BaselineReader.baseline_samples
+        with patch.object(BaselineReader, 'baseline_samples', autospec=True, side_effect=original) as read:
             self.baseline.record({}, ('BTC',))
-        full_reads = sum(call.args[1] == NOW-21600 for call in read.call_args_list)
+        self.assertEqual(read.call_count, 15)
+        full_reads = sum(call.args[2] == NOW-21600 for call in read.call_args_list)
         self.assertLessEqual(full_reads, 15-len(keys))
         self.assertEqual(set(self.baseline._cache.entries), keys)
+
+    def test_close_during_sampling_does_not_touch_the_closed_database(self):
+        engine = self.engine(('BTC',))
+        sample = engine.market.sample_quotes
+
+        def close(minimum):
+            engine.close()
+            self.store.close()
+            return sample(minimum)
+
+        engine.market.sample_quotes = close
+        engine.refresh_baselines()
+
+    def test_slow_readonly_window_does_not_hold_the_account_lock(self):
+        self.seed(('BTC',), 361)
+        engine = self.engine(('BTC',))
+        entered, release = threading.Event(), threading.Event()
+        original = BaselineReader.baseline_samples
+
+        def read(reader, *args):
+            if not entered.is_set():
+                entered.set()
+                if not release.wait(5):
+                    raise AssertionError('read_not_released')
+            return original(reader, *args)
+
+        with ThreadPoolExecutor(max_workers=2) as pool, \
+             patch.object(BaselineReader, 'baseline_samples', read):
+            work = pool.submit(engine.refresh_baselines)
+            try:
+                self.assertTrue(entered.wait(3))
+                pool.submit(engine.refresh_accounts).result(timeout=.75)
+                self.assertEqual(engine.account_cache.read()['captured_at'], NOW)
+            finally:
+                release.set()
+                work.result(timeout=10)
+
+    def test_mad_ties_keep_legacy_decimal_scale_and_rounding(self):
+        rng = random.Random(2701)
+        key = pair_key('BTC', 'binance', 'bitget')
+        values = ('40', '40.00', '-40.0', '-40.000', '0', '0.00000',
+                  '79.99999999999999999999999999', '-0.000000000000000000000000001')
+        for count in (1, 2, 3, 300, 361, 720, 721):
+            rows = [(key, int((NOW-n*30)//30), NOW-n*30, rng.choice(values)) for n in range(count)]
+            for store in (self.store, self.old):
+                store.db.execute('DELETE FROM baseline_samples')
+                store.add_baseline_samples(rows, NOW)
+            for precision in (12, 28, 38):
+                with localcontext() as context:
+                    context.prec = precision
+                    for a, b in (('binance', 'bitget'), ('bitget', 'binance')):
+                        self.assertEqual(self.baseline.status('BTC', a, b), self.legacy.status('BTC', a, b))
+
+    def test_rounded_even_center_outside_middle_bracket_still_matches(self):
+        key = pair_key('BTC', 'binance', 'bitget')
+        rows = [(key, int((NOW-n*30)//30), NOW-n*30, value) for n, value in enumerate(
+            ('100.001', '100.002', '100.003', '100.004'))]
+        for store in (self.store, self.old):
+            store.add_baseline_samples(rows, NOW)
+        with localcontext() as context:
+            context.prec = 2
+            self.compare(('BTC',))
+
+    def test_mad_matches_legacy_sort_across_random_scales_and_rounding(self):
+        rng = random.Random(2702)
+        for _ in range(150):
+            values = [dec(str(rng.randrange(-10**28, 10**28))+'E-'+str(rng.randrange(28)))
+                      for _ in range(rng.randrange(1, 722))]
+            with localcontext() as context:
+                context.prec = rng.choice((2, 4, 12, 28, 38))
+                context.rounding = rng.choice(('ROUND_FLOOR', 'ROUND_CEILING', 'ROUND_HALF_EVEN'))
+                center = median(values)
+                expected = median(abs(v-center) for v in values)
+                actual = module.median_deviation(values, sorted(values), center)
+                self.assertEqual(str(actual), str(expected))
 
 
 if __name__ == '__main__':

@@ -5,7 +5,7 @@ updates individual state rows; private journal/event writes still use encode().
 """
 import json
 from tools.fill_sim.core import Market, dec
-from .baseline import BATCH_URLS, pair_key
+from .baseline import BATCH_URLS, pair_key, active_transaction
 
 PUBLIC_KEYS = frozenset(('baseline_status', 'baseline_quotes', 'market_tickers'))
 STATE_COLUMNS = ('key', 'baseline_bps', 'mad_bps', 'count', 'first_at', 'latest_at',
@@ -154,8 +154,8 @@ class PublicStore:
         bases = set(bases)
         after = ''
         while True:
-            with self.transaction():
-                if not active():
+            with active_transaction(self, active) as accepted:
+                if not accepted:
                     return
                 keys = [r[0] for r in self.db.execute(
                     'SELECT key FROM baseline_state WHERE key>? ORDER BY key LIMIT 64', (after,))]
