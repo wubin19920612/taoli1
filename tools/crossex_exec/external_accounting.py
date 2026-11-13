@@ -58,11 +58,12 @@ def non_contract_cashflow(row):
 
 
 def conversion_trade(row):
+    # Conversion execution has no contract position/PnL semantics. Its cash is
+    # proved by the account book and balances, not futures fee/rpnl/qty fields.
     if row.get('business_type')!='CONVERT':
         return False
     if (row['symbol']!=CONVERSION_SYMBOL or row['exchange_type']!='HYPERLIQUID'
-            or row['fee_coin']!='' or row['position_side']!=''
-            or dec(row['fee'])!=0 or dec(row['rpnl'])!=0):
+            or row['fee_coin']!='' or row['position_side']!=''):
         raise ValueError('trade_identity')
     return True
 

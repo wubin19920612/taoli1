@@ -126,6 +126,17 @@ class ProgramCashTests(unittest.TestCase):
 
 
 class NonContractCashTests(ObservedFixture, unittest.TestCase):
+    def test_conversion_does_not_require_futures_pnl_or_fill_fields(self):
+        self.convert()
+        # The task specifies conversion identity, not futures fee/PnL or size
+        # fields. No position or contract-income proof may depend on them.
+        for field in ('fee', 'rpnl', 'qty', 'price', 'side'):
+            self.trades[0].pop(field)
+        value = self.prove()
+        self.assertTrue(value['verified'])
+        self.assertEqual(dec(value['program_total']), 0)
+        self.assertEqual(dec(value['external_cash']), 0)
+
     def test_conversion_pair_trade_and_lighter_interest_are_not_program_income(self):
         self.convert()
         self.cash('', 'INTEREST_ISOLATED', '-.25', 'LIGHTER', 'USDC')
