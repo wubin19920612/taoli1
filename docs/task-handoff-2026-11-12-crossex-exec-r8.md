@@ -2477,3 +2477,104 @@ SHA256：`7358f0bfa564e8fe28522571d47c3bf3fcb0c37b8bbe43e51e4270c419a15131`。
 ### GitHub 推送回执
 
 2026-11-13，已通过普通 `git push -u origin HEAD:refs/heads/codex/crossex-exec-r8` 新建并推送当前 GitHub 分支，未 force push。首次成功发布提交 `dbe87fa`，包含全部代码/测试（最终代码提交 `d8e825b`）、两轮交接、契约增补及四条全量验收JSON；远端地址为项目既有 origin。本段是发布成功后的文档回执，随单独文档提交推送，不改变已验收实现与测试。生产服务器未访问、未部署的边界保持。
+
+## 第二十二轮（2026-11-13，确认成交边界与混仓收益修复）
+
+### 目标、基线与小步提交
+
+按 [第二十二轮任务书](crossex-exec-round22-2026-11-13.md) 执行 4 项 P1 和 1 项 P2。工作树为 `C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec-r8`，分支 `codex/crossex-exec-r8`；开始 HEAD=`6d77d93`，工作区干净，远端跟踪提交为 `cf8a3b0`。`6d77d93` 是已有任务书提交，完整保留并随本轮发布。最终代码/测试提交为 `ae20a92`，其后只追加交接与验收证据。本轮授权明确禁止 WSL 和服务器访问，不包含部署。
+
+| 提交 | 内容 |
+|---|---|
+| `62af465` | P1-1 红灯：UNKNOWN 程序 0.100＋用户 0.400 实际误减 0.490；覆盖未决减仓额度预留 |
+| `6b63865` | P1-1 修复：减仓仅使用已确认净成交，扣除未决减仓尚未确认余量 |
+| `dcf775d` | P1-2 红灯：开仓未补齐、已减 0.245 时恢复失败；跨生命周期净额不得抵消异常 |
+| `8d89920` | P1-2 修复：按 pair/leg/原始合约/方向计算；可由未决开仓解释的暂时负额仅给零额度 |
+| `0e88d9f` | P1-3 红灯：外仓 −9000 跨日成为程序 +9000；合并数量污染跟踪浮盈亏 |
+| `854d8fc` | P1-3 修复：独立程序跟踪观测、确认数量、程序入场价和统一 USD 估值 |
+| `535592f` | P1-4 红灯：用户撤出后 −90 被全额归程序；正负资金费不能先抵销再分摊 |
+| `1c38bc1` | P1-4 修复：持久混仓区间、逐笔不利比例估算，保留原始账单/独立累计证明 |
+| `0ee0818` | P2：恢复 POSITIONS 历史持仓调用断言，保留原空程序生命周期的全部断言 |
+| `0745748` | 边界红灯：旧污染日基线、混仓结束同毫秒的新费用；补未知开仓区间停开测试 |
+| `ae20a92` | 边界修复：拒绝外仓污染基线和无先后证据的资金费边界，不自动重基线 |
+
+### 每条 P1 的最终行为与代码入口
+
+P1-1：`ownership.bounded_pair_positions` 的额度只来自 `journal_positions` 已确认净成交；INTENT/SENT/ACK/UNKNOWN 开仓未确认余量一律不增加可平量，未决减仓的未确认余量反而预留扣减。实际恢复测试最多减 0.100，用户 0.400 完整保留；查询仍不明时保留 UNKNOWN、停开与告警。未改订单查询、取消、生成和发送函数。
+
+P1-2：`ownership.journal_positions` 先按委托生命周期聚合，再汇总原始 route/symbol/side。只有本生命周期尚未确认的 SENT/ACK/UNKNOWN 开仓余量足以解释已确认减仓负额时，才以零可平量继续恢复；不从远端多出的数量补账，不用其他 pair 的持仓抵销负额。查询补齐开仓 0.490 后，剩余 0.245 正常自动平掉，额外用户 0.400 不变。终态超减或无对应开仓的负额仍报 `negative_local_position`。
+
+P1-3：`Engine.save_program_tracking_upnl` 从程序上次观测及 `ProgramOwnership` 投影开始，按本地确认数量、程序成交入场价和当前可成交盘口计算，使用与程序核算相同的 `usd_value` 币种口径；不再把整户 `last_upnl` 或手工登记表当成程序归属。`require_program_observation` 在消费程序基线/上次观测前检查外部键及分项求和；已知污染旧值保持停开，不伪造迁移或改写日基线。测试确认外仓 −9000 跨日后程序日盈仍为 0，自身 −21 仍触发日亏锁。
+
+P1-4：新增 `program_funding.py`。`read_program_snapshot` 在两次账户观测时分别保存 `program_funding_ownership`；即使历史不完整或本次收益认证失败，混仓区间也保留在 SQLite，用户撤出和重启不会丢失。`ProgramAccounting` 仍先用原始完整账单、持仓生命周期独立累计及 UTC 日界证明核验，全部通过后才逐笔分摊；证明提交和消费绑定 ownership revision，防止旧计算覆盖新观测。
+
+### 资金费分摊口径与不确定边界
+
+只在同一路由、同一原始合约且同一方向的数量证据可解释时，使用 `程序确认数量 / 远端总数量`。区间从上次观测延伸至首次数量恢复一致的观测，保存期间观察到的最小/最大份额；费用取最大份额，收入取最小份额，逐笔处理后求和。分子分母保留原生数量，先乘金额再除，避免先舍入比例导致 −90/9 不能精确得到 −10。两条路由均验证程序 1/9 时 −90 只计 −10；比例在 1/3、1/2 之间时，+90 和 −90 分别计 +30、−45，总额 −15，不把原始净零当成程序净零。
+
+已认证且位于区间起点同毫秒的原账单 ID 保留原归属；新出现的边界账单不能借旧认证豁免。区间结束观测与非零费用同毫秒时，无法证明费用先于还是后于用户撤仓，保持 `program_funding_attribution_unverifiable` 停开，不能用旧比例稀释新程序亏损。存在未知开仓、相反方向混合或读取期间订单变化时也不编造份额；不会把整笔收入/亏损认证为零。数量仍不一致时保留原来的停开行为和上次有效指标。
+
+认证结果新增 `funding_attribution=exclusive_program/observed_quantity_ratio_estimate`、`funding_attribution_estimated`、`funding_ownership_revision`，明确资金费完整性已证明与归属采用估算是两件事。估算仅覆盖实际观测到的混仓，不是交易所逐成交历史仓位重建；未观测的历史混仓无法追溯补造。旧污染基线、未知比例及边界不明可能持续停开，需要后续取得独立证据并审阅处理，不能以删账、清锁或自动重基线绕过。
+
+### 旧测试保留、检索和静态审阅
+
+新增 `test_round22_ownership.py` 4 项、`test_round22_pnl.py` 3 项、`test_round22_funding.py` 5 项，共 12 项，全部先复现主问题再修复。首遍全量 682 项发现一个旧 FX 诊断测试回归：归属采样提前抛出无效身份；改为保留原始账户/FX 观测但把收益证明标为不完整，未修改该旧测试。补充边界红灯后最终为 685 项。
+
+唯一修改的旧测试文件是 `test_round18_lifecycle.py`，AST 核对原有 53 个 assert 调用全部保留，增加 5 个。`POSITIONS` 常量实际指向 Bitget `history-position`，所以原空程序阶段仍断言不读资金流水；随后增加本地已确认零成交程序合约的真实启动/刷新/tick/停机阶段，通过原 Accounts/适配器触发历史持仓接口并恢复调用断言。没有改常量、直接伪造 HTTP 调用或删改旧断言来制造通过。
+
+全局检索 `upnl`、`program_last_upnl`、`equity_baseline`、`forbidden`、`external.records`：程序风险入口使用 `require_program_proof`；日亏/累计/权益跌幅读取已认证的程序金额；整户权益和 `last_upnl/daily_upnl` 保留作账户观测与 dedicated-account 兼容，程序跟踪不再消费它们。仍按手工登记处理的旧 `ExternalAccounting` 是诊断/兼容入口，不在默认程序认证路径；管理基线使用 `ProgramOwnership`，不是手工登记表。
+
+自审并按 AST 对比 `6d77d93`：Engine 原方法仅修改 `roll_program_upnl/save_tracking_upnl`，新增 `save_program_tracking_upnl`；包括 `new_intent/check_order/_check_pair/check_release/_ingest/reduction_intent/reduce/repair_intents/_balance/close_pair/_close_pair/resolve_exposure/recover_pair/save_remote` 在内的下单和恢复发送方法全部不变。`limits.py/execution.py/transport.py/adapters.py/funding.py` 内容不变；哈希与断言审计见验收 JSON。没有委派其他代理，不将本轮自审称为独立终审。
+
+### 最终双版本全量验收
+
+最终代码 SHA：`ae20a92675d3a02573892e11e1defaa0def31c16`。以下四条均为未筛选的 discover 全量命令，退出码全部 0，无 skip；两版本各完整运行三种子 `20261111/20261112/20261113` 的 INVARIANTS 和 PROGRAM_INVARIANTS。每个 INVARIANTS 种子 2712 轮，其中随机 2400 轮，十项不变量各检查 2712 次；原始模拟器汇总正文、运行参数、日志 SHA256 和静态检查均保存在 [crossex-exec-r22-validation-2026-11-13.json](crossex-exec-r22-validation-2026-11-13.json)，没有重算或省略原始汇总字段。并发调度影响 query 次数，以各自日志为准。
+
+两套解释器分别完整执行：
+
+```text
+python -m unittest discover -s tools/crossex_exec/tests -v
+python -m unittest discover -s tools/fill_sim/tests -v
+```
+
+Python 3.12.10：`C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe`。
+
+`delivery-3.12-crossex_exec.log` 原始汇总：
+
+```text
+Ran 685 tests in 156.783s
+
+OK
+```
+
+`delivery-3.12-fill_sim.log` 原始汇总：
+
+```text
+Ran 158 tests in 29.460s
+
+OK
+```
+
+Python 3.10.20：任务书指定的 `C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe`。
+
+`delivery-3.10-crossex_exec.log` 原始汇总：
+
+```text
+Ran 685 tests in 170.704s
+
+OK
+```
+
+`delivery-3.10-fill_sim.log` 原始汇总：
+
+```text
+Ran 158 tests in 31.612s
+
+OK
+```
+
+### 交付、线上状态与接续
+
+本轮仅在 Windows 离线夹具与本地回环接口上验证，没有 WSL、SSH、服务器查询、真实账户鉴权或真实交易，也没有线上数据库备份、部署或容器重启；线上版本未核实。日志目录为 `C:\Users\wubin\AppData\Local\Temp\crossex-r22-n10uad96`，测试临时 SQLite 由 fixture 清理，不提交整份日志或账户数据。
+
+Git 发布目标固定为 `origin` 的 `codex/crossex-exec-r8`，使用普通 `git push origin HEAD:refs/heads/codex/crossex-exec-r8`；本节与验收 JSON 随单独文档提交交付，推送回执和最终文档提交号以本任务最终报告为准。开始时没有其他 WIP，本轮保留已有任务书提交与全部历史交接，无 reset、clean、覆盖用户改动或 force push。后续任务先读本节、任务书和验收 JSON，再独立终审；服务器/影子验收需另开获准访问的任务，其他主要模块也另开任务。
