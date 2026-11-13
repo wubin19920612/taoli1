@@ -1544,3 +1544,163 @@ PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 3
 Temp 保留红绿灯、双版本全量日志；新测试临时数据库由自身 fixture 清理，没有删除旧诊断、WIP 或其他任务产物。最终仓库只包含本轮提交，无新未跟踪整库或凭据。
 
 单一测试冲突已按明确裁决解决，本轮本地验收完成；下一步在新任务进行独立终审。线上只读/影子发布仍应另行授权，先备份并验证真实空账户启动和持续运行；本次全绿不等同线上验收，不通过删库、改证明、解锁或降低风控恢复服务。后续页面或其他模块另建任务。
+
+## 第十九轮
+
+### 目标、范围、基线与小步提交
+
+按 [第十九轮任务书](crossex-exec-round19-2026-11-13.md) 和本交接第十七、十八轮接续，模块仅为 CrossEx 收益核算与历史摘要缓存。指定 worktree `C:/Users/wubin/Desktop/code/codex/taoli1/.worktrees/crossex-exec-r8`，分支 `codex/crossex-exec-r8`，起始 HEAD `00113954ecccb8e3bd802219c08e5fad547ecec2`，起始工作区干净。PM 已提交的 history-position null/null 修复 `b99c8ae` 保持原语义。
+
+| 提交 | 内容 |
+|---|---|
+| `1ee714a` | 先提交真实响应形态的合成夹具、核算与缓存失败回归 |
+| `0fffa65` | P1-A：区分账本现金域与合约交易所，核对登记身份和本地合约 |
+| `0bfca33` | P1-B：限定兑换及 Lighter 利息为非合约现金流 |
+| `387b87e` | P2：三个历史列表校验完成后统一替换摘要缓存 |
+| `328662b` | 自审补充回归：兑换成交不依赖合约 fee/rpnl/qty 字段 |
+| 本节所在 docs 提交 | 原始验收汇总、日志校验值和本轮交接；自身 SHA 通过 git log 查询 |
+
+全部为本地小步提交；只显式暂存本任务路径。Git 索引位于父仓库，普通暂存遇文件权限拒绝后，仅为已授权的本地提交使用扩展权限，自动审批未拒绝。提交关闭 hooks/GPG，未运行 WSL、amend、reset、clean 或 force push。实现后完成本地自审，未使用子代理，也不将自审称为独立终审。
+
+### P1-A：现金域与合约身份
+
+新增 `cash_identity.py:cash_identity/program_contract_identity`。仅在 **account_book 合约现金行** 中，对 BINANCE/OKX/GATE/BYBIT/BITGET 的 USDT 合约接受 `exchange_type=CROSSEX, coin=USDT`；原本与合约交易所完全一致的现金身份继续接受。完整 symbol 必须能解析为 `<EXCHANGE>_FUTURE_<raw_base>_<quote>`，并与外仓登记身份或本地订单 instrument 的交易所、业务和 quote 一致。未知交易所不能借用 CROSSEX 域，USDC/HL 不获得此例外；具体 DEX 和原始 symbol 不被规范化丢弃。
+
+本轮逐项检查的调用链：
+
+- `external_accounting._evaluate` 的外仓和程序分支，以及 `program_activity`，共用账本身份校验。本地订单不是只证明“出现过相同 symbol”，还须证明该 symbol 与其实际 market.exchange/spec.quote 相符。
+- `funding.funding_continuity` 仅在读取 CrossEx **账本** 时使用现金身份解析。资金费生命周期、合约/quote 汇总、UTC 分日检查点和旧证明来源验证保持；`daily_continuity` 通过此链路兼容 CROSSEX 账本。
+- `funding_positions`、`position_values.position_identity` 仍按原始仓位/历史仓位严格核对。history_positions 没有 exchange_type 时仍从完整 symbol 推导；显式冲突不能被现金域例外覆盖。history_trades 的 FUTURE 行仍保留 BINANCE/HYPERLIQUID 等真实交易所。
+- `cash_balances/cash_continuity` 正确按原始 `route|exchange_type|coin` 核对资产余额，因此保持原逻辑；**没有把 CROSSEX/USDT 余额改写成 BINANCE/USDT**，也没有合并 HL/Lighter 的 USDC 域。
+- `equity.py:read_flat_accounts/apply` 没有另一套 account_book exchange_type 判断，继续调用修复后的 program_activity、funding_continuity 和 daily_continuity；重基线及其后增量已纳入回归，无需改动管理流程。
+
+合成夹具保留任务书的外仓 BINANCE_FUTURE_OPENAI_USDT、HL io:OAI USDC 双向仓位、三种合约流水及真实成交身份差异；金额、ID、时钟和公开 FX 均为离线合成。程序覆盖非零手续费/成交盈亏/资金费、首笔实际模拟开仓、平仓、文件库重启和重基线。真实私有接口没有在本轮重读。
+
+### P1-B：兑换与 Lighter 利息
+
+`external_accounting.non_contract_cashflow` 只新增两类明确例外：
+
+- `HYPERLIQUID_CONVERT_USDC_USDT` 的 TRANSACTION：HYPERLIQUID/USDC 扣减、CROSSEX/USDT 增加，按币种间资本兑换处理。兑换价差不假定为零，也不假定 USDC=USDT；它不计合约 external_cash 或本程序收益。
+- 空 symbol、LIGHTER/USDC、负数 `INTEREST_ISOLATED`：作为外部负债成本排除在程序收益之外。没有扩展到其他交易所/币种的同名流水，也没有放宽现有负债、保证金或停机门禁。
+
+`conversion_trade` 仅识别该兑换 symbol、HYPERLIQUID、business_type=CONVERT、空 fee_coin/position_side；该行不参与持仓连续性或合约 fee/rpnl/qty 计算。最终自审移除了最初额外添加的“fee/rpnl 必须为零”条件，并用先红后绿的新测试验证：兑换身份和余额证据成立时，不需要合约专用盈亏/成交字段。这是字段依赖边界回归，不声称生产响应必然省略这些字段。
+
+在 _evaluate 的收益核验中，上述排除发生在完整历史、余额、资金费证据核对之后；所有现金行仍进入原始资产域余额连续性计算。缺兑换任一现金腿或缺利息行、余额不符、重复/消失/改写的历史、错误兑换身份、未知 statement_type 均不能借此通过。账户真实负债的归属判断沿用原规则。
+
+### P2：失败时缓存容量不再叠加
+
+`external_accounting.history_index` 使用一个候选缓存和全局预算，全部三个历史列表的 ID、时间戳与内容编码校验成功后，才统一替换已有缓存。第二或第三个列表失败时保留原缓存，不留下“新 CrossEx + 旧 Bitget”组合。上限仍为 25,000 行、8 MiB **规范编码行内容**；不把它表述为整个 Python 进程的内存上限。
+
+新测试在旧实现复现 50,000 行或 16,776,318 字节，覆盖第二/第三列表失败、重复失败和重复 ID；修复后检查原缓存逐项不变及两种总容量边界。成功路径仍为 25,001 条历史生成完整核验索引，缓存仅保留至预算内；缓存不提供缺失远端行、不缓存开仓结论。
+
+### 测试先行、旧测试与审查
+
+首批新增 13 项先于实现运行。初始日志为 9 failures / 7 errors，其中 3 个 subTest 失败来自新测试误把已建立的空历史索引期待为 None；在实现前改为断言原历史不变，重新得到 **13 项、6 failures / 7 errors**。原程序首笔成交失败、外仓/兑换归属失败及缓存超额均保留真实红灯。P1-A 首次专项又暴露新夹具缺少独立 USDC 公开 FX 证据，补充两源合成报价后，相关资金费专项 30 项通过；P1-B 相关专项 88 项、P2 相关专项 12 项通过。额外的兑换字段依赖测试单独先红 1 error，再修复；最终本轮专项共 **14 项**。
+
+相对基线 `0011395`，原 **60 个 Python 测试/夹具文件全部未改**（规范 CRLF 后逐字比较），没有替换或放宽任何旧断言。原 HL/USDT 的 INTEREST_ISOLATED 失败断言与本轮限定 LIGHTER/USDC 的例外不矛盾，故原文保留。没有修改 `limits.py`、`execution.py`、`engine.py`、`adapters.py`、`history.py` 或通用仓位身份解析；订单路径、硬上限、PM 空页修复均保持。114 个 Python 文件语法解析通过。
+
+### 3.10 验收环境修复记录
+
+`387b87e` 首轮双版本全量均通过（执行器各 641 项、fill-sim 各 158 项）；后续 `328662b` 增加兑换字段回归后重新验收。3.12 全量通过，但 3.10 第一次重跑报告下列失败，日志完整保留，不能算作通过：
+
+```text
+Ran 642 tests in 163.184s
+
+FAILED (errors=10)
+```
+
+错误为标准库 `sqlite3.dump/unittest._log/tracemalloc` 无法导入，以及五项原有跨进程测试启动 `sys.executable` 时报 WinError 2。随后的只读检查确认：任务书指定的 `cpython-3.10-windows-x86_64-none` 路径已经不存在，而同一 uvpy 目录下的 `cpython-3.10.20-windows-x86_64-none` 完整存在。没有证据判断路径消失由谁或哪个进程造成。
+
+先直接验证版本目录的 Python 3.10.20、SQLite 3.50.4、上述三个标准库及子进程，再只在缺失的原路径创建指向该版本目录的 Windows Junction；通过原指定路径再次验证导入和子进程成功。未覆盖现有文件、重装解释器或改测试。目录联接保留供后续按任务书命令复现。
+
+此次失败的中文 Windows 错误以 GB18030 写入日志，外围记录器用 UTF-8 解码时又失败，所以它未保存该子进程退出码，也未继续启动当次 fill-sim；没有把外围错误误记成 unittest 成功。恢复后两条 3.10 **完整命令全部重新运行**，仅设置 `PYTHONIOENCODING=utf-8` 统一日志输出，并先保存实际退出码再解析日志。环境证据、失败原始日志校验值、恢复后的解释器文件校验值见本轮验收 JSON 的 `interpreter_recovery`。
+
+### 最终双版本全量验收
+
+最终实现提交为 `328662be134133d1098694d635f23d60e02ce16a`。从该提交完整运行任务书的两条命令，不过滤 discover、不跳过用例、不用内存库替代真实文件库；本次程序修改之后四条命令全部重跑。3.10 在环境恢复后仍通过任务书给定的原路径调用。
+
+```powershell
+$py312 = 'C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe'
+$py310 = 'C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe'
+& $py312 -m unittest discover -s tools/crossex_exec/tests -v
+& $py312 -m unittest discover -s tools/fill_sim/tests -v
+& $py310 -m unittest discover -s tools/crossex_exec/tests -v
+& $py310 -m unittest discover -s tools/fill_sim/tests -v
+```
+
+| 解释器 | 执行器全量 | fill-sim 全量 | 退出码 |
+|---|---|---|---|
+| Windows Python 3.12.10 / SQLite 3.49.1 | **642 项 / 131.562s / OK** | **158 项 / 30.861s / OK** | 两条均 0 |
+| 指定 Windows Python 3.10.20 / SQLite 3.50.4 | **642 项 / 185.372s / OK** | **158 项 / 35.075s / OK** | 两条均 0 |
+
+两套模拟器均由执行器完整 discover 同次运行。每版原模拟器的三个种子 `20261111/20261112/20261113` 均为 2,712 回合、十项 checks 全为 2712、exercised 全非零、恢复界限 N=1、外仓检查 96、隔离检查 48；默认 program 模拟器每版三个种子均为 12 场景、8 次开平仓、4 次明确拒单、8 次资金费延迟、20 次重启、40 次发送检查。共十二份种子结果逐项与原始输出核对通过。两版原五项真实文件 SQLite 跨进程用例全部为 ok。
+
+日志保留在 `C:/Users/wubin/AppData/Local/Temp/crossex-r19-20261113/`。完整命令、解释器版本、代码提交、起止时间、真实退出码、日志 SHA-256、源码指纹和未改旧测试审计见 [第十九轮验收 JSON](crossex-exec-r19-validation-2026-11-13.json)。其中 `tests` 是最终结果，`prior_full_acceptance` 保留补充回归之前的首次全量通过；`interpreter_recovery` 单独保留环境失败，不把这些结果混为同一轮成功。
+
+#### unittest 原始汇总行
+
+`final-py312-crossex_exec.log`
+
+```text
+Ran 642 tests in 131.562s
+
+OK
+```
+
+`final-py312-fill_sim.log`
+
+```text
+Ran 158 tests in 30.861s
+
+OK
+```
+
+`verified-py310-crossex_exec.log`
+
+```text
+Ran 642 tests in 185.372s
+
+OK
+```
+
+`verified-py310-fill_sim.log`
+
+```text
+Ran 158 tests in 35.075s
+
+OK
+```
+
+#### 两套模拟器原始汇总行
+
+以下正文逐字取自最终完整日志，仅去掉 unittest 在同一行预先写出的用例名称前缀。
+
+`final-py312-crossex_exec.log`
+
+```text
+INVARIANTS seed=20261111 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 35, '1b': 80, '1c': 25, '1d': 104, '2': 94, '3': 115, '4': 94, '5': 600, '6': 23, '7': 363} coverage={'account_failures': 151, 'baseline_admission': 94, 'cooldown_active': 167, 'db_failures': 22, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 162, 'halted': 359, 'halting_retry': 4, 'intent_write_abort': 21, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 94, 'opened_pairs': 47, 'partial_fill': 27, 'position_failures': 137, 'position_read': 4091, 'query': 4258, 'query_failures': 1447, 'recovery_obligation': 23, 'reduce': 115, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 722, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'skip_baseline_not_flat': 75, 'skip_book_skew': 28, 'skip_book_stale': 112, 'skip_funding_diff': 56, 'skip_not_single_venue_outlier': 129, 'skip_size_too_small': 1, 'skip_too_few_venues': 26, 'skip_volume_too_low': 1, 'timeout_ack': 28, 'timeout_unknown': 21, 'zero_fill': 20}
+INVARIANTS seed=20261112 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 27, '1b': 76, '1c': 13, '1d': 97, '2': 88, '3': 103, '4': 88, '5': 600, '6': 30, '7': 388} coverage={'account_failures': 116, 'baseline_admission': 88, 'cooldown_active': 24, 'db_failures': 16, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 152, 'halted': 384, 'halting_retry': 4, 'intent_write_abort': 15, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 88, 'opened_pairs': 44, 'partial_fill': 24, 'position_failures': 139, 'position_read': 4105, 'query': 5099, 'query_failures': 639, 'recovery_obligation': 30, 'reduce': 103, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 722, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'skip_baseline_not_flat': 65, 'skip_book_skew': 20, 'skip_book_stale': 86, 'skip_funding_diff': 91, 'skip_not_single_venue_outlier': 153, 'skip_size_too_small': 1, 'skip_too_few_venues': 46, 'skip_volume_too_low': 1, 'timeout_ack': 22, 'timeout_unknown': 34, 'zero_fill': 15}
+INVARIANTS seed=20261113 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 37, '1b': 98, '1c': 27, '1d': 126, '2': 114, '3': 135, '4': 114, '5': 600, '6': 31, '7': 405} coverage={'account_failures': 134, 'baseline_admission': 114, 'cooldown_active': 158, 'db_failures': 20, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 202, 'halted': 401, 'halting_retry': 4, 'intent_write_abort': 20, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 114, 'opened_pairs': 57, 'partial_fill': 27, 'position_failures': 141, 'position_read': 4089, 'query': 5574, 'query_failures': 654, 'recovery_obligation': 31, 'reduce': 135, 'restarts': 114, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 722, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'skip_baseline_not_flat': 43, 'skip_book_skew': 28, 'skip_book_stale': 73, 'skip_funding_diff': 68, 'skip_not_single_venue_outlier': 132, 'skip_size_too_small': 1, 'skip_too_few_venues': 22, 'skip_volume_too_low': 1, 'timeout_ack': 39, 'timeout_unknown': 37, 'zero_fill': 20}
+PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 332, "program_delayed_funding": 8, "program_episodes": 12, "program_explicit_rejection": 4, "program_roundtrip": 8, "program_send_checks": 40, "query": 40, "reduce": 20, "restarts": 20}, "seed": 20261111}
+PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 332, "program_delayed_funding": 8, "program_episodes": 12, "program_explicit_rejection": 4, "program_roundtrip": 8, "program_send_checks": 40, "query": 40, "reduce": 20, "restarts": 20}, "seed": 20261112}
+PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 332, "program_delayed_funding": 8, "program_episodes": 12, "program_explicit_rejection": 4, "program_roundtrip": 8, "program_send_checks": 40, "query": 40, "reduce": 20, "restarts": 20}, "seed": 20261113}
+```
+
+`verified-py310-crossex_exec.log`
+
+```text
+INVARIANTS seed=20261111 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 35, '1b': 80, '1c': 25, '1d': 104, '2': 94, '3': 115, '4': 94, '5': 600, '6': 23, '7': 363} coverage={'account_failures': 151, 'baseline_admission': 94, 'cooldown_active': 167, 'db_failures': 22, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 162, 'halted': 359, 'halting_retry': 4, 'intent_write_abort': 21, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 94, 'opened_pairs': 47, 'partial_fill': 27, 'position_failures': 137, 'position_read': 4091, 'query': 380, 'query_failures': 55, 'recovery_obligation': 23, 'reduce': 115, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 722, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'skip_baseline_not_flat': 75, 'skip_book_skew': 28, 'skip_book_stale': 112, 'skip_funding_diff': 56, 'skip_not_single_venue_outlier': 129, 'skip_size_too_small': 1, 'skip_too_few_venues': 26, 'skip_volume_too_low': 1, 'timeout_ack': 28, 'timeout_unknown': 21, 'zero_fill': 20}
+INVARIANTS seed=20261112 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 27, '1b': 76, '1c': 13, '1d': 97, '2': 88, '3': 103, '4': 88, '5': 600, '6': 30, '7': 388} coverage={'account_failures': 116, 'baseline_admission': 88, 'cooldown_active': 24, 'db_failures': 16, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 152, 'halted': 384, 'halting_retry': 4, 'intent_write_abort': 15, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 88, 'opened_pairs': 44, 'partial_fill': 24, 'position_failures': 139, 'position_read': 4105, 'query': 390, 'query_failures': 24, 'recovery_obligation': 30, 'reduce': 103, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 722, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'skip_baseline_not_flat': 65, 'skip_book_skew': 20, 'skip_book_stale': 86, 'skip_funding_diff': 91, 'skip_not_single_venue_outlier': 153, 'skip_size_too_small': 1, 'skip_too_few_venues': 46, 'skip_volume_too_low': 1, 'timeout_ack': 22, 'timeout_unknown': 34, 'zero_fill': 15}
+INVARIANTS seed=20261113 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 37, '1b': 98, '1c': 27, '1d': 126, '2': 114, '3': 135, '4': 114, '5': 600, '6': 31, '7': 405} coverage={'account_failures': 134, 'baseline_admission': 114, 'cooldown_active': 158, 'db_failures': 20, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 202, 'halted': 401, 'halting_retry': 4, 'intent_write_abort': 20, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 114, 'opened_pairs': 57, 'partial_fill': 27, 'position_failures': 141, 'position_read': 4089, 'query': 484, 'query_failures': 25, 'recovery_obligation': 31, 'reduce': 135, 'restarts': 114, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 722, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'skip_baseline_not_flat': 43, 'skip_book_skew': 28, 'skip_book_stale': 73, 'skip_funding_diff': 68, 'skip_not_single_venue_outlier': 132, 'skip_size_too_small': 1, 'skip_too_few_venues': 22, 'skip_volume_too_low': 1, 'timeout_ack': 39, 'timeout_unknown': 37, 'zero_fill': 20}
+PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 332, "program_delayed_funding": 8, "program_episodes": 12, "program_explicit_rejection": 4, "program_roundtrip": 8, "program_send_checks": 40, "query": 40, "reduce": 20, "restarts": 20}, "seed": 20261111}
+PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 332, "program_delayed_funding": 8, "program_episodes": 12, "program_explicit_rejection": 4, "program_roundtrip": 8, "program_send_checks": 40, "query": 40, "reduce": 20, "restarts": 20}, "seed": 20261112}
+PROGRAM_INVARIANTS {"coverage": {"full_fill": 40, "open": 20, "position_read": 332, "program_delayed_funding": 8, "program_episodes": 12, "program_explicit_rejection": 4, "program_roundtrip": 8, "program_send_checks": 40, "query": 40, "reduce": 20, "restarts": 20}, "seed": 20261113}
+```
+
+### 线上状态、文件与下一任务
+
+本轮完成本地实现、测试和小步提交，未 push、SSH、线上备份、部署、真实鉴权或真实交易；未运行 WSL。当前线上版本和 external_income_unverifiable 是否解除未独立核实。任务书里的线上库副本启动情况作为用户提供的背景，本地全绿不能代替线上验收。
+
+Temp 保留全部红灯、环境失败、专项及双版本全量日志；新测试的临时 SQLite 由 fixture 自行清理。仓库交付仅含本轮三个业务文件、三个新增测试/夹具文件、此交接和验收 JSON；保留旧诊断及其他任务产物，不写入整库或凭据。
+
+下一任务先读本节、任务书和验收 JSON，进行独立终审。线上只读/持续影子验证和发布仍按前轮交接边界另行确认，届时先备份并验证实际账户响应、重启和持续运行；不得通过删库、改旧证明、解锁或降低硬上限代替验收。其他页面或策略模块另开任务。
