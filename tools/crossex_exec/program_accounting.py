@@ -8,7 +8,7 @@ from .funding import funding_continuity, daily_continuity, certify_daily
 from .cash_identity import cash_identity, program_contract_identity
 from .position_values import key_currency, usd_value, position_identity
 from .external_fx import NATIVE_USD, quote_band
-from .program_funding import OWNERSHIP_KEY, observe_funding_ownership, allocate_funding
+from .program_funding import ADVERSE_POLICY, OWNERSHIP_KEY, observe_funding_ownership, allocate_funding
 
 
 def funding_view(snapshot,contracts,orders):
@@ -244,7 +244,7 @@ class ProgramAccounting:
             program_total=str(realized+total_funding+floating),program_upnl=str(floating),
             program_funding=str(daily_funding),program_funding_total=str(total_funding),
             program_journal=original_journal,funding_verified=True,funding_daily_verified=True,
-            funding_attribution='observed_quantity_ratio_estimate' if estimated else 'exclusive_program',
+            funding_attribution=ADVERSE_POLICY if estimated else 'exclusive_program',
             funding_attribution_estimated=estimated,funding_ownership_revision=ownership.get('revision',0),
             external_fx=fx,valuation='public_spot_lower_bound' if fx else 'native_usd',
             external_cash=None,external_contribution=None,equity_daily=None,
