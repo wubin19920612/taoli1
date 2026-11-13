@@ -91,8 +91,9 @@ def allocate_funding(ownership,route,row,at,value):
             raise ValueError('program_funding_attribution_unverifiable')
         # The first/last mixed observations bracket only the mixed interior.
         # Between clean and mixed samples the program may pay the entire fee.
-        # Keep observed endpoint/prior-ID semantics and the clean-end refusal
-        # above; positive cash always takes the smallest observed mixed share.
-        gap=interval['from_ms']<at<first or last<at
+        # Include the mixed sample millisecond: cash has no sub-ms ordering.
+        # Keep the original from_ms/prior-ID rule and clean-end refusal above;
+        # positive cash always takes the smallest observed mixed share.
+        gap=interval['from_ms']<at<=first or last<=at
         values.append(value if value<0 and gap else value*own/total)
     return min(values),True
