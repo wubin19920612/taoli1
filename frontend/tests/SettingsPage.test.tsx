@@ -33,6 +33,52 @@ describe("SettingsPage", () => {
     });
   }, 30000);
 
+  it("validates big spread bounds before saving risk settings", async () => {
+    const fetchImplementation = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const response = await fetchImplementation(input, init);
+      if (String(input).includes("/settings/risk") && init?.method !== "PUT") {
+        return Response.json({
+          ...await response.json(),
+          big_spread_alert_pct: 101, big_spread_alert_hits: 21, big_spread_alert_cooldown_seconds: 604801
+        });
+      }
+      return response;
+    });
+    window.localStorage.setItem("settings-active-tab", "risk");
+    render(<SettingsPage />);
+    const threshold = await screen.findByLabelText("大价差开仓阈值");
+    await waitFor(() => expect(Number((threshold as HTMLInputElement).value)).toBe(101));
+    const hits = screen.getByLabelText("大价差连续命中次数");
+    const cooldown = screen.getByLabelText("大价差提醒冷却秒数");
+    for (const [control, low, high] of [[threshold, 0.1, 100], [hits, 1, 20], [cooldown, 0, 604800]] as const) {
+      expect(control.getAttribute("aria-valuemin")).toBe(String(low));
+      expect(control.getAttribute("aria-valuemax")).toBe(String(high));
+    }
+    fireEvent.click(screen.getByRole("button", { name: /保存风险参数/ }));
+    await waitFor(() => {
+      for (const control of [threshold, hits, cooldown]) {
+        expect(control.getAttribute("aria-invalid")).toBe("true");
+      }
+    });
+    expect(vi.mocked(fetch).mock.calls.some(([input, init]) =>
+      String(input).includes("/settings/risk") && init?.method === "PUT"
+    )).toBe(false);
+    for (const [control, value] of [[threshold, 0.1], [hits, 1], [cooldown, 0]] as const) {
+      fireEvent.change(control, { target: { value: String(value) } });
+    }
+    fireEvent.click(screen.getByRole("button", { name: /保存风险参数/ }));
+    await waitFor(() => {
+      const call = vi.mocked(fetch).mock.calls.find(([input, init]) =>
+        String(input).includes("/settings/risk") && init?.method === "PUT"
+      );
+      expect(call).toBeTruthy();
+      expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
+        big_spread_alert_pct: 0.1, big_spread_alert_hits: 1, big_spread_alert_cooldown_seconds: 0
+      });
+    });
+  }, 30000);
+
   beforeEach(() => {
     window.localStorage.clear();
     window.history.replaceState({}, "", "/?page=settings");

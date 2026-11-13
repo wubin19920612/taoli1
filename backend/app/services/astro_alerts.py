@@ -114,6 +114,17 @@ def _disable_open_message(enabled: bool) -> str:
     return "禁开=false" if enabled else "禁开=true"
 
 
+def _existing_open_state(pairs: list[dict]) -> str:
+    states = set()
+    for pair in pairs:
+        status, disable_open = pair.get("status"), pair.get("disableOpen")
+        if not isinstance(status, bool) or not isinstance(disable_open, bool):
+            states.add("未知")
+        else:
+            states.add("开" if status and not disable_open else "关")
+    return next(iter(states)) if len(states) == 1 else "未知"
+
+
 def _settings_with_create_overrides(
     settings: AstroCardSettings,
     card_request: AstroCardCreateRequest | None,
@@ -180,6 +191,7 @@ class AstroAlertService:
             disabled_message="自动创建卡片未开启",
             card_settings_override=self.card_settings.model_copy(update={"open_enabled": False}),
             source="alert",
+            describe_existing=True,
         )
 
 
@@ -243,6 +255,7 @@ class AstroAlertService:
         manual_review: ManualReview | None = None,
         depth_check: Callable[[], Awaitable[None]] | None = None,
         source: str = "alert",
+        describe_existing: bool = False,
     ) -> AstroAlertActionResult:
         source = "manual" if manual_override else source
         if not enabled:
@@ -551,16 +564,24 @@ class AstroAlertService:
                 for planned in pair_variants
                 if not any(_same_route(existing, planned) for existing in same_name_pairs)
             ]
+            existing_summary = None
+            if describe_existing and existing_variants:
+                remote_pairs = [
+                    existing for existing in same_name_pairs
+                    if any(_same_route(existing, planned) for planned in pair_variants)
+                ]
+                existing_summary = f"已有卡片 {pair_name}，当前开仓：{_existing_open_state(remote_pairs)}"
             if not missing_variants:
+                existing_message = existing_summary or (
+                    f"已跳过，Astro 已存在卡片 {pair_name} {pair_type} "
+                    f"{_routes(existing_variants)}"
+                )
                 return with_manual_warnings(
                     AstroAlertActionResult(
                         enabled=True,
                         status="skipped",
                         action="existing",
-                        message=(
-                            f"已跳过，Astro 已存在卡片 {pair_name} {pair_type} "
-                            f"{_routes(existing_variants)}"
-                        ),
+                        message=existing_message,
                         pair_name=pair_name,
                         pair_type=pair_type,
                     )
@@ -606,6 +627,8 @@ class AstroAlertService:
                         )
                     if attempt_messages:
                         message += "；" + "；".join(attempt_messages)
+                    if existing_summary:
+                        message += f"；{existing_summary}"
                     return with_manual_warnings(AstroAlertActionResult(
                         enabled=True, status="failed",
                         action="add_partial" if created_variants else "uncertain" if state == "unknown" else "add",
@@ -633,6 +656,8 @@ class AstroAlertService:
                 message += "；" + "；".join(attempt_messages)
             if existing_variants:
                 message += f"；已存在 {_routes(existing_variants)}"
+            if existing_summary:
+                message += f"；{existing_summary}"
             if not hl_gc_supported:
                 message += "；Gate 未确认支持此 HL 市场，使用原始 HL 路线"
             return with_manual_warnings(

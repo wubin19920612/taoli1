@@ -573,7 +573,7 @@ async def _process_alert_match(
                         elif astro_result.status == "updated":
                             card_summary = "已更新"
                         elif astro_result.action == "existing":
-                            card_summary = "已有卡片"
+                            card_summary = astro_result.message if is_big_spread else "已有卡片"
                         else:
                             card_summary = f"未创建（{astro_result.message[:80]}）"
                         message = f"{message}\n\n{astro_result.format_message()}"
@@ -811,9 +811,12 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 rules, settings, app.state.alert_engine, matches, now,
                 identity_rejected_ids=identity_rejected_ids,
             )
-            matches += app.state.big_spread_alert_engine.evaluate(
-                fast_opportunities, rules, now=now, risk_settings=settings,
-            )
+            try:
+                matches += app.state.big_spread_alert_engine.evaluate(
+                    fast_opportunities, rules, now=now, risk_settings=settings,
+                )
+            except Exception:
+                logger.exception("big spread alert evaluation failed")
             app.state.alert_round_sent_ids = set()
             concurrency = getattr(
                 app_settings, "alert_match_concurrency", Settings.alert_match_concurrency,
@@ -832,11 +835,17 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                         if (match.rule.id == BIG_SPREAD_RULE_ID
                                 and match.opportunity.id in app.state.alert_round_sent_ids):
                             continue
-                        match_ok = await _process_alert_match(
-                            app, match, settings, alert_template,
-                            delivery_store, event_repo, write_lock,
-                            app_settings,
-                        )
+                        try:
+                            match_ok = await _process_alert_match(
+                                app, match, settings, alert_template,
+                                delivery_store, event_repo, write_lock,
+                                app_settings,
+                            )
+                        except Exception:
+                            if match.rule.id != BIG_SPREAD_RULE_ID:
+                                raise
+                            logger.exception("big spread alert processing failed")
+                            match_ok = False
                         group_ok = group_ok and match_ok
                     return group_ok
 

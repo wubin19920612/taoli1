@@ -15,6 +15,7 @@ if not logger.handlers:
     logger.addHandler(logging.StreamHandler())
 
 MAX_REJECT_KEYS = 5000
+MAX_REJECT_LINES_PER_ROUND = 20
 
 
 class AlertRejectLogger:
@@ -28,10 +29,13 @@ class AlertRejectLogger:
                 self._logged.pop(key)
         matched = {(match.rule.id, match.opportunity.id) for match in matches}
         active_rules = [rule for rule in rules if rule.enabled]
-        for item in opportunities:
-            if (not isfinite(item.open_spread_pct)
-                    or item.open_spread_pct < settings.big_spread_alert_pct
-                    or item.id in self._logged):
+        rejected = {}
+        candidates = [item for item in opportunities
+                      if isfinite(item.open_spread_pct)
+                      and item.open_spread_pct >= settings.big_spread_alert_pct
+                      and item.id not in self._logged]
+        for item in sorted(candidates, key=lambda item: item.open_spread_pct, reverse=True):
+            if item.id in rejected:
                 continue
             reasons = []
             if opportunity_is_excluded(item, settings, now):
@@ -49,9 +53,12 @@ class AlertRejectLogger:
                 reasons.append({"reasons": ["no_enabled_rules"]})
             if not reasons:
                 continue
-            # Never evict a still-throttled key: churn must not bypass 30s limiting.
-            if len(self._logged) >= MAX_REJECT_KEYS:
-                continue
+            rejected[item.id] = (item, reasons)
+        # Reserve a line for the summary whenever details exceed the round budget.
+        detail_limit = MAX_REJECT_LINES_PER_ROUND - (len(rejected) > MAX_REJECT_LINES_PER_ROUND)
+        # Never evict a still-throttled key: churn must not bypass 30s limiting.
+        detail_limit = min(detail_limit, max(0, MAX_REJECT_KEYS - len(self._logged)))
+        for item, reasons in list(rejected.values())[:detail_limit]:
             logger.info(json.dumps({
                 "symbol": item.symbol, "opportunity_id": item.id,
                 "buy": item.buy_exchange, "sell": item.sell_exchange,
@@ -65,3 +72,9 @@ class AlertRejectLogger:
                 "last_seen_at": item.last_seen_at, "observed_at": now, "reasons": reasons,
             }, ensure_ascii=False, default=str, separators=(",", ":")))
             self._logged[item.id] = now
+        suppressed = len(rejected) - min(len(rejected), detail_limit)
+        if suppressed:
+            logger.info(json.dumps({
+                "event": "alert_reject_summary", "suppressed_count": suppressed,
+                "observed_at": now,
+            }, default=str, separators=(",", ":")))

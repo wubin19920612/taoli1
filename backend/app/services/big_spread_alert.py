@@ -1,5 +1,6 @@
 """Independent fast alert eligibility; AlertRule is only the delivery envelope."""
 
+import logging
 from datetime import UTC, datetime, timedelta
 from math import isfinite
 
@@ -13,6 +14,7 @@ from app.services.risk_labels import known_volume_24h_usdt
 
 BIG_SPREAD_RULE_ID = "big_spread"
 MAX_BIG_SPREAD_KEYS = 5000
+logger = logging.getLogger(__name__)
 
 
 def delivery_rule(rules: list[AlertRule], settings: RiskSettings) -> AlertRule:
@@ -65,21 +67,32 @@ class BigSpreadAlertEngine(AlertEngine):
         super().__init__()
         self._last_spread: dict[str, float] = {}
         self._seen: dict[str, datetime] = {}
+        self._active: set[str] = set()
+        self._capacity_warning_logged = False
 
     def restore(self, states, now):
         self._last_spread.clear()
+        self._active.clear()
+        self._capacity_warning_logged = False
         self._seen = {state.key: now for state in states}
         unknown = super().restore(states, now)
-        self._prune(now, 600)
+        # Settings have not loaded yet: preserve the longest supported cooldown.
+        self._prune(now, 604800)
         return unknown
 
-    def _prune(self, now: datetime, cooldown: int) -> None:
+    def _prune(self, now: datetime, cooldown: int, *, reserve: int = 0) -> None:
         cutoff = now - timedelta(seconds=max(cooldown, 3600))
-        expired = {key for key, seen in self._seen.items() if seen < cutoff}
-        retained = [key for key in self._seen if key not in expired]
-        overflow = len(retained) - MAX_BIG_SPREAD_KEYS
+        removable = {
+            key for key in self._seen
+            if key not in self._active
+            and (key not in self._last_sent
+                 or (now - self._last_sent[key]).total_seconds() >= cooldown)
+            and self._retry_after.get(key, now) <= now
+        }
+        expired = {key for key in removable if self._seen[key] < cutoff}
+        overflow = len(self._seen) - len(expired) - MAX_BIG_SPREAD_KEYS + reserve
         if overflow > 0:
-            expired.update(sorted(retained, key=self._seen.__getitem__)[:overflow])
+            expired.update(sorted(removable - expired, key=self._seen.__getitem__)[:overflow])
         for key in expired:
             for state in (self._seen, self._hits, self._observations, self._last_sent,
                           self._last_spread, self._retry_after, self._retry_attempts):
@@ -89,13 +102,26 @@ class BigSpreadAlertEngine(AlertEngine):
         current = now or datetime.now(UTC)
         settings = risk_settings or RiskSettings()
         rule = delivery_rule(rules, settings)
+        candidates = {}
+        for item in opportunities:
+            if big_spread_eligible(item, rule, settings, current):
+                candidates.setdefault(f"{BIG_SPREAD_RULE_ID}:{item.id}", item)
+        self._active = self._seen.keys() & candidates.keys()
+        self._prune(current, rule.cooldown_seconds)
         active = set()
         matches = []
-        for item in opportunities:
-            key = f"{BIG_SPREAD_RULE_ID}:{item.id}"
-            if key in active or not big_spread_eligible(item, rule, settings, current):
-                continue
+        for key, item in candidates.items():
+            if key not in self._seen:
+                if len(self._seen) >= MAX_BIG_SPREAD_KEYS:
+                    self._prune(current, rule.cooldown_seconds, reserve=1)
+                if len(self._seen) >= MAX_BIG_SPREAD_KEYS:
+                    if not self._capacity_warning_logged:
+                        logger.warning("big spread alert capacity reached; new keys paused to preserve cooldowns")
+                        self._capacity_warning_logged = True
+                    continue
+                self._capacity_warning_logged = False
             active.add(key)
+            self._active.add(key)
             self._seen[key] = current
             count = min(self._hits.get(key, (0, current))[0] + 1, rule.consecutive_hits)
             self._hits[key] = (count, current)

@@ -939,14 +939,14 @@ export function SettingsPage() {
                         <Form.Item label="启用大价差提醒" name="big_spread_alert_enabled" valuePropName="checked">
                           <Switch />
                         </Form.Item>
-                        <Form.Item label="大价差开仓阈值" name="big_spread_alert_pct" rules={[{ required: true }, { type: "number", min: 0.000001 }]}>
-                          <InputNumber min={0.000001} step={0.1} suffix="%" className="wide-input" />
+                        <Form.Item label="大价差开仓阈值" name="big_spread_alert_pct" rules={[{ required: true }, { type: "number", min: 0.1, max: 100 }]}>
+                          <InputNumber min={0.1} max={100} step={0.1} suffix="%" className="wide-input" />
                         </Form.Item>
-                        <Form.Item label="大价差连续命中次数" name="big_spread_alert_hits" rules={[{ required: true }, { type: "integer", min: 1 }]}>
-                          <InputNumber min={1} precision={0} className="wide-input" />
+                        <Form.Item label="大价差连续命中次数" name="big_spread_alert_hits" rules={[{ required: true }, { type: "integer", min: 1, max: 20 }]}>
+                          <InputNumber min={1} max={20} precision={0} className="wide-input" />
                         </Form.Item>
-                        <Form.Item label="大价差提醒冷却秒数" name="big_spread_alert_cooldown_seconds" rules={[{ required: true }, { type: "integer", min: 0 }]}>
-                          <InputNumber min={0} precision={0} step={60} className="wide-input" />
+                        <Form.Item label="大价差提醒冷却秒数" name="big_spread_alert_cooldown_seconds" rules={[{ required: true }, { type: "integer", min: 0, max: 604800 }]}>
+                          <InputNumber min={0} max={604800} precision={0} step={60} className="wide-input" />
                         </Form.Item>
                         <Form.Item label="大价差提醒自动建卡（不开仓）" name="big_spread_alert_auto_create" valuePropName="checked">
                           <Switch />

@@ -48,6 +48,19 @@ def test_defaults_old_data_and_validation():
             RiskSettings(**updates)
 
 
+@pytest.mark.parametrize("field,low,high", [
+    ("big_spread_alert_cooldown_seconds", 0, 604800),
+    ("big_spread_alert_pct", 0.1, 100),
+    ("big_spread_alert_hits", 1, 20),
+])
+def test_setting_bounds(field, low, high):
+    for value in (low, high):
+        assert getattr(RiskSettings(**{field: value}), field) == value
+    for value in (low - 0.01, high + 1, float("inf")):
+        with pytest.raises(ValidationError):
+            RiskSettings(**{field: value})
+
+
 def test_two_hits_reset_missing_round_and_ignores_decay_and_labels():
     engine = BigSpreadAlertEngine()
     now = datetime.now(UTC)
@@ -125,21 +138,66 @@ def test_enabled_rule_union_min_volume_strict_age_and_identity():
     assert not engine.evaluate([candidate], rules, now=now + timedelta(seconds=11), risk_settings=settings)
 
 
-def test_bounded_state_and_restored_cooldown(monkeypatch):
+def test_bounded_state_and_restored_cooldown(monkeypatch, caplog):
     monkeypatch.setattr("app.services.big_spread_alert.MAX_BIG_SPREAD_KEYS", 2)
     engine = BigSpreadAlertEngine()
     now = datetime.now(UTC)
     settings = RiskSettings(big_spread_alert_hits=1)
-    for index in range(4):
+    for index in range(2):
         match = engine.evaluate([item(id=str(index), now=now)], [], now=now, risk_settings=settings)[0]
         engine.record_delivery_result(match, "sent", now)
+    for index in range(2, 4):
+        assert not engine.evaluate([item(id=str(index), now=now)], [], now=now, risk_settings=settings)
     assert len(engine._seen) == len(engine._last_sent) == len(engine._last_spread) == 2
+    assert len([record for record in caplog.records if record.levelname == "WARNING"]) == 1
+    assert not engine.evaluate([item(id="0", now=now)], [], now=now, risk_settings=settings)
     engine.evaluate([], [], now=now + timedelta(hours=2))
     assert not engine._seen and not engine._last_sent
     engine.restore([AlertDeliveryState(key="big_spread:opp-1", last_sent_at=now)], now)
     assert not engine.evaluate([item(16, now)], [], now=now, risk_settings=settings)
     assert engine.evaluate([item(16, now + timedelta(seconds=600))], [],
                            now=now + timedelta(seconds=600), risk_settings=settings)
+
+
+def test_capacity_evicts_only_inactive_keys_after_cooldown(monkeypatch):
+    monkeypatch.setattr("app.services.big_spread_alert.MAX_BIG_SPREAD_KEYS", 2)
+    engine = BigSpreadAlertEngine()
+    now = datetime.now(UTC)
+    settings = RiskSettings(big_spread_alert_hits=1, big_spread_alert_cooldown_seconds=10)
+    for index in range(2):
+        match = engine.evaluate([item(id=str(index), now=now)], [], now=now, risk_settings=settings)[0]
+        engine.record_delivery_result(match, "sent", now)
+    current = now + timedelta(seconds=10)
+    # The active key comes after the new key: admission must know the entire round.
+    matches = engine.evaluate([item(id="new", now=current), item(id="0", now=current)], [],
+                              now=current, risk_settings=settings)
+    assert {match.opportunity.id for match in matches} == {"new", "0"}
+    assert set(engine._seen) == {"big_spread:new", "big_spread:0"}
+    assert "big_spread:1" not in engine._last_sent
+    assert "big_spread:1" not in engine._last_spread
+    # Even after cooldown, active keys cannot be evicted to admit another key.
+    matches = engine.evaluate([item(id="third", now=current), item(id="new", now=current),
+                               item(id="0", now=current)], [], now=current, risk_settings=settings)
+    assert {match.opportunity.id for match in matches} == {"new", "0"}
+    assert set(engine._seen) == {"big_spread:new", "big_spread:0"}
+
+
+def test_restored_capacity_keeps_seven_day_cooldowns(monkeypatch):
+    monkeypatch.setattr("app.services.big_spread_alert.MAX_BIG_SPREAD_KEYS", 1)
+    now = datetime.now(UTC)
+    engine = BigSpreadAlertEngine()
+    states = [AlertDeliveryState(key=f"big_spread:{index}", last_sent_at=now - timedelta(days=2))
+              for index in range(2)]
+    engine.restore(states, now)
+    settings = RiskSettings(big_spread_alert_hits=1, big_spread_alert_cooldown_seconds=604800)
+    assert not engine.evaluate([item(id=str(index), now=now) for index in range(3)], [],
+                               now=now, risk_settings=settings)
+    assert len(engine._last_sent) == 2
+    assert len(engine._seen) == 2
+    # Keep cooldown records past the old one-hour TTL when settings extend cooldown.
+    current = now + timedelta(hours=2)
+    engine.evaluate([], [], now=current, risk_settings=settings)
+    assert len(engine._last_sent) == 2
 
 
 def capture_rejects(monkeypatch):
@@ -194,8 +252,35 @@ def test_reject_log_capacity_does_not_bypass_throttle(monkeypatch):
     items = [item(id=str(index), now=now) for index in range(3)]
     for seconds in (0, 1, 30):
         log.log_round(items, [], RiskSettings(), AlertEngine(), [], now + timedelta(seconds=seconds))
-    assert len(rows) == 4
+    assert len([row for row in rows if "opportunity_id" in row]) == 4
+    assert [row["suppressed_count"] for row in rows if "suppressed_count" in row] == [1, 1, 1]
     assert len(log._logged) == 2
+
+
+@pytest.mark.parametrize("count", [20, 21, 45])
+def test_reject_log_round_line_limit_priority_summary_and_throttle(monkeypatch, count):
+    rows = capture_rejects(monkeypatch)
+    log = AlertRejectLogger()
+    now = datetime.now(UTC)
+    items = [item(3 + index, id=str(index), now=now) for index in range(count)]
+    log.log_round(items, [], RiskSettings(), AlertEngine(), [], now)
+    assert len(rows) == 20
+    details = [row for row in rows if "opportunity_id" in row]
+    detail_count = 20 if count == 20 else 19
+    assert [row["opportunity_id"] for row in details] == [
+        str(index) for index in range(count - 1, count - detail_count - 1, -1)
+    ]
+    if count > 20:
+        assert rows[-1]["suppressed_count"] == count - detail_count
+    first_ids = {row["opportunity_id"] for row in details}
+    rows.clear()
+    log.log_round(items, [], RiskSettings(), AlertEngine(), [], now + timedelta(seconds=29))
+    assert len(rows) <= 20
+    assert first_ids.isdisjoint({row["opportunity_id"] for row in rows if "opportunity_id" in row})
+    rows.clear()
+    log.log_round(items, [], RiskSettings(), AlertEngine(), [], now + timedelta(seconds=30))
+    assert 19 <= len(rows) <= 20
+    assert rows[0]["opportunity_id"] == str(count - 1)
 
 
 def test_message_preserves_hyperliquid_market_and_units():
@@ -242,6 +327,80 @@ def loop_app(candidate, rules=None, risk=None):
     app.state.big_spread_alert_engine = BigSpreadAlertEngine()
     app.state.feishu_notifier = FakeFeishuNotifier()
     return app, stop
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["evaluate", "delivery"])
+async def test_fast_channel_exception_does_not_block_normal_alerts(monkeypatch, caplog, stage):
+    normal = item(id="normal", symbol="NORMALUSDT")
+    fast = item(id="fast", symbol="FASTUSDT", risk_labels=["TRANSIENT_SIGNAL"])
+    rule = AlertRule(name="ordinary", consecutive_hits=1)
+    app, stop = loop_app(normal, [rule])
+    app.state.snapshot_store.set_opportunities([fast, normal])
+    if stage == "evaluate":
+        app.state.big_spread_alert_engine.evaluate = Mock(side_effect=RuntimeError("fast evaluate failed"))
+    else:
+        original = main._process_alert_match
+
+        async def process(app, match, *args):
+            if match.rule.id == "big_spread":
+                raise RuntimeError("fast delivery failed")
+            return await original(app, match, *args)
+
+        monkeypatch.setattr(main, "_process_alert_match", process)
+    await asyncio.wait_for(main._run_alert_loop(app, .001, stop), 2)
+    assert len(app.state.feishu_notifier.sent_texts) == 1
+    assert app.state.alert_event_repo.events[0].rule_id == rule.id
+    assert any("big spread" in record.message and record.exc_info for record in caplog.records)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remote_state,expected", [
+    ({"status": True, "disableOpen": False}, "开"),
+    ({"status": True, "disableOpen": True}, "关"),
+    ({"status": False, "disableOpen": False}, "关"),
+    ({"status": False, "disableOpen": True}, "关"),
+    ({}, "未知"),
+    ({"status": True}, "未知"),
+    ({"disableOpen": False}, "未知"),
+    ({"status": "false", "disableOpen": "false"}, "未知"),
+])
+async def test_existing_card_state_is_reported_without_remote_changes(remote_state, expected,
+                                                                      astro_attempts_for_services):
+    app, stop = loop_app(item())
+    pair = {"name": "IMX", "type": "FF", "buyEx": "binance", "sellEx": "gate", **remote_state}
+    original = dict(pair)
+    client = FakeAstroClient([pair])
+    app.state.astro_alert_service = AstroAlertService(
+        client, Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        card_settings=AstroCardSettings(open_enabled=True, card_variant="non_gc"),
+        add_restart_delay_seconds=0,
+    )
+    await asyncio.wait_for(main._run_alert_loop(app, .001, stop), 2)
+    assert client.list_calls == 1
+    assert not client.added and not client.updated
+    assert pair == original
+    assert len(app.state.feishu_notifier.sent_texts) == 1
+    assert f"已有卡片 IMX，当前开仓：{expected}" in app.state.feishu_notifier.sent_texts[0]
+
+
+@pytest.mark.asyncio
+async def test_existing_card_state_is_reported_when_missing_variant_is_created(astro_attempts_for_services):
+    app, stop = loop_app(item())
+    pair = {"name": "IMX", "type": "FF", "buyEx": "binance", "sellEx": "gate",
+            "status": True, "disableOpen": False}
+    original = dict(pair)
+    client = FakeAstroClient([pair])
+    app.state.astro_alert_service = AstroAlertService(
+        client, Settings(astro_alert_auto_create=True, astro_dry_run_only=False),
+        add_restart_delay_seconds=0,
+    )
+    await asyncio.wait_for(main._run_alert_loop(app, .001, stop), 2)
+    assert pair == original and not client.updated
+    assert len(client.added) == 1
+    assert client.added[0]["buyEx"] == "gc-binance"
+    assert client.added[0]["status"] is False and client.added[0]["disableOpen"] is True
+    assert "已有卡片 IMX，当前开仓：开" in app.state.feishu_notifier.sent_texts[0]
 
 
 @pytest.mark.asyncio

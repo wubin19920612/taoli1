@@ -6,16 +6,19 @@
 - 任务书：`docs/big-spread-alert-spec-2026-11-13.md`，已完整阅读。
 - 分支：`codex/big-spread-alert`。
 - 基线：`765fb0bbeb9d2748016e5bbd7bc68068ffb6529c`。
+- 审查修复基线：`5dda6c8`；本轮仅修复已有卡片状态提示、容量冷却保护、设置范围与异常隔离、拒绝日志行数，并补回归测试。
 - 用户明确限定：只做本地提交，不 push、不部署、不运行 WSL。本次未访问生产服务器、未发真实通知、未提交真实 Astro 卡片。
 
 ## 已完成与代码入口
 
-- `backend/app/models/settings.py`：5 个带默认值的 RiskSettings 字段，旧配置自动补默认值；正数、整数及非有限数校验。
+- `backend/app/models/settings.py`：5 个带默认值的 RiskSettings 字段，旧配置自动补默认值；阈值 0.1–100%、命中次数 1–20、冷却秒数 0–604800；前端设置页同步限制。
 - `backend/app/services/big_spread_alert.py`：独立资格判断、按完整 opportunity.id 连续计数、冷却与相对上次成功发送价差的 50% 加发、失败退避、容量和过期清理。
 - `backend/app/services/alert_reject.py`、`alert_engine.py`：独立 `alert_reject` JSON logger；记录普通规则的次数、峰值/最新值及衰减结果、排除标签、费后门槛、成交额、时效、身份及冷却等原因。
 - `backend/app/main.py`：从普通规则预过滤之前接入快速候选；保持身份核验；同一轮普通规则实际发送成功后才去重快速提醒；复用诊断、事件、持久化发送状态和时序日志。最新资格变更时记录 muted 事件。
 - `backend/app/services/alert_messages.py`：固定大价差前缀、双边 bid/ask、开平价差、双边成交额、原始市场/DEX/倍率、资金周期、费用/行情预估标识、全部风险标签及中文名称；HUGE_SPREAD_VERIFY 提示人工核实。
 - `backend/app/services/astro_alerts.py`：独立自动建卡入口，使用局部 settings 副本强制 `open_enabled=False`。保留原有参数、订单簿、身份、黑名单、同名卡冲突、建卡锁和尝试账本流程。
+- 已有卡片保持远端设置；快速提醒写明“已有卡片 {name}，当前开仓：开/关/未知”。仅当远端 `status`、`disableOpen` 都为布尔值时判断；缺失、异常类型或多个匹配卡片状态不一致时写未知。补建缺失变体时也提示已有卡片状态。
+- `backend/app/main.py`：快速评估及意外的快速发送处理异常单独捕获并记录，继续普通规则告警；普通规则原有异常行为保持不变。
 - `backend/app/api/routes_alerts.py`：历史接口保留大价差原始消息。
 - `frontend/src/api/types.ts`、`frontend/src/pages/SettingsPage.tsx`：参数与告警页面下的风险参数中提供 5 个中文配置项；旧接口响应兼容默认值。
 - `frontend/src/pages/AlertHistoryPage.tsx`：按 `rule_id=big_spread` 展示“大价差提醒”来源标记。
@@ -28,11 +31,29 @@
 3. 快速提醒不受普通规则的衰减、风险标签、费后门槛、白名单和 SF 负资金费率过滤影响；身份能力禁用/过期、黑名单、被忽略交易所、成交额和时效仍拦截。
 4. 提醒与建卡分别判断：建卡校验失败或已有卡片不会静默大价差提醒；全局飞书发送开关仍生效。不能通过快速通道绕过现有建卡校验。
 5. Astro 尝试账本继续使用既有 `source=alert`（数据库约束允许的值），提醒事件使用 `rule_id=big_spread`。无需数据库迁移。
-6. 快速状态最多 5000 个 key；连续命中不满足或机会消失即清零。无活跃记录超过 max(冷却秒数, 3600) 后清理；容量溢出按最近活跃时间淘汰。
+6. 新 key 入表前检查 5000 容量；只淘汰本轮非活跃、已过冷却且不在重试等待中的记录，按最近活跃时间排序。没有可淘汰记录时暂停新增，同一满额期间只 warning 一次；已有 key 仍可正常评估，50% 加发规则保持。重启恢复在配置加载前按最长 7 天保护冷却；恢复量超过容量时保留受保护记录并暂停新增，避免冷却内同价差重发。非活跃记录超过 max(冷却秒数, 3600) 且已过冷却/重试后清理；连续命中不满足或机会消失即清零。
 7. 发送成功的冷却和失败退避沿用发送账本，pending 恢复为结果未知。50% 加发价格基准只保留内存：重启后有冷却记录但无基准时，保守等待冷却结束；连续次数从零开始。
-8. 拒绝日志独立输出，`propagate=False`、StreamHandler，每机会最多 30 秒一行。限频表最多 5000 个 key，满额时本窗口新 key 暂不输出，等已有记录到期；不会为腾空间而允许同一 key 刷屏。
+8. 拒绝日志独立输出，`propagate=False`、StreamHandler，每机会最多 30 秒一行。每轮总计最多 20 行，开仓价差从高到低优先；需要汇总时最多 19 条明细和 1 条 `alert_reject_summary`，`suppressed_count` 计数本轮未输出明细的机会。只为实际输出明细的机会记限频时间。限频表最多 5000 个 key，满额时本窗口新 key 暂不输出明细，等已有记录到期；不会为腾空间而允许同一 key 刷屏。
 
 ## 验证
+
+本轮审查修复的最终验证（2026-11-13，基于 `5dda6c8`）：
+
+```text
+# backend/，PowerShell 先展开 tests/test_alert*.py 为同一组测试文件
+pytest tests/test_big_spread_alert.py tests/test_alert*.py tests/test_astro_alerts.py -q -p no:cacheprovider --basetemp ../.tmp-bs2
+355 passed in 37.27s
+
+# frontend/
+npx.cmd tsc --noEmit
+exit 0
+npx.cmd vitest run --no-cache
+Test Files  44 passed (44)
+Tests       679 passed (679)
+Duration    170.39s
+```
+
+新增回归覆盖：远端卡片开/关/缺失或异常类型及不修改原卡片、补建变体仍报告已有卡片状态、冷却满额拒绝新增且只 warning 一次、只淘汰非活跃过冷却 key、整轮活跃 key 保护、恢复超过容量的 7 天冷却、三个参数的上下边界、快速评估/处理异常不阻断普通告警、20 行预算的优先级与汇总、30 秒限频。前端覆盖旧数据默认值、越界值禁止保存及合法下边界保存。`git diff --check` 和修改后端文件的 Ruff E9/F63/F7/F82/F401 检查通过。下文为原功能提交阶段的历史验证，不代表本轮重新运行后端全量。
 
 所有命令使用 Windows 原生命令行，前端复用现有 node_modules 目录链接。
 
