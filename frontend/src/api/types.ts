@@ -496,7 +496,28 @@ export interface HealthStatus {
   exchange_states: Record<string, ExchangePollState>;
 }
 
+export interface BigSpreadMuteRoute {
+  symbol: string;
+  buy_exchange: string;
+  sell_exchange: string;
+}
+
+export interface BigSpreadMute extends BigSpreadMuteRoute {
+  until: string | null;
+  note: string;
+  created_at: string;
+  both_directions: boolean;
+}
+
+export type BigSpreadMuteCreate = BigSpreadMuteRoute & {
+  until?: string | null;
+  duration_hours?: number;
+  note?: string;
+  both_directions?: boolean;
+};
+
 export interface RiskSettings {
+  big_spread_alert_mutes?: BigSpreadMute[];
   big_spread_alert_enabled?: boolean;
   big_spread_alert_pct?: number;
   big_spread_alert_hits?: number;

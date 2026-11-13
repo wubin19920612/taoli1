@@ -40,6 +40,8 @@ from app.models.settings import (
     AlertMessageTemplateSettings,
     AstroAutomationSettings,
     AstroCardSettings,
+    BigSpreadMute,
+    BigSpreadMuteRoute,
     FloatingWatchPositionMutation,
     FloatingWatchMutation,
     FloatingWatchSettings,
@@ -1147,6 +1149,10 @@ class SettingsRepository:
     def __init__(self, db: aiosqlite.Connection):
         self.db = db
         self._floating_watch_lock = asyncio.Lock()
+        # Share the risk read/modify/write lock across repositories on this connection.
+        if not hasattr(db, "_risk_settings_lock"):
+            db._risk_settings_lock = asyncio.Lock()
+        self._risk_settings_lock = db._risk_settings_lock
 
     async def get_index_component_notification_settings(self) -> IndexComponentNotificationSettings:
         cursor = await self.db.execute(
@@ -1270,13 +1276,29 @@ class SettingsRepository:
             return updated
 
     async def get_risk_settings(self) -> RiskSettings:
+        async with self._risk_settings_lock:
+            return await self._get_risk_settings_unlocked()
+
+    async def _get_risk_settings_unlocked(self) -> RiskSettings:
         cursor = await self.db.execute("SELECT payload FROM app_settings WHERE key = ?", ("risk",))
         row = await cursor.fetchone()
         if row is None:
             return RiskSettings()
-        return RiskSettings.model_validate(json.loads(row["payload"]))
+        payload = json.loads(row["payload"])
+        settings = RiskSettings.model_validate(payload)
+        if len(payload.get("big_spread_alert_mutes", [])) != len(settings.big_spread_alert_mutes):
+            await self._save_risk_settings_unlocked(settings)
+        return settings
 
     async def set_risk_settings(self, settings: RiskSettings) -> RiskSettings:
+        async with self._risk_settings_lock:
+            payload = settings.model_dump()
+            if "big_spread_alert_mutes" not in settings.model_fields_set:
+                current = await self._get_risk_settings_unlocked()
+                payload["big_spread_alert_mutes"] = current.big_spread_alert_mutes
+            return await self._save_risk_settings_unlocked(RiskSettings.model_validate(payload))
+
+    async def _save_risk_settings_unlocked(self, settings: RiskSettings) -> RiskSettings:
         await self.db.execute(
             """
             INSERT INTO app_settings (key, payload)
@@ -1287,6 +1309,20 @@ class SettingsRepository:
         )
         await self.db.commit()
         return settings
+
+    async def mutate_big_spread_mutes(
+        self, route: BigSpreadMuteRoute, *, mute: BigSpreadMute | None = None,
+    ) -> list[BigSpreadMute]:
+        async with self._risk_settings_lock:
+            settings = await self._get_risk_settings_unlocked()
+            mutes = [item for item in settings.big_spread_alert_mutes if item.route_key != route.route_key]
+            if mute is not None:
+                mutes.append(mute)
+            payload = settings.model_dump()
+            payload["big_spread_alert_mutes"] = mutes
+            updated = RiskSettings.model_validate(payload)
+            await self._save_risk_settings_unlocked(updated)
+            return updated.big_spread_alert_mutes
 
     async def get_alert_message_template(self) -> AlertMessageTemplateSettings:
         cursor = await self.db.execute(

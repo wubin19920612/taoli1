@@ -55,6 +55,7 @@ import { defaultHiddenRiskLabels, riskLabelOptions } from "../constants/riskLabe
 import { PhonePriceAlertsPanel } from "./PhonePriceAlertsPanel";
 import { MarketIdentityPanel } from "../components/MarketIdentityPanel";
 import { AlertHistoryPage } from "./AlertHistoryPage";
+import { BigSpreadMutesPanel } from "../components/BigSpreadMutesPanel";
 
 type AlertRuleFormValues = AlertRule & {
   min_volume_24h_k?: number;
@@ -952,6 +953,7 @@ export function SettingsPage() {
                           <Switch />
                         </Form.Item>
                       </div>
+                      <BigSpreadMutesPanel active={activeTab === "risk"} />
                     </section>
                     <section className="settings-section">
                       <div className="form-grid">

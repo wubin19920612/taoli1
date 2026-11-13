@@ -3,10 +3,11 @@ import { Button, Space, Table, Tag, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { createTestAlertEvent, listAlertEvents } from "../api/client";
-import type { AlertEvent } from "../api/types";
+import type { AlertEvent, BigSpreadMuteRoute } from "../api/types";
+import { BigSpreadMuteDialog } from "../components/BigSpreadMuteDialog";
 
 dayjs.extend(utc);
 
@@ -55,7 +56,15 @@ const columns: ColumnsType<AlertEvent> = [
   }
 ];
 
+function routeFor(event: AlertEvent): BigSpreadMuteRoute | undefined {
+  // Parse only the fixed route line; raw symbols, DEX and multipliers stay in the message.
+  const match = event.message.match(/^买 ([a-zA-Z0-9_-]+) [^\n]+ → 卖 ([a-zA-Z0-9_-]+) /m);
+  return match ? { symbol: event.symbol, buy_exchange: match[1], sell_exchange: match[2] } : undefined;
+}
+
 export function AlertHistoryPage({ active = true }: { active?: boolean }) {
+  const [muteEvent, setMuteEvent] = useState<AlertEvent | null>(null);
+  const muteRoute = useMemo(() => muteEvent ? routeFor(muteEvent) : undefined, [muteEvent]);
   const [events, setEvents] = useState<AlertEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -104,7 +113,13 @@ export function AlertHistoryPage({ active = true }: { active?: boolean }) {
         </Space>
       </div>
       <Table
-        columns={columns}
+        columns={[...columns, {
+          title: "操作", width: 140,
+          render: (_, event) => event.rule_id === "big_spread"
+            ? <Button disabled={!routeFor(event)} title={routeFor(event) ? undefined : "历史记录缺少路线，请在参数与告警中手动新增"}
+                onClick={() => setMuteEvent(event)}>屏蔽此路线</Button>
+            : null
+        }]}
         dataSource={events}
         rowKey="id"
         loading={loading}
@@ -112,6 +127,9 @@ export function AlertHistoryPage({ active = true }: { active?: boolean }) {
         tableLayout="fixed"
         scroll={{ x: 760 }}
       />
+      <BigSpreadMuteDialog open={Boolean(muteEvent)} route={muteRoute}
+        routeDescription={muteEvent?.message.split("\n").find((line) => line.startsWith("买 "))}
+        onCancel={() => setMuteEvent(null)} onSaved={() => setMuteEvent(null)} />
     </section>
   );
 }

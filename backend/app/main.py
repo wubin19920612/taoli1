@@ -85,7 +85,9 @@ from app.services.alert_engine import (
 )
 from app.services.alert_messages import build_alert_message, build_alert_rating_header, build_big_spread_message
 from app.services.alert_reject import AlertRejectLogger
-from app.services.big_spread_alert import BIG_SPREAD_RULE_ID, BigSpreadAlertEngine, big_spread_eligible
+from app.services.big_spread_alert import (
+    BIG_SPREAD_RULE_ID, BigSpreadAlertEngine, big_spread_eligible, big_spread_is_muted,
+)
 from app.services.alert_metrics import observe_alert_metrics
 from app.services.announcements import (
     AnnouncementMonitor,
@@ -438,11 +440,6 @@ async def _process_alert_match(
         existing_card_skipped = False
         signal_condition_failure = False
         latest_opportunity = _find_latest_opportunity(app, match.opportunity.id)
-        # Recheck current eligibility, recording a muted event if it changed.
-        fast_eligibility_failed = is_big_spread and (
-            latest_opportunity is None
-            or not big_spread_eligible(latest_opportunity, match.rule, settings, datetime.now(UTC))
-        )
         message = build_alert_message(
             match.rule,
             latest_opportunity or match.opportunity,
@@ -483,6 +480,13 @@ async def _process_alert_match(
                     opening_restricted=True,
                 )
             message = f"{message}\n\n{availability_report.text}"
+        # Diagnostics may await network I/O. Honor newly saved mutes before card creation.
+        if is_big_spread and getattr(app.state, "settings_repo", None) is not None:
+            settings = await app.state.settings_repo.get_risk_settings()
+        fast_eligibility_failed = is_big_spread and (
+            latest_opportunity is None
+            or not big_spread_eligible(latest_opportunity, match.rule, settings, datetime.now(UTC))
+        )
         validation_failure = _latest_signal_validation_failure(
             match,
             latest_opportunity,
@@ -490,7 +494,7 @@ async def _process_alert_match(
             datetime.now(UTC),
         )
         if fast_eligibility_failed:
-            validation_failure = "最新机会已不满足大价差提醒的类型、黑名单、成交额、时效或身份条件"
+            validation_failure = "最新机会已被路线屏蔽，或不满足大价差提醒的类型、黑名单、成交额、时效或身份条件"
         if validation_failure is not None:
             signal_condition_failure = True
             card_summary = "未创建（最新信号校验未通过）"
@@ -614,6 +618,11 @@ async def _process_alert_match(
             message += f"\n卡片：{card_summary}"
             if availability_report is not None and availability_report.opening_restricted:
                 message += "\n交易状态：需核实开仓可用性"
+        if is_big_spread and getattr(app.state, "settings_repo", None) is not None:
+            latest_settings = await app.state.settings_repo.get_risk_settings()
+            if big_spread_is_muted(latest_opportunity or match.opportunity, latest_settings, datetime.now(UTC)):
+                fast_eligibility_failed = True
+                message += "\n路线已屏蔽（big_spread_muted）"
         if fast_eligibility_failed or (not is_big_spread and (signal_condition_failure or existing_card_skipped)):
             status = "muted"
         elif not is_big_spread and alert_template.suppress_when_card_conditions_fail and card_condition_failure:

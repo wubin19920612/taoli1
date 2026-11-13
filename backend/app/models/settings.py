@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -155,12 +156,88 @@ def default_symbol_aliases() -> list[SymbolAlias]:
     ]
 
 
+def normalize_mute_symbol(value: str) -> str:
+    return value.strip().upper().replace("-", "").replace("_", "").replace("/", "")
+
+
+class BigSpreadMuteRoute(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    symbol: str = Field(min_length=1, max_length=128)
+    buy_exchange: str = Field(min_length=1, max_length=64)
+    sell_exchange: str = Field(min_length=1, max_length=64)
+
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def normalize_symbol(cls, value: Any) -> Any:
+        return normalize_mute_symbol(value) if isinstance(value, str) else value
+
+    @field_validator("buy_exchange", "sell_exchange", mode="before")
+    @classmethod
+    def normalize_exchange(cls, value: Any) -> Any:
+        return value.strip().lower() if isinstance(value, str) else value
+
+    @field_validator("symbol", "buy_exchange", "sell_exchange")
+    @classmethod
+    def validate_identity(cls, value: str) -> str:
+        if any(char.isspace() for char in value) or ("*" in value and value != "*"):
+            raise ValueError("identity must be a single value; only a complete * wildcard is supported")
+        return value
+
+    @field_validator("symbol")
+    @classmethod
+    def disallow_symbol_wildcard(cls, value: str) -> str:
+        if value == "*":
+            raise ValueError("symbol must be exact")
+        return value
+
+    @property
+    def route_key(self) -> tuple[str, str, str]:
+        return self.symbol, self.buy_exchange, self.sell_exchange
+
+
+class BigSpreadMute(BigSpreadMuteRoute):
+    until: datetime | None = None
+    note: str = Field(default="", max_length=1000)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    both_directions: bool = True
+
+    @field_validator("until", "created_at")
+    @classmethod
+    def utc_datetime(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+    def is_active(self, now: datetime) -> bool:
+        return self.until is None or self.until > now
+
+
+class BigSpreadMuteCreate(BigSpreadMute):
+    duration_hours: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def resolve_expiry(self) -> "BigSpreadMuteCreate":
+        now = datetime.now(UTC)
+        if self.duration_hours is not None:
+            if self.until is not None:
+                raise ValueError("use either duration_hours or until")
+            try:
+                self.until = now + timedelta(hours=self.duration_hours)
+            except OverflowError as exc:
+                raise ValueError("duration_hours is too large") from exc
+        if self.until is not None and self.until <= now:
+            raise ValueError("until must be in the future")
+        return self
+
+
 class RiskSettings(BaseModel):
     big_spread_alert_enabled: bool = True
     big_spread_alert_pct: float = Field(default=3.0, ge=0.1, le=100, allow_inf_nan=False)
     big_spread_alert_hits: int = Field(default=2, ge=1, le=20)
     big_spread_alert_cooldown_seconds: int = Field(default=600, ge=0, le=604800)
     big_spread_alert_auto_create: bool = True
+    big_spread_alert_mutes: list[BigSpreadMute] = Field(default_factory=list, max_length=500)
     min_volume_24h_usdt: float = Field(default=1_000_000, ge=0)
     stale_after_seconds: int = Field(default=30, ge=5)
     huge_spread_pct: float = Field(default=10.0, ge=0)
@@ -182,6 +259,15 @@ class RiskSettings(BaseModel):
     excluded_symbols: list[str] = Field(default_factory=list)
     ignored_exchanges: list[str] = Field(default_factory=list)
     symbol_aliases: list[SymbolAlias] = Field(default_factory=default_symbol_aliases)
+
+    @field_validator("big_spread_alert_mutes", mode="before")
+    @classmethod
+    def clean_expired_mutes(cls, value: Any) -> Any:
+        if not isinstance(value, list):
+            return value
+        now = datetime.now(UTC)
+        mutes = [BigSpreadMute.model_validate(item) for item in value]
+        return [item for item in mutes if item.is_active(now)]
 
 
 class AlertMessageTemplateSettings(BaseModel):

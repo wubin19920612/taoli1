@@ -6,7 +6,7 @@ from math import isfinite
 
 from app.models.alert import AlertRule
 from app.models.opportunity import Opportunity
-from app.models.settings import RiskSettings
+from app.models.settings import RiskSettings, normalize_mute_symbol
 from app.services.alert_engine import AlertEngine, AlertMatch, EPSILON
 from app.services.alert_metrics import observe_alert_metrics
 from app.services.data_filters import ignored_exchange_set, symbol_is_excluded
@@ -35,10 +35,24 @@ def delivery_rule(rules: list[AlertRule], settings: RiskSettings) -> AlertRule:
     )
 
 
+def big_spread_is_muted(opportunity: Opportunity, settings: RiskSettings, now: datetime) -> bool:
+    symbol = normalize_mute_symbol(opportunity.symbol)
+    buy, sell = opportunity.buy_exchange.lower(), opportunity.sell_exchange.lower()
+    for mute in settings.big_spread_alert_mutes:
+        if mute.symbol != symbol or not mute.is_active(now):
+            continue
+        def matches(first: str, second: str) -> bool:
+            return (mute.buy_exchange in {"*", first}
+                    and mute.sell_exchange in {"*", second})
+        if matches(buy, sell) or (mute.both_directions and matches(sell, buy)):
+            return True
+    return False
+
+
 def big_spread_eligible(
     opportunity: Opportunity, rule: AlertRule, settings: RiskSettings, now: datetime,
 ) -> bool:
-    if not settings.big_spread_alert_enabled:
+    if not settings.big_spread_alert_enabled or big_spread_is_muted(opportunity, settings, now):
         return False
     if opportunity.identity_enforced and (
         opportunity.validation is None

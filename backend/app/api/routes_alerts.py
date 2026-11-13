@@ -1,14 +1,37 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import ValidationError
 
+from app.api.routes_settings import _settings_repo
 from app.db.repositories import AlertEventRepository, AlertRuleRepository
 from app.models.alert import AlertEvent, AlertRule
-from app.models.settings import AlertMessageTemplateSettings
+from app.models.settings import (
+    AlertMessageTemplateSettings, BigSpreadMute, BigSpreadMuteCreate, BigSpreadMuteRoute,
+)
 from app.services.alert_metrics import observe_alert_metrics
 from app.services.alert_messages import build_alert_message
 
 router = APIRouter(prefix="/alerts")
+
+
+@router.get("/big-spread-mutes", response_model=list[BigSpreadMute])
+async def list_big_spread_mutes(request: Request) -> list[BigSpreadMute]:
+    return (await _settings_repo(request).get_risk_settings()).big_spread_alert_mutes
+
+
+@router.post("/big-spread-mutes", response_model=list[BigSpreadMute])
+async def create_big_spread_mute(mute: BigSpreadMuteCreate, request: Request) -> list[BigSpreadMute]:
+    stored = BigSpreadMute.model_validate(mute.model_dump(exclude={"duration_hours"}))
+    try:
+        return await _settings_repo(request).mutate_big_spread_mutes(stored, mute=stored)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="大价差屏蔽列表最多 500 条") from exc
+
+
+@router.delete("/big-spread-mutes", response_model=list[BigSpreadMute])
+async def delete_big_spread_mute(route: BigSpreadMuteRoute, request: Request) -> list[BigSpreadMute]:
+    return await _settings_repo(request).mutate_big_spread_mutes(route)
 
 
 def _rule_repo(request: Request) -> AlertRuleRepository:

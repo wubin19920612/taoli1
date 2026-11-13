@@ -7,6 +7,7 @@ from datetime import datetime
 from math import isfinite
 
 from app.services.data_filters import opportunity_is_excluded
+from app.services.big_spread_alert import big_spread_is_muted
 
 logger = logging.getLogger("alert_reject")
 logger.setLevel(logging.INFO)
@@ -51,6 +52,8 @@ class AlertRejectLogger:
                 reasons.append(detail)
             if not active_rules:
                 reasons.append({"reasons": ["no_enabled_rules"]})
+            if big_spread_is_muted(item, settings, now):
+                reasons.append({"rule_id": "big_spread", "reasons": ["big_spread_muted"]})
             if not reasons:
                 continue
             rejected[item.id] = (item, reasons)

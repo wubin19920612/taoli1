@@ -11,6 +11,9 @@ import type {
   AccountPositionIdentity,
   AccountPositionSnapshot,
   AlertEvent,
+  BigSpreadMute,
+  BigSpreadMuteCreate,
+  BigSpreadMuteRoute,
   AlertMessageTemplateSettings,
   AlertRule,
   AnnouncementExchangeOption,
@@ -421,9 +424,11 @@ export async function getPremiumIndexAlertStatus(): Promise<{
 }
 
 export async function updateRiskSettings(settings: RiskSettings): Promise<RiskSettings> {
+  // Mutes use atomic route mutations; a stale risk form must not replace their list.
+  const { big_spread_alert_mutes: _mutes, ...risk } = settings;
   return fetchJson<RiskSettings>("/settings/risk", {
     method: "PUT",
-    body: JSON.stringify(settings)
+    body: JSON.stringify(risk)
   });
 }
 
@@ -597,6 +602,22 @@ export async function deleteAlertRule(id: string): Promise<void> {
 
 export async function listAlertEvents(limit = 100): Promise<AlertEvent[]> {
   return fetchJson<AlertEvent[]>(`/alerts/events?limit=${limit}`);
+}
+
+export async function listBigSpreadMutes(): Promise<BigSpreadMute[]> {
+  return fetchJson<BigSpreadMute[]>("/alerts/big-spread-mutes");
+}
+
+export async function createBigSpreadMute(mute: BigSpreadMuteCreate): Promise<BigSpreadMute[]> {
+  return fetchJson<BigSpreadMute[]>("/alerts/big-spread-mutes", {
+    method: "POST", body: JSON.stringify(mute)
+  });
+}
+
+export async function deleteBigSpreadMute(route: BigSpreadMuteRoute): Promise<BigSpreadMute[]> {
+  return fetchJson<BigSpreadMute[]>("/alerts/big-spread-mutes", {
+    method: "DELETE", body: JSON.stringify(route)
+  });
 }
 
 export async function listPhonePriceAlertRules(): Promise<PhonePriceAlertRule[]> {

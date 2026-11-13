@@ -1,10 +1,60 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SettingsPage } from "../src/pages/SettingsPage";
 
 describe("SettingsPage", () => {
+  it("lists, adds and deletes route mutes without letting risk saves overwrite them", async () => {
+    const baseFetch = vi.mocked(fetch).getMockImplementation()!;
+    let mutes = [{ symbol: "ETHUSDT", buy_exchange: "binance", sell_exchange: "gate", until: "2099-01-02T00:00:00Z" as string | null,
+      note: "充提关闭", both_directions: false, created_at: "2026-11-13T00:00:00Z" }];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).includes("/alerts/big-spread-mutes")) {
+        const payload = init?.body ? JSON.parse(String(init.body)) : null;
+        if (init?.method === "POST") mutes = [...mutes, { ...payload, created_at: "2026-11-13T00:00:00Z" }];
+        if (init?.method === "DELETE") mutes = mutes.filter((mute) => mute.symbol !== payload.symbol);
+        return Response.json(mutes);
+      }
+      const response = await baseFetch(input, init);
+      if (String(input).includes("/settings/risk") && init?.method !== "PUT") {
+        return Response.json({ ...await response.json(), big_spread_alert_mutes: mutes });
+      }
+      return response;
+    });
+    window.localStorage.setItem("settings-active-tab", "risk");
+    render(<SettingsPage />);
+    const panel = await screen.findByRole("region", { name: "大价差路线屏蔽" });
+    expect(await within(panel).findByText("ETHUSDT")).toBeTruthy();
+    expect(within(panel).getByText("binance → gate")).toBeTruthy();
+    expect(within(panel).getByText("2099-01-02 08:00")).toBeTruthy();
+    fireEvent.click(within(panel).getByRole("button", { name: "新增路线屏蔽" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("屏蔽标的"), { target: { value: "IMX-USDT" } });
+    fireEvent.mouseDown(within(dialog).getByLabelText("屏蔽卖所"));
+    fireEvent.click(await screen.findByText("gate", { selector: ".ant-select-item-option-content" }));
+    fireEvent.click(within(dialog).getByLabelText("永久"));
+    fireEvent.change(within(dialog).getByLabelText("屏蔽备注"), { target: { value: "规格不同" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认屏蔽" }));
+    expect(await within(panel).findByText("IMX-USDT")).toBeTruthy();
+    expect(within(panel).getByText("任意 ↔ gate")).toBeTruthy();
+    expect(within(panel).getByText("永久")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const post = vi.mocked(fetch).mock.calls.find(([input, init]) => String(input).includes("/big-spread-mutes") && init?.method === "POST");
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ symbol: "IMX-USDT", buy_exchange: "*", sell_exchange: "gate", until: null, both_directions: true, note: "规格不同" });
+    fireEvent.click(within(within(panel).getByText("IMX-USDT").closest("tr")!).getByRole("button", { name: "删除屏蔽" }));
+    await waitFor(() => expect(within(panel).queryByText("IMX-USDT")).toBeNull());
+    expect(within(panel).getByText("ETHUSDT")).toBeTruthy();
+    const deletion = vi.mocked(fetch).mock.calls.find(([input, init]) => String(input).includes("/big-spread-mutes") && init?.method === "DELETE");
+    expect(JSON.parse(String(deletion?.[1]?.body))).toEqual({ symbol: "IMX-USDT", buy_exchange: "*", sell_exchange: "gate" });
+    fireEvent.click(screen.getByRole("button", { name: /保存风险参数/ }));
+    await waitFor(() => {
+      const save = vi.mocked(fetch).mock.calls.find(([input, init]) => String(input).includes("/settings/risk") && init?.method === "PUT");
+      expect(save).toBeTruthy();
+      expect(JSON.parse(String(save?.[1]?.body))).not.toHaveProperty("big_spread_alert_mutes");
+    });
+  }, 30000);
+
   it("defaults and saves all five big spread settings for older stored data", async () => {
     window.localStorage.setItem("settings-active-tab", "risk");
     render(<SettingsPage />);
