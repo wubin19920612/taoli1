@@ -8,8 +8,22 @@ from .position_values import position_identity
 def program_contracts(store):
     # No cache: INTENT publication and every admission read share Store.lock.
     with store.lock:
-        return {route_symbol(row['instrument']) for row in
-                store.iter_orders(exclude_states=('SHADOW','UNSENT'))}
+        claims={tuple(k) for k in store.meta('program_crash_claims',[])}
+        return claims|{route_symbol(row['instrument']) for row in
+                       store.iter_orders(exclude_states=('SHADOW','UNSENT'))}
+
+
+def retain_crash_claims(store):
+    # Recovery correctly retires pre-send intents as UNSENT. Preserve the
+    # ownership evidence that existed at the crash without changing that path.
+    with store.transaction():
+        old=store.meta('program_crash_claims',[])
+        claims={tuple(k) for k in old}
+        claims|={route_symbol(r['instrument']) for r in store.iter_orders(states=('INTENT',))}
+        value=[list(k) for k in sorted(claims)]
+        if value!=old:
+            store.set_meta('program_crash_claims',value)
+            store.event('PROGRAM_CRASH_CLAIMS',dict(contracts=value))
 
 
 def journal_positions(store, *, pair_id=None):

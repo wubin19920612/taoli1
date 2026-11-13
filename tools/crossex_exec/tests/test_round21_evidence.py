@@ -12,6 +12,29 @@ import test_round21_program as r21
 
 
 class PublicContractTests(PositionFixture,unittest.TestCase):
+    def test_closed_journal_currencies_are_still_quoted(self):
+        self.http.responses['/api/v4/crossex/positions']=[]
+        order=dict(intent(),leg=0,state='TERMINAL',filled='0',fee='0',created_at=self.now)
+        order['instrument']['symbol']=HL
+        self.store.save_order(order)
+        snapshot=self.engine.read_account_snapshot()
+        self.assertIn('USDC',snapshot['external_fx'])
+
+    def test_rebaseline_offset_uses_the_same_usd_unit_as_journal_risk(self):
+        from tools.crossex_exec.equity import EquityAdmin
+        from tools.crossex_exec.program_risk import journal_pnl
+        from test_round12_fx import quotes
+        order=dict(intent(),leg=0,state='TERMINAL',filled='1',fee='1',vwap='100',
+                   fill_ms=int(self.now*1000),created_at=self.now)
+        order['instrument']['symbol']=HL
+        self.store.save_order(order)
+        self.store.save_order(dict(order,cid='close',reduce_only=True,vwap='90',fee='1'))
+        fx={'USDC':quotes(self.now,('.8','.8'))}
+        admin=EquityAdmin(self.store,self.accounts,clock=lambda:self.now)
+        for _ in range(2):
+            self.store.set_meta('risk_pnl_baseline',admin.pnl_offset(fx=fx))
+            self.assertEqual(journal_pnl(self.store,self.now,fx=fx),(dec(0),dec(0)))
+
     def test_summary_adds_program_risk_and_keeps_account_observations(self):
         self.engine.limits.initialize(self.accounts.snapshot())
         self.engine.reconcile()

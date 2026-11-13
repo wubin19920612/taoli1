@@ -33,6 +33,7 @@ REASONS = frozenset((
     'unhedged_position', 'unknown_close', 'close_incomplete', 'funding_refresh_failed',
     'exit_pricing_unavailable', 'fills_pending', 'cycle_failed_closed',
     'account_liability', 'total_loss', 'daily_loss', 'repair_stopped',
+    'program_income_unverifiable', 'program_contract_mixed', 'isolated_position',
 ))
 
 
@@ -464,7 +465,8 @@ class JournalView:
                 meta = {key: budget.decode(raw) for key, raw in conn.execute(
                     "SELECT key,value FROM meta WHERE key IN ('state','stop_reason','live_mode','account_equity_baseline',"
                     "'account_equity_current','actual_fees','flatten_requested','baseline_status','pair_cooldowns','opening_skip_counts','runtime_config',"
-                    "'halt_reason','account_refresh','equity_baseline_revision','liabilities','stop_locks')")}
+                    "'halt_reason','account_refresh','equity_baseline_revision','liabilities','stop_locks',"
+                    "'external_income','account_snapshot_version','account_snapshot_error')")}
                 if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='baseline_state'").fetchone():
                     meta['baseline_status']=public_read(conn,'baseline_status',budget=budget)
                 events = {}
@@ -533,12 +535,26 @@ class JournalView:
         captured=number(refresh.get('captured_at'))
         snapshot_age=now-captured if captured is not None else None
         snapshot_fresh=snapshot_age is not None and 0<=snapshot_age<=10
+        income=meta.get('external_income') or {}
+        proof_at=number(income.get('captured_at'))
+        program_verified=(income.get('verified') is True and income.get('scope')=='program'
+            and income.get('accounting_basis')=='own_fills_funding_marks'
+            and proof_at is not None and 0<=now-proof_at<=10
+            and income.get('snapshot_version')==meta.get('account_snapshot_version')
+            and not meta.get('account_snapshot_error'))
+        program_risk=dict(verified=program_verified,accounting_basis=income.get('accounting_basis'),
+            ownership_mode='local_order_history',margin_scope='whole_account_cross_lower_bound',
+            snapshot_version=income.get('snapshot_version'),captured_at=utc(proof_at),
+            **{target:number(income.get(source)) if program_verified else None for target,source in
+               (('daily_usd','program_daily'),('total_usd','program_total'),('upnl_usd','program_upnl'),
+                ('funding_daily_usd','program_funding'),('funding_total_usd','program_funding_total'))})
         return dict(generated_at=utc(now), mode=('live' if meta['live_mode'] else 'shadow')
                     if isinstance(meta.get('live_mode'), bool) else self.mode,
                     halted=halted, halt_reason=halt_reason, stop_file=stop, opening_paused_reason=paused,
                     caps=dict(self.caps, max_pairs=3, open_pairs=len(active),
                               total_open_usd=complete_sum(l['notional_usd'] for p in active for l in p['legs'])),
                     config_version=(meta.get('runtime_config') or {}).get('version',0),
+                    program_risk=program_risk,
                     effective_risk_limits=risk,
                     equity_baseline_revision=meta.get('equity_baseline_revision',0),
                     account_snapshot=dict(captured_at=utc(captured),completed_at=utc(refresh.get('completed_at')),

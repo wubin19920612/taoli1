@@ -18,7 +18,7 @@ def decimal_field(value,*,positive=False):
 def remote_view(conn,budget,now):
     from .api_data import utc, number, text_field
     meta={key:budget.decode(raw) for key,raw in conn.execute(
-        "SELECT key,value FROM meta WHERE key IN ('account_snapshot','account_snapshot_error','external_contracts')")}
+        "SELECT key,value FROM meta WHERE key IN ('account_snapshot','account_snapshot_error','external_contracts','program_crash_claims')")}
     snapshot=meta.get('account_snapshot')
     result=dict(available=False,snapshot_at=None,snapshot_version=None,stale=True,positions=[])
     if snapshot is None:
@@ -38,14 +38,12 @@ def remote_view(conn,budget,now):
                 for r in records.values() if r['registered']}
     # Match the registration prohibition: any exact program contract history is
     # still program-owned, including closed pairs, orphan orders and tombstones.
-    owned=set()
+    owned={tuple(k) for k in meta.get('program_crash_claims',[])}
     for (raw,) in conn.execute('SELECT value FROM orders'):
         budget.check()
-        owned.add(route_symbol(budget.decode(raw)['instrument']))
-    for (raw,) in conn.execute('SELECT value FROM pairs'):
-        budget.check()
-        for instrument in budget.decode(raw)['instruments']:
-            owned.add(route_symbol(instrument))
+        row=budget.decode(raw)
+        if row['state'] not in ('SHADOW','UNSENT'):
+            owned.add(route_symbol(row['instrument']))
     raw_positions=snapshot['raw_positions']
     normalized=remote_positions(raw_positions['crossex'],raw_positions['bitget'])
     if normalized!={k:dec(v) for k,v in snapshot['positions'].items()}:
@@ -84,6 +82,8 @@ def remote_view(conn,budget,now):
                     valuation_verified=usd is not None,valuation_error=None if usd is not None else 'position_fx_unavailable',
                     valuation='public_spot_lower_bound' if identity['quote'] not in ('USD','USDT') else 'native_usd',
                     identity_verified=identity_verified,ownership=ownership,snapshot_at=result['snapshot_at'],
+                    effective_ownership='program' if target in owned else 'external',
+                    ownership_basis='local_order_history',registration_required=False,
                     snapshot_version=version,stale=stale))
     result['positions'].sort(key=lambda r:r['position_key'])
     return result

@@ -117,6 +117,7 @@ class ProgramAccounting:
                 'funding_counter_ledger_mismatch','funding_lifetime_missing','program_funding_lifetime_missing',
                 'funding_collection_counter_conflict','funding_late_checkpoint_history',
                 'program_funding_incomplete','program_history_revised_or_missing','program_snapshot_superseded',
+                'program_position_mismatch',
                 'program_accounting_pending','program_position_mark_unknown','program_baseline_unverifiable'}
             failure.diagnostic=dict(stage='program_income_verification',
                 condition=str(error) if str(error) in safe else 'program_evidence_invalid')
@@ -138,6 +139,10 @@ class ProgramAccounting:
         revision=store.meta('equity_baseline_revision',0)
         original_journal=journal_fingerprint(store)
         daily,realized=journal_pnl(store,cutoff,fx=snapshot.get('external_fx',{}))
+        if {k:dec(q) for k,q in projection['positions'].items()}!=journal_positions(store):
+            # A merged lifetime's funding cannot be split by user/program after
+            # the fact. Preserve the last verified metrics until reconciled.
+            raise ValueError('program_position_mismatch')
         index=history_index(activity,self._history_hashes)
         previous=store.meta('program_verified_history',{})
         for name,rows in previous.items():

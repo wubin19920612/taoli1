@@ -20,8 +20,8 @@ from .settings import Settings, risk_settings
 from .sizing import size_plan
 from .universe import Universe, check_mapping_ratio
 from .external import ExternalRegistry, ExternalAdmin, ExternalUnverifiable, plain
-from .external_accounting import ExternalAccounting, read_snapshot
-from .ownership import ProgramOwnership, bounded_pair_positions, journal_positions
+from .external_accounting import ExternalAccounting
+from .ownership import ProgramOwnership, bounded_pair_positions, retain_crash_claims
 from .program_accounting import ProgramAccounting, read_program_snapshot
 from .external_fx import NATIVE_USD, require_fresh_fx
 from .position_values import key_currency, notional_values, value_snapshot
@@ -406,6 +406,10 @@ class Engine:
         snapshot=(read_program_snapshot(self.accounts,self.store,self.clock) if self.limits.program_scope
                   else self.accounts.snapshot())
         currencies={r['identity']['quote'] for r in self.external.records().values()}-NATIVE_USD
+        if self.limits.program_scope:
+            from .external import route_symbol
+            currencies|={key_currency('|'.join((*route_symbol(r['instrument']),r['position_side'])))
+                for r in self.store.iter_orders(exclude_states=('SHADOW','UNSENT'))}-NATIVE_USD
         try:
             currencies|={key_currency(k) for k in snapshot['notionals']}-NATIVE_USD
         except (KeyError,ValueError,TypeError):
@@ -548,6 +552,8 @@ class Engine:
         known={o['cid'] for o in self.executor.iter_orders(states=NONTERMINAL)
                if o['instrument']['market']['exchange']=='bitget'}
         # Even a failed account/mode check cannot strand a durable INTENT or SENT.
+        if self.limits.program_scope:
+            retain_crash_claims(self.store)
         self.executor.recover()
         for pair in self.store.pairs(active=True):
             self.refresh_pair(pair)
@@ -801,8 +807,8 @@ class Engine:
             if self.store.meta('daily_loss_day') not in (None,current_day):
                 self.store.set_meta('daily_loss_day',None)
                 self.stops.discard('daily_loss')
-            # Equity delta also catches funding/fees delayed beyond the trade journal.
-            # Transfers are deliberately not assumed to be profit: use dedicated accounts.
+            # Legacy dedicated-account mode retains account equity deltas.
+            # Program mode uses only the certified journal/funding/mark values.
             equity=self.snapshot.get('equity')
             if equity is not None:
                 baseline=self.store.meta('equity_baseline')

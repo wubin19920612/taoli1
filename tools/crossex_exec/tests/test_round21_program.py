@@ -19,7 +19,9 @@ class AutomaticOwnershipTests(PositionFixture, unittest.TestCase):
                 ('1','LONG','CROSS'), ('5','SHORT','CROSS'), ('2','LONG','ISOLATED')]:
             self.http.responses['/api/v4/crossex/positions'] = [
                 unitree(position_qty=quantity, position_side=side, margin_mode=mode),
-                unitree(ASTER, margin_mode='CROSS', position_side='SHORT', leverage='2')]
+                unitree(ASTER, margin_mode='CROSS', position_side='SHORT', leverage='2'),
+                unitree('BINANCE_FUTURE_OPENAI_USDT',margin_mode='CROSS',leverage='5'),
+                unitree('HYPERLIQUID_FUTURE_io:OAI_USDC',margin_mode='CROSS',position_side='SHORT',leverage='5')]
             self.now += 1
             self.engine.reconcile()
             with self.subTest(quantity=quantity, side=side, mode=mode):
