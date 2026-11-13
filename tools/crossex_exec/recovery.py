@@ -23,9 +23,12 @@ def recover_observed_stops(engine, snapshot, income):
     owned=journal_positions(store)  # a terminal over-close is still an error
     ready={reason:'EXECUTION_OBSERVATION_RECOVERED' for reason in
            reasons.intersection(('negative_local_position','unknown_exposure_unavailable','cycle_failed_closed'))}
+    closing=[p for p in pairs if p.get('exit_reason')]
+    if 'close_incomplete' in reasons and (not active or closing and all(p['state']=='CLOSED' for p in closing)):
+        ready['close_incomplete']='CLOSE_OBSERVATION_RECOVERED'
     if not active and not owned:
         ready.update({reason:'CLOSE_OBSERVATION_RECOVERED' for reason in
-                      reasons.intersection(('close_incomplete','flatten_retry_pending','flatten_snapshot_unavailable'))})
+                      reasons.intersection(('flatten_retry_pending','flatten_snapshot_unavailable'))})
     if ('funding_settlement_accounting_required' in reasons and income
             and income.get('funding_verified') and income.get('funding_daily_verified')
             and all(p.get('closed_at',0)<=snapshot.get('accounting_at',snapshot['captured_at'])
@@ -78,6 +81,14 @@ def recover_observed_stops(engine, snapshot, income):
         except Exception:
             pass
     with store.lock:
+        if journal!=journal_fingerprint(store):
+            return
+        # These reads prove their own failures gone. A slow successful retry
+        # may expire PnL; leaving its lock would force the same slow read forever.
+        # Releasing only these reasons never renews or bypasses the PnL proof.
+        for reason in ('funding_refresh_failed','halting_startup_account_unavailable','foreign_bitget_unfilled_orders'):
+            if reason in ready:
+                engine.stops.recovered(reason,ready.pop(reason),dict(reason=reason,completed_at=engine.clock()))
         # Network retries may outlive the original proof or race a fresh read.
         if (not 0<=engine.clock()-snapshot['captured_at']<=10
                 or snapshot['snapshot_version']!=store.meta('account_snapshot_version')

@@ -839,6 +839,8 @@ class Engine:
             if same is True:
                 from .recovery import recover_observed_stops
                 recover_observed_stops(self,self.snapshot,income)
+                if self.limits.program_scope:
+                    self.require_external_income()  # read-only retries can expire the original proof
             current_day=day(self.clock())
             if self.store.meta('daily_loss_day') not in (None,current_day):
                 self.store.set_meta('daily_loss_day',None)
