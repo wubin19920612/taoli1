@@ -2906,3 +2906,104 @@ OK
 剩余边界：采样间从未观察到的混仓无法凭空重建，转换边界使用保守估算；真实缺失账单、身份不明、未补齐成交、丢腿、日亏、累计亏损和整户保证金风险仍按原规则阻断。推送目标固定 `origin codex/crossex-exec-r8`，普通快进推送，不 reset、clean 或 force push。下一任务先读本节、任务书与验收 JSON；独立终审、服务器/影子验收或其他主要模块另开任务，服务器访问须另获授权。
 
 本节与验收 JSON 作为单独文档提交交付，最终文档提交号和推送回执见本任务最终报告。代码验收后仅追加这两份文档；没有其他待交付 WIP 或未跟踪产物，原始日志及最初补丁仅保留在上述 Temp 目录。
+
+## 第二十六轮（2026-11-13，熔断完成、程序余仓口径和盘口锁恢复）
+
+### 范围、基线与测试先行
+
+按 [第二十六轮任务书](crossex-exec-round26-2026-11-13.md) 执行，模块限于 crossex_exec 的停开锁恢复。工作树固定为 `C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec-r8`，分支 `codex/crossex-exec-r8`；起始工作区干净，HEAD 为任务书提交 `f46ab0e`，已比远端领先一个提交。
+
+| 提交 | 内容 |
+|---|---|
+| `3c8a590` | 先复现末次查仓超时、两路由同合约余仓、慢盘口遇到账户刷新；加入假 CLOSED、审计失败、旧盘口和日志变化反例 |
+| `0e80b47` | 统一程序空仓证明，修复熔断完成和盘口证据与账户版本耦合 |
+| `1ee4384` | 逐把锁故障恢复测试；追加 HALTED 前残留订单锁、旧 HALTED 查仓锁和快照早于成交的失败反例 |
+| `7deaee3` | 完成 HALTED 前已证实锁的恢复，并为旧 HALTED 的查仓故障提供带新鲜证明的审计释放 |
+| `a27355a` | 补充 HALTING 三采样、已闭合配对修复 owner 和未知 flatten owner 的失败反例 |
+| `4fc6d1f` | HALTING 保持原三次匹配要求、恢复可证实的已闭合 owner，并拒绝未知 flatten owner 的释放 |
+
+首批有效红灯日志 `confirmed-red.log` 为 7 项、6 个失败断言（同合约余仓含两个路由子案例）；实现后全部通过。逐锁审计又证实：只在正常 reconcile 清订单锁，会在 HALTING 的最终成功查仓后残留 7 类订单/退出锁；旧 HALTED 状态在读取新证据前就被查仓锁拒绝；早于最新成交但仍在 10 秒内的快照不能认证本次平仓。追加反例均先于对应修复提交。原始夹具排错日志也保留，没有将夹具错误算作产品缺陷。
+
+### 修法与关键入口
+
+1. **熔断查仓失败后可恢复**：`Engine.flatten_all` 末次查仓通过共享空仓证明后，逐项写恢复事件并清除它证明已经消失的锁，然后才进入 HALTED；失败、未决订单、未完成记账、程序净仓非零或审计写失败继续保留保护。
+2. **用户同合约余仓不阻止程序平仓完成**：新增 `flatness.py`，`require_local_flat` 按 pair/leg/raw contract 的成交生命周期检查净仓和订单/配对状态；`flat_projection` 先经原 `ProgramOwnership.split` 验证身份，再在程序已证实全平的前提下将远端剩余数量列入 `external_positions`。Engine 和 EquityAdmin 共用此口径；两个路由的 `0.4` 用户余仓均保留，原始合约仍由未修改的 `check_order` 拒绝开仓。
+3. **慢盘口可独立解除盘口故障锁**：`recover_observed_stops` 用盘口自身 `received_at`、两腿深度、成交日志和配对集合核验恢复；提交解锁时所有盘口仍须不超过 1 秒。账户版本刷新不再否定这些盘口证据，账户收益证明过期/失效仍独立禁止开仓，必须等下一次完整认证。
+4. **补齐停机边界的同类恢复**：成功最终平仓证明还可解除已消失的订单确认/退出观测锁，避免进程进入 HALTED 后无法继续 reconcile；若有 position_mismatch，继续在 HALTING 中收集原要求的三份匹配新采样，已闭合配对则调用原 owner 恢复检查。旧 HALTED 中仅全局 owner 的 `flatten_retry_pending` / `flatten_snapshot_unavailable` 可进入人工释放的证明阶段，先验本地空仓，再读取新鲜账户、挂单、债务、保证金和收益证据，最后在同一事务内记录解锁及 HALT_RELEASED。其他仓位锁、未知 flatten owner 仍先拒绝；证据或审计失败不改变停机和亏损基线。
+
+`flat_projection` 还要求快照时间不早于最新成交/终态观测；正常同步查仓未提供 `captured_at` 时保留原规则，使用本次读取开始时间。全程没有放宽损失阈值、重写真实成交、改变订单构建、发送、查询、撤单或减仓路径。
+
+### 更新后的锁清单（本节替代第二十五轮的恢复条件说明）
+
+共 28 个可自动恢复锁名；`test_round26_locks.py` 中 `test_<锁名>` 为逐锁失败后恢复用例，唯独 `flatten_snapshot_unavailable` 由 `test_round26_halt.py` 的末次查仓超时用例覆盖。订单类测试注入未完成记账并重放对应已持久化锁；旧版本兼容锁与 CLI 周期锁重放故障锁并注入一次历史读取失败，其后必须由真实完整的离线账户证据恢复。这里的“自动”均指原因消失且所列证据通过，不等于清除所有锁。
+
+| 锁名 | 自动恢复所需证据与入口 | 保留边界 |
+|---|---|---|
+| `funding_settlement_accounting_required` | 累计/当日资金费认证完整，账务时间覆盖待结算配对平仓时间；`FUNDING_SETTLEMENT_RECOVERED` | 缺账单、累计计数或 UTC 日界证明时保留 |
+| `funding_refresh_failed` | 包括已 CLOSED 配对的相关两腿资金费重新读取成功，费率、正周期、未来结算时点和逐次时效有效；`FUNDING_REFRESH_RECOVERED` | 慢读可证明自身恢复，但不延长账户证明 |
+| `negative_local_position` | 完整对账及收益认证恢复；或最终平仓证明确认每个生命周期净仓为零 | 真实过平、丢失成交及跨 pair 抵销不能解锁 |
+| `unknown_exposure_unavailable` | 原 resolve_exposure 成功，或完整对账/最终平仓证明成功 | 不可读或未确认仓位不能凭空消失 |
+| `cycle_failed_closed` | 后续完整新鲜对账及收益认证成功 | 未知异常仍保留相应业务保护 |
+| `close_incomplete` | 完整对账后无活跃配对，或所有有退出义务的配对已 CLOSED；最终平仓证明也可解除 | 无关 OPEN 配对不拖住已完成退出；尚未退出不能清 |
+| `flatten_retry_pending` | 最终新鲜查仓 + 本地订单全部确认和记账 + 每个程序生命周期与配对全平；或完整对账证明同一条件 | 不要求原始账户全空；程序余仓、写入占用、待确认成交仍阻断 |
+| `flatten_snapshot_unavailable` | 同上；新证据时间须覆盖最新成交/终态，成功时写 `CLOSE_OBSERVATION_RECOVERED` | 旧 HALTED 只能在完整人工释放证明成功后事务性清此暂态锁；读取/审计失败保留 |
+| `exit_pricing_unavailable` | 全部活跃配对两腿盘口完整、提交时不超过 1 秒且相应方向深度足量；日志和配对集合未变；无活跃配对可解除 | 独立于账户版本；旧盘口、深度不足、期间日志变化不解除；不绕过收益准入 |
+| `halting_startup_account_unavailable` | 重新 validate_startup 成功；`STARTUP_ACCOUNT_RECOVERED` | HALTED 本身仍需明确人工释放 |
+| `foreign_bitget_unfilled_orders` | 成功读取 open_orders 且明确为空；`FOREIGN_ORDERS_RECOVERED` | 不替用户撤单，读失败/返回非空不能清 |
+| `account_snapshot_unavailable` | 连续 3 份不同、新鲜、间隔不超过 10 秒的成功采样 | 同一份采样不能凑数 |
+| `account_liability` | 连续 3 份有效采样均无阻断债务 | 执行器不替用户消债 |
+| `isolated_position` | 新鲜仓位观测证明程序范围已无逐仓；`POSITION_MARGIN_MODE_RECOVERED` | 不自动修改保证金模式；独立账户风险检查继续有效 |
+| `external_identity_unverifiable` | 对应原始身份与程序收益重新认证成功 | DEX、route、raw symbol 等身份不明确时保留 |
+| `external_income_unverifiable` | 完整收益认证成功；`EXTERNAL_INCOME_RECOVERED` | 不以用户收入抵销程序亏损 |
+| `program_income_unverifiable` | 程序完整收益认证成功；`PROGRAM_ACCOUNTING_RECOVERED` | 缺费用/历史/日界/新鲜证明不能当零 |
+| 兼容 `external_baseline_unverifiable` | 同上；独立测试重放旧锁后补齐证据 | 不自动重置基线 |
+| 兼容 `history_coverage` | 同上；独立测试重放旧锁后补齐证据 | 真实历史缺失继续停开 |
+| `position_mismatch` | 无待确认写入/成交，快照覆盖最新成交，连续 3 份新采样证明程序仓量不缺失；HALTING 最终查仓继续调用同一对账入口，清锁前不提前进入 HALTED | 不降为一份平仓采样，人工释放不直接清此锁；另一腿额外用户仓不能掩盖丢腿 |
+| `unknown_order` | 完整对账无未决订单/记账且仓位相符；或最终平仓证明 | 普通人工释放仍拒绝此锁 |
+| `unknown_close` | 同上 | 未知减仓不能重复花费程序库存 |
+| `accounting_pending` | 同上 | 未记账成交仍阻断 |
+| `fills_pending` | 同上 | 缺失真实成交仍阻断 |
+| `entry_accounting_unknown` | 同上 | 另须通过原完整收益准入才能开仓 |
+| `unhedged_position` | 原 clear_repair_locks：指定 pair owner 无未决订单/记账，远端确认两腿相等且与本地量一致，不在修复中；最终空仓证明也检查已闭合配对的 owner | 不跨 owner 清锁；无法归属的旧 global 锁保留人工核查 |
+| `repair_stopped` | 同上；独立逐锁测试 | 真丢腿/修复未完成继续阻断 |
+| `daily_loss` | 下一 UTC 日在完整收益认证和对账后解除旧日锁，当日再达原阈值则重加 | 同日即使盈利回到阈值以上也不自解 |
+
+`account_equity_drop` 与累计亏损 `HALTED` / `total_loss` **不自动释放**，仍需确认实际 halt_reason 后显式 release_halt。未知/人工锁和无法归属的旧修复锁默认保留。STOP 文件、flatten_requested、拒单率、单腿失败次数、保证金及账户证明时效属于独立开仓门禁，未改动。混仓原始合约开仓禁令仍在，不能把“程序空仓”解释为可接管用户余仓。
+
+新增最终平仓的全局解锁和只读恢复器的解锁使用原 StopLocks.recovered 事务；旧 HALTED 的两种 flatten 锁则与最终 HALT_RELEASED 审计同事务提交。原 reconcile_positions、clear_repair_locks 等路径保持原来的清锁实现。新增反例覆盖审计回滚、同 owner/其他 owner 分离、真实缺腿、无效盘口、期间日志变化、程序净仓非零却伪标 CLOSED、旧快照以及未完成记账。
+
+### 旧测试、范围审计与验收
+
+**旧测试改动：无。** 相对 `f46ab0e`，全部 104 个既有测试/夹具文件对象一致，无删测、跳过或更换原夹具；新增 `round26_fixtures.py` 和三个测试文件，共 45 个测试方法（另含两路由、多锁名和多故障子案例）。逐仓测试显式提供合法 CrossEx 逐仓保证金证据；跨日锁恢复先取得两路由完整已闭合持仓累计，再跨 UTC 日，未放松原日界校验。
+
+AST 审计确认 Engine 只修改 `flatten_all`；EquityAdmin 修改 `local_flat`、`state_check`、`read_flat_accounts` 和 `apply`；`recovery.py` 修改只读恢复函数，另新增共享 `flatness.py`。`limits.py`、`ownership.py`、`execution.py`、`transport.py`、`adapters.py`、`admission.py`、`funding.py`、`program_risk.py`、`accounts.py`、`stops.py`、`program_accounting.py` 的 Git 对象均与基线相同。
+
+验收固定代码/测试提交 `4fc6d1f774a8b4aa64815dfba41d418366eb69e4`，两个解释器分别串行运行未筛选命令：
+
+```text
+python -m unittest discover -s tools/crossex_exec/tests -v
+python -m unittest discover -s tools/fill_sim/tests -v
+```
+
+Python 3.12.10：`C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe`。
+
+Python 3.10.20：`C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe`，与上一轮相同。
+
+四次完整运行均退出码 0、无 skip，原始四行汇总如下：
+
+```text
+Python 3.12 crossex_exec: Ran 771 tests in 185.080s — OK
+Python 3.12 fill_sim:     Ran 158 tests in 30.295s — OK
+Python 3.10 crossex_exec: Ran 771 tests in 178.262s — OK
+Python 3.10 fill_sim:     Ran 158 tests in 31.972s — OK
+```
+
+两版本的 INVARIANTS 与 PROGRAM_INVARIANTS 均完整通过 `20261111 / 20261112 / 20261113` 三种子。每个 INVARIANTS 种子为 2712 轮（2400 随机轮），十项不变量各检查 2712 次；模拟器及 fill_sim 源码/测试原样运行。完整原始汇总块、每条模拟器输出、命令、解释器、提交号、退出码、日志 SHA256、逐锁测试映射及 Git/AST 范围审计见 [crossex-exec-r26-validation-2026-11-13.json](crossex-exec-r26-validation-2026-11-13.json)。日志由 subprocess 直接按二进制保存，不经 PowerShell 重写。
+
+首轮代码 `7deaee3` 的四次全量为 768 / 158 / 768 / 158，均通过；追加停机 owner 和三采样反例及修复后重新运行最终全量，交付以 `4fc6d1f` 的新结果为准。中间旧轮次回归曾暴露同步快照夹具不提供 captured_at 的兼容问题，生产代码恢复原“以读取开始时间作为缺省时间戳”的语义后回归通过，旧测试没有改动。
+
+### 运行边界与下一任务
+
+仅使用 Windows 原生 Python、离线账户夹具、本地 SQLite 与回环接口。按本轮明确约束，没有运行 WSL，没有访问服务器、真实账户或交易接口，没有备份线上数据库或部署；线上版本未核实。原始测试日志保留在 `C:\Users\wubin\AppData\Local\Temp\crossex-r26-msx_k0ly`，工作树 `output/crossex-r26-logdir.txt` 为被忽略的本地路径指针，不入库。
+
+本轮按当前协作约束未委派代理；审计为源码自审、Git/AST 范围核验及本地测试，不声称独立终审或生产验收。推送固定 `origin codex/crossex-exec-r8`，只做普通快进推送。下一任务先读本节、任务书和验收 JSON；独立终审、服务器/影子验收或其他主要模块另开任务，服务器访问仍需另行授权。

@@ -1,0 +1,1049 @@
+{
+  "module": "crossex_exec_round26",
+  "date": "2026-11-13",
+  "branch": "codex/crossex-exec-r8",
+  "base_commit": "f46ab0e5c9fcad32ac4afbd9cec19c8acac14a0a",
+  "code_commit": "4fc6d1f774a8b4aa64815dfba41d418366eb69e4",
+  "commits": [
+    {
+      "commit": "f46ab0e5c9fcad32ac4afbd9cec19c8acac14a0a",
+      "subject": "docs(crossex-exec): round twenty-six task (halt/stop liveness)"
+    },
+    {
+      "commit": "3c8a5908ae28122d83eab623b8342778e3903856",
+      "subject": "test(crossex-exec): reproduce halt and slow pricing recovery deadlocks"
+    },
+    {
+      "commit": "0e80b47bcd57095143e22d3161be99d4abf4c6f9",
+      "subject": "fix(crossex-exec): prove program flatness and recover independently timed books"
+    },
+    {
+      "commit": "1ee43840556ca9959d39b01c583661219e7784a2",
+      "subject": "test(crossex-exec): audit every recoverable lock and halted release edge cases"
+    },
+    {
+      "commit": "7deaee3c80c03c9136c47985f1064b0a467f57ec",
+      "subject": "fix(crossex-exec): finish proven halt recovery and release persisted flatten faults"
+    },
+    {
+      "commit": "a27355a99719bb2f6ef75ea0954109623309834f",
+      "subject": "test(crossex-exec): preserve mismatch streak and owner guards through halting"
+    },
+    {
+      "commit": "4fc6d1f774a8b4aa64815dfba41d418366eb69e4",
+      "subject": "fix(crossex-exec): retain halt recovery until mismatch and pair owners are proved"
+    }
+  ],
+  "validation_runs": [
+    {
+      "version": "Python 3.12.10",
+      "interpreter": "C:\\Users\\wubin\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "suite": "crossex_exec",
+      "command": [
+        "C:\\Users\\wubin\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/crossex_exec/tests",
+        "-v"
+      ],
+      "commit": "4fc6d1f774a8b4aa64815dfba41d418366eb69e4",
+      "exit_code": 0,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\final-3.12-crossex_exec.log",
+      "log_sha256": "0e0d3d23e571dcb6aca5522f9dd3910bada6c7833865eb94583be008b93453e0",
+      "raw_summary_block": "Ran 771 tests in 185.080s\r\n\r\nOK",
+      "simulator_lines": [
+        "test_fault_invariants_seed_20261111_2448_rounds (test_invariants.InvariantSimulationTests.test_fault_invariants_seed_20261111_2448_rounds) ... INVARIANTS seed=20261111 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 35, '1b': 80, '1c': 25, '1d': 104, '2': 94, '3': 115, '4': 94, '5': 600, '6': 23, '7': 363} coverage={'account_failures': 151, 'baseline_admission': 94, 'cooldown_active': 167, 'db_failures': 22, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 162, 'halted': 362, 'halting_retry': 1, 'intent_write_abort': 21, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 94, 'opened_pairs': 47, 'partial_fill': 27, 'position_failures': 137, 'position_read': 4071, 'query': 4186, 'query_failures': 1344, 'recovery_obligation': 23, 'reduce': 115, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 722, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'skip_baseline_not_flat': 75, 'skip_book_skew': 28, 'skip_book_stale': 112, 'skip_funding_diff': 56, 'skip_not_single_venue_outlier': 129, 'skip_size_too_small': 1, 'skip_too_few_venues': 26, 'skip_volume_too_low': 1, 'timeout_ack': 28, 'timeout_unknown': 21, 'zero_fill': 20}",
+        "test_fault_invariants_seed_20261112_2448_rounds (test_invariants.InvariantSimulationTests.test_fault_invariants_seed_20261112_2448_rounds) ... INVARIANTS seed=20261112 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 27, '1b': 76, '1c': 13, '1d': 97, '2': 88, '3': 103, '4': 88, '5': 600, '6': 30, '7': 388} coverage={'account_failures': 116, 'baseline_admission': 88, 'cooldown_active': 24, 'db_failures': 16, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 152, 'halted': 387, 'halting_retry': 1, 'intent_write_abort': 15, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 88, 'opened_pairs': 44, 'partial_fill': 24, 'position_failures': 139, 'position_read': 4085, 'query': 4956, 'query_failures': 629, 'recovery_obligation': 30, 'reduce': 103, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 722, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'skip_baseline_not_flat': 65, 'skip_book_skew': 20, 'skip_book_stale': 86, 'skip_funding_diff': 91, 'skip_not_single_venue_outlier': 153, 'skip_size_too_small': 1, 'skip_too_few_venues': 46, 'skip_volume_too_low': 1, 'timeout_ack': 22, 'timeout_unknown': 34, 'zero_fill': 15}",
+        "test_fault_invariants_seed_20261113_2448_rounds (test_invariants.InvariantSimulationTests.test_fault_invariants_seed_20261113_2448_rounds) ... INVARIANTS seed=20261113 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 37, '1b': 98, '1c': 27, '1d': 126, '2': 114, '3': 135, '4': 114, '5': 600, '6': 31, '7': 405} coverage={'account_failures': 134, 'baseline_admission': 114, 'cooldown_active': 158, 'db_failures': 20, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 202, 'halted': 404, 'halting_retry': 1, 'intent_write_abort': 20, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 114, 'opened_pairs': 57, 'partial_fill': 27, 'position_failures': 141, 'position_read': 4069, 'query': 5458, 'query_failures': 622, 'recovery_obligation': 31, 'reduce': 135, 'restarts': 114, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 722, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'skip_baseline_not_flat': 43, 'skip_book_skew': 28, 'skip_book_stale': 73, 'skip_funding_diff': 68, 'skip_not_single_venue_outlier': 132, 'skip_size_too_small': 1, 'skip_too_few_venues': 22, 'skip_volume_too_low': 1, 'timeout_ack': 39, 'timeout_unknown': 37, 'zero_fill': 20}",
+        "test_default_program_three_seeds (test_round15_program.ProgramSimulationTests.test_default_program_three_seeds) ... PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261111}",
+        "PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261112}",
+        "PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261113}"
+      ],
+      "skipped_tests": 0,
+      "verified_simulator_results": [
+        {
+          "kind": "INVARIANTS",
+          "seed": 20261111,
+          "rounds": 2712,
+          "random_rounds": 2400,
+          "checks": {
+            "1a": 2712,
+            "1b": 2712,
+            "1c": 2712,
+            "1d": 2712,
+            "2": 2712,
+            "3": 2712,
+            "4": 2712,
+            "5": 2712,
+            "6": 2712,
+            "7": 2712
+          }
+        },
+        {
+          "kind": "INVARIANTS",
+          "seed": 20261112,
+          "rounds": 2712,
+          "random_rounds": 2400,
+          "checks": {
+            "1a": 2712,
+            "1b": 2712,
+            "1c": 2712,
+            "1d": 2712,
+            "2": 2712,
+            "3": 2712,
+            "4": 2712,
+            "5": 2712,
+            "6": 2712,
+            "7": 2712
+          }
+        },
+        {
+          "kind": "INVARIANTS",
+          "seed": 20261113,
+          "rounds": 2712,
+          "random_rounds": 2400,
+          "checks": {
+            "1a": 2712,
+            "1b": 2712,
+            "1c": 2712,
+            "1d": 2712,
+            "2": 2712,
+            "3": 2712,
+            "4": 2712,
+            "5": 2712,
+            "6": 2712,
+            "7": 2712
+          }
+        },
+        {
+          "kind": "PROGRAM_INVARIANTS",
+          "seed": 20261111,
+          "coverage": {
+            "full_fill": 40,
+            "open": 20,
+            "position_read": 524,
+            "program_delayed_funding": 8,
+            "program_episodes": 12,
+            "program_explicit_rejection": 4,
+            "program_external_random_trades": 72,
+            "program_roundtrip": 8,
+            "program_send_checks": 40,
+            "query": 40,
+            "reduce": 20,
+            "restarts": 20
+          }
+        },
+        {
+          "kind": "PROGRAM_INVARIANTS",
+          "seed": 20261112,
+          "coverage": {
+            "full_fill": 40,
+            "open": 20,
+            "position_read": 524,
+            "program_delayed_funding": 8,
+            "program_episodes": 12,
+            "program_explicit_rejection": 4,
+            "program_external_random_trades": 72,
+            "program_roundtrip": 8,
+            "program_send_checks": 40,
+            "query": 40,
+            "reduce": 20,
+            "restarts": 20
+          }
+        },
+        {
+          "kind": "PROGRAM_INVARIANTS",
+          "seed": 20261113,
+          "coverage": {
+            "full_fill": 40,
+            "open": 20,
+            "position_read": 524,
+            "program_delayed_funding": 8,
+            "program_episodes": 12,
+            "program_explicit_rejection": 4,
+            "program_external_random_trades": 72,
+            "program_roundtrip": 8,
+            "program_send_checks": 40,
+            "query": 40,
+            "reduce": 20,
+            "restarts": 20
+          }
+        }
+      ]
+    },
+    {
+      "version": "Python 3.12.10",
+      "interpreter": "C:\\Users\\wubin\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "suite": "fill_sim",
+      "command": [
+        "C:\\Users\\wubin\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/fill_sim/tests",
+        "-v"
+      ],
+      "commit": "4fc6d1f774a8b4aa64815dfba41d418366eb69e4",
+      "exit_code": 0,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\final-3.12-fill_sim.log",
+      "log_sha256": "0d5dc11303adcdd1c02b4f67709c5979128184787f707406ab857084728218ca",
+      "raw_summary_block": "Ran 158 tests in 30.295s\r\n\r\nOK",
+      "simulator_lines": [],
+      "skipped_tests": 0,
+      "verified_simulator_results": []
+    },
+    {
+      "version": "Python 3.10.20",
+      "interpreter": "C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe",
+      "suite": "crossex_exec",
+      "command": [
+        "C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/crossex_exec/tests",
+        "-v"
+      ],
+      "commit": "4fc6d1f774a8b4aa64815dfba41d418366eb69e4",
+      "exit_code": 0,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\final-3.10-crossex_exec.log",
+      "log_sha256": "61ec2f5357049b5155109201cfe6b58cbaeb230f85930404407485f8bc60abf6",
+      "raw_summary_block": "Ran 771 tests in 178.262s\r\n\r\nOK",
+      "simulator_lines": [
+        "test_fault_invariants_seed_20261111_2448_rounds (test_invariants.InvariantSimulationTests) ... INVARIANTS seed=20261111 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 35, '1b': 80, '1c': 25, '1d': 104, '2': 94, '3': 115, '4': 94, '5': 600, '6': 23, '7': 363} coverage={'account_failures': 151, 'baseline_admission': 94, 'cooldown_active': 167, 'db_failures': 22, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 162, 'halted': 362, 'halting_retry': 1, 'intent_write_abort': 21, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 94, 'opened_pairs': 47, 'partial_fill': 27, 'position_failures': 137, 'position_read': 4071, 'query': 379, 'query_failures': 56, 'recovery_obligation': 23, 'reduce': 115, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 722, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'skip_baseline_not_flat': 75, 'skip_book_skew': 28, 'skip_book_stale': 112, 'skip_funding_diff': 56, 'skip_not_single_venue_outlier': 129, 'skip_size_too_small': 1, 'skip_too_few_venues': 26, 'skip_volume_too_low': 1, 'timeout_ack': 28, 'timeout_unknown': 21, 'zero_fill': 20}",
+        "test_fault_invariants_seed_20261112_2448_rounds (test_invariants.InvariantSimulationTests) ... INVARIANTS seed=20261112 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 27, '1b': 76, '1c': 13, '1d': 97, '2': 88, '3': 103, '4': 88, '5': 600, '6': 30, '7': 388} coverage={'account_failures': 116, 'baseline_admission': 88, 'cooldown_active': 24, 'db_failures': 16, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 152, 'halted': 387, 'halting_retry': 1, 'intent_write_abort': 15, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 88, 'opened_pairs': 44, 'partial_fill': 24, 'position_failures': 139, 'position_read': 4085, 'query': 391, 'query_failures': 24, 'recovery_obligation': 30, 'reduce': 103, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 722, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'skip_baseline_not_flat': 65, 'skip_book_skew': 20, 'skip_book_stale': 86, 'skip_funding_diff': 91, 'skip_not_single_venue_outlier': 153, 'skip_size_too_small': 1, 'skip_too_few_venues': 46, 'skip_volume_too_low': 1, 'timeout_ack': 22, 'timeout_unknown': 34, 'zero_fill': 15}",
+        "test_fault_invariants_seed_20261113_2448_rounds (test_invariants.InvariantSimulationTests) ... INVARIANTS seed=20261113 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 37, '1b': 98, '1c': 27, '1d': 126, '2': 114, '3': 135, '4': 114, '5': 600, '6': 31, '7': 405} coverage={'account_failures': 134, 'baseline_admission': 114, 'cooldown_active': 158, 'db_failures': 20, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 202, 'halted': 404, 'halting_retry': 1, 'intent_write_abort': 20, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 114, 'opened_pairs': 57, 'partial_fill': 27, 'position_failures': 141, 'position_read': 4069, 'query': 471, 'query_failures': 24, 'recovery_obligation': 31, 'reduce': 135, 'restarts': 114, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 722, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'skip_baseline_not_flat': 43, 'skip_book_skew': 28, 'skip_book_stale': 73, 'skip_funding_diff': 68, 'skip_not_single_venue_outlier': 132, 'skip_size_too_small': 1, 'skip_too_few_venues': 22, 'skip_volume_too_low': 1, 'timeout_ack': 39, 'timeout_unknown': 37, 'zero_fill': 20}",
+        "test_default_program_three_seeds (test_round15_program.ProgramSimulationTests) ... PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261111}",
+        "PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261112}",
+        "PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261113}"
+      ],
+      "skipped_tests": 0,
+      "verified_simulator_results": [
+        {
+          "kind": "INVARIANTS",
+          "seed": 20261111,
+          "rounds": 2712,
+          "random_rounds": 2400,
+          "checks": {
+            "1a": 2712,
+            "1b": 2712,
+            "1c": 2712,
+            "1d": 2712,
+            "2": 2712,
+            "3": 2712,
+            "4": 2712,
+            "5": 2712,
+            "6": 2712,
+            "7": 2712
+          }
+        },
+        {
+          "kind": "INVARIANTS",
+          "seed": 20261112,
+          "rounds": 2712,
+          "random_rounds": 2400,
+          "checks": {
+            "1a": 2712,
+            "1b": 2712,
+            "1c": 2712,
+            "1d": 2712,
+            "2": 2712,
+            "3": 2712,
+            "4": 2712,
+            "5": 2712,
+            "6": 2712,
+            "7": 2712
+          }
+        },
+        {
+          "kind": "INVARIANTS",
+          "seed": 20261113,
+          "rounds": 2712,
+          "random_rounds": 2400,
+          "checks": {
+            "1a": 2712,
+            "1b": 2712,
+            "1c": 2712,
+            "1d": 2712,
+            "2": 2712,
+            "3": 2712,
+            "4": 2712,
+            "5": 2712,
+            "6": 2712,
+            "7": 2712
+          }
+        },
+        {
+          "kind": "PROGRAM_INVARIANTS",
+          "seed": 20261111,
+          "coverage": {
+            "full_fill": 40,
+            "open": 20,
+            "position_read": 524,
+            "program_delayed_funding": 8,
+            "program_episodes": 12,
+            "program_explicit_rejection": 4,
+            "program_external_random_trades": 72,
+            "program_roundtrip": 8,
+            "program_send_checks": 40,
+            "query": 40,
+            "reduce": 20,
+            "restarts": 20
+          }
+        },
+        {
+          "kind": "PROGRAM_INVARIANTS",
+          "seed": 20261112,
+          "coverage": {
+            "full_fill": 40,
+            "open": 20,
+            "position_read": 524,
+            "program_delayed_funding": 8,
+            "program_episodes": 12,
+            "program_explicit_rejection": 4,
+            "program_external_random_trades": 72,
+            "program_roundtrip": 8,
+            "program_send_checks": 40,
+            "query": 40,
+            "reduce": 20,
+            "restarts": 20
+          }
+        },
+        {
+          "kind": "PROGRAM_INVARIANTS",
+          "seed": 20261113,
+          "coverage": {
+            "full_fill": 40,
+            "open": 20,
+            "position_read": 524,
+            "program_delayed_funding": 8,
+            "program_episodes": 12,
+            "program_explicit_rejection": 4,
+            "program_external_random_trades": 72,
+            "program_roundtrip": 8,
+            "program_send_checks": 40,
+            "query": 40,
+            "reduce": 20,
+            "restarts": 20
+          }
+        }
+      ]
+    },
+    {
+      "version": "Python 3.10.20",
+      "interpreter": "C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe",
+      "suite": "fill_sim",
+      "command": [
+        "C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/fill_sim/tests",
+        "-v"
+      ],
+      "commit": "4fc6d1f774a8b4aa64815dfba41d418366eb69e4",
+      "exit_code": 0,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\final-3.10-fill_sim.log",
+      "log_sha256": "59e6f98c8816ea36ebe96fbca9669825302a8b822714ec857616e68065d5af6b",
+      "raw_summary_block": "Ran 158 tests in 31.972s\r\n\r\nOK",
+      "simulator_lines": [],
+      "skipped_tests": 0,
+      "verified_simulator_results": []
+    }
+  ],
+  "preliminary_full_runs": [
+    {
+      "version": "Python 3.12.10",
+      "interpreter": "C:\\Users\\wubin\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "suite": "crossex_exec",
+      "command": [
+        "C:\\Users\\wubin\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/crossex_exec/tests",
+        "-v"
+      ],
+      "commit": "7deaee3c80c03c9136c47985f1064b0a467f57ec",
+      "exit_code": 0,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\delivery-3.12-crossex_exec.log",
+      "log_sha256": "e888b9c506c073d3e66bc64eacdc0fb63fe0a258e11f427b2d165ccbb10ca209",
+      "raw_summary_block": "Ran 768 tests in 157.130s\r\n\r\nOK",
+      "simulator_lines": [
+        "test_fault_invariants_seed_20261111_2448_rounds (test_invariants.InvariantSimulationTests.test_fault_invariants_seed_20261111_2448_rounds) ... INVARIANTS seed=20261111 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 35, '1b': 80, '1c': 25, '1d': 104, '2': 94, '3': 115, '4': 94, '5': 600, '6': 23, '7': 363} coverage={'account_failures': 151, 'baseline_admission': 94, 'cooldown_active': 167, 'db_failures': 22, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 162, 'halted': 362, 'halting_retry': 1, 'intent_write_abort': 21, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 94, 'opened_pairs': 47, 'partial_fill': 27, 'position_failures': 137, 'position_read': 4071, 'query': 4249, 'query_failures': 1380, 'recovery_obligation': 23, 'reduce': 115, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 722, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'skip_baseline_not_flat': 75, 'skip_book_skew': 28, 'skip_book_stale': 112, 'skip_funding_diff': 56, 'skip_not_single_venue_outlier': 129, 'skip_size_too_small': 1, 'skip_too_few_venues': 26, 'skip_volume_too_low': 1, 'timeout_ack': 28, 'timeout_unknown': 21, 'zero_fill': 20}",
+        "test_fault_invariants_seed_20261112_2448_rounds (test_invariants.InvariantSimulationTests.test_fault_invariants_seed_20261112_2448_rounds) ... INVARIANTS seed=20261112 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 27, '1b': 76, '1c': 13, '1d': 97, '2': 88, '3': 103, '4': 88, '5': 600, '6': 30, '7': 388} coverage={'account_failures': 116, 'baseline_admission': 88, 'cooldown_active': 24, 'db_failures': 16, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 152, 'halted': 387, 'halting_retry': 1, 'intent_write_abort': 15, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 88, 'opened_pairs': 44, 'partial_fill': 24, 'position_failures': 139, 'position_read': 4085, 'query': 4931, 'query_failures': 640, 'recovery_obligation': 30, 'reduce': 103, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 722, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'skip_baseline_not_flat': 65, 'skip_book_skew': 20, 'skip_book_stale': 86, 'skip_funding_diff': 91, 'skip_not_single_venue_outlier': 153, 'skip_size_too_small': 1, 'skip_too_few_venues': 46, 'skip_volume_too_low': 1, 'timeout_ack': 22, 'timeout_unknown': 34, 'zero_fill': 15}",
+        "test_fault_invariants_seed_20261113_2448_rounds (test_invariants.InvariantSimulationTests.test_fault_invariants_seed_20261113_2448_rounds) ... INVARIANTS seed=20261113 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 37, '1b': 98, '1c': 27, '1d': 126, '2': 114, '3': 135, '4': 114, '5': 600, '6': 31, '7': 405} coverage={'account_failures': 134, 'baseline_admission': 114, 'cooldown_active': 158, 'db_failures': 20, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 202, 'halted': 404, 'halting_retry': 1, 'intent_write_abort': 20, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 114, 'opened_pairs': 57, 'partial_fill': 27, 'position_failures': 141, 'position_read': 4069, 'query': 5580, 'query_failures': 641, 'recovery_obligation': 31, 'reduce': 135, 'restarts': 114, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 722, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'skip_baseline_not_flat': 43, 'skip_book_skew': 28, 'skip_book_stale': 73, 'skip_funding_diff': 68, 'skip_not_single_venue_outlier': 132, 'skip_size_too_small': 1, 'skip_too_few_venues': 22, 'skip_volume_too_low': 1, 'timeout_ack': 39, 'timeout_unknown': 37, 'zero_fill': 20}",
+        "test_default_program_three_seeds (test_round15_program.ProgramSimulationTests.test_default_program_three_seeds) ... PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261111}",
+        "PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261112}",
+        "PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261113}"
+      ],
+      "skipped_tests": 0
+    },
+    {
+      "version": "Python 3.12.10",
+      "interpreter": "C:\\Users\\wubin\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "suite": "fill_sim",
+      "command": [
+        "C:\\Users\\wubin\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/fill_sim/tests",
+        "-v"
+      ],
+      "commit": "7deaee3c80c03c9136c47985f1064b0a467f57ec",
+      "exit_code": 0,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\delivery-3.12-fill_sim.log",
+      "log_sha256": "bcf41947f09baf0490da157e2eae2c8bcb714c7b537e5a01b5a21ce1781d12b1",
+      "raw_summary_block": "Ran 158 tests in 31.079s\r\n\r\nOK",
+      "simulator_lines": [],
+      "skipped_tests": 0
+    },
+    {
+      "version": "Python 3.10.20",
+      "interpreter": "C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe",
+      "suite": "crossex_exec",
+      "command": [
+        "C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/crossex_exec/tests",
+        "-v"
+      ],
+      "commit": "7deaee3c80c03c9136c47985f1064b0a467f57ec",
+      "exit_code": 0,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\delivery-3.10-crossex_exec.log",
+      "log_sha256": "73007c75bc90adc05762dcb4248424f74e04311500cb772b7fa8855ca21668a6",
+      "raw_summary_block": "Ran 768 tests in 177.310s\r\n\r\nOK",
+      "simulator_lines": [
+        "test_fault_invariants_seed_20261111_2448_rounds (test_invariants.InvariantSimulationTests) ... INVARIANTS seed=20261111 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 35, '1b': 80, '1c': 25, '1d': 104, '2': 94, '3': 115, '4': 94, '5': 600, '6': 23, '7': 363} coverage={'account_failures': 151, 'baseline_admission': 94, 'cooldown_active': 167, 'db_failures': 22, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 162, 'halted': 362, 'halting_retry': 1, 'intent_write_abort': 21, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 94, 'opened_pairs': 47, 'partial_fill': 27, 'position_failures': 137, 'position_read': 4071, 'query': 380, 'query_failures': 53, 'recovery_obligation': 23, 'reduce': 115, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 722, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'skip_baseline_not_flat': 75, 'skip_book_skew': 28, 'skip_book_stale': 112, 'skip_funding_diff': 56, 'skip_not_single_venue_outlier': 129, 'skip_size_too_small': 1, 'skip_too_few_venues': 26, 'skip_volume_too_low': 1, 'timeout_ack': 28, 'timeout_unknown': 21, 'zero_fill': 20}",
+        "test_fault_invariants_seed_20261112_2448_rounds (test_invariants.InvariantSimulationTests) ... INVARIANTS seed=20261112 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 27, '1b': 76, '1c': 13, '1d': 97, '2': 88, '3': 103, '4': 88, '5': 600, '6': 30, '7': 388} coverage={'account_failures': 116, 'baseline_admission': 88, 'cooldown_active': 24, 'db_failures': 16, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 152, 'halted': 387, 'halting_retry': 1, 'intent_write_abort': 15, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 88, 'opened_pairs': 44, 'partial_fill': 24, 'position_failures': 139, 'position_read': 4085, 'query': 391, 'query_failures': 24, 'recovery_obligation': 30, 'reduce': 103, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 722, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'skip_baseline_not_flat': 65, 'skip_book_skew': 20, 'skip_book_stale': 86, 'skip_funding_diff': 91, 'skip_not_single_venue_outlier': 153, 'skip_size_too_small': 1, 'skip_too_few_venues': 46, 'skip_volume_too_low': 1, 'timeout_ack': 22, 'timeout_unknown': 34, 'zero_fill': 15}",
+        "test_fault_invariants_seed_20261113_2448_rounds (test_invariants.InvariantSimulationTests) ... INVARIANTS seed=20261113 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 37, '1b': 98, '1c': 27, '1d': 126, '2': 114, '3': 135, '4': 114, '5': 600, '6': 31, '7': 405} coverage={'account_failures': 134, 'baseline_admission': 114, 'cooldown_active': 158, 'db_failures': 20, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 202, 'halted': 404, 'halting_retry': 1, 'intent_write_abort': 20, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 114, 'opened_pairs': 57, 'partial_fill': 27, 'position_failures': 141, 'position_read': 4069, 'query': 471, 'query_failures': 24, 'recovery_obligation': 31, 'reduce': 135, 'restarts': 114, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 722, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'skip_baseline_not_flat': 43, 'skip_book_skew': 28, 'skip_book_stale': 73, 'skip_funding_diff': 68, 'skip_not_single_venue_outlier': 132, 'skip_size_too_small': 1, 'skip_too_few_venues': 22, 'skip_volume_too_low': 1, 'timeout_ack': 39, 'timeout_unknown': 37, 'zero_fill': 20}",
+        "test_default_program_three_seeds (test_round15_program.ProgramSimulationTests) ... PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261111}",
+        "PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261112}",
+        "PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261113}"
+      ],
+      "skipped_tests": 0
+    },
+    {
+      "version": "Python 3.10.20",
+      "interpreter": "C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe",
+      "suite": "fill_sim",
+      "command": [
+        "C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/fill_sim/tests",
+        "-v"
+      ],
+      "commit": "7deaee3c80c03c9136c47985f1064b0a467f57ec",
+      "exit_code": 0,
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\delivery-3.10-fill_sim.log",
+      "log_sha256": "fa2285c24b933db06e134898247091012fd0bf674a65acd6038ae06be2b8fcd3",
+      "raw_summary_block": "Ran 158 tests in 33.161s\r\n\r\nOK",
+      "simulator_lines": [],
+      "skipped_tests": 0
+    }
+  ],
+  "targeted_logs": [
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\all-round26-green.log",
+      "log_sha256": "718da0e526df11bca046a979d78eaea4c75ed3bc29b5d65c1874afcb8e13f206",
+      "raw_summary_block": "Ran 42 tests in 6.276s\r\n\r\nOK"
+    },
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\confirmed-red.log",
+      "log_sha256": "28b87c5786b25b89afeb5d1a348613e5fdab94f9a77bc799de5c710399f908a4",
+      "raw_summary_block": "Ran 7 tests in 1.272s\r\n\r\nFAILED (failures=6)"
+    },
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\final-flat-test_round13_review.py.log",
+      "log_sha256": "6e83151475db50f2bd64f6745593a25da2aa32f4da101b65d78515983da1b663",
+      "raw_summary_block": "Ran 23 tests in 0.818s\r\n\r\nFAILED (failures=1)"
+    },
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\final-flat-test_round26all.py.log",
+      "log_sha256": "6b7a79c1f39c7f33a5817fe4d360e4a8d51e26a7b3fa9b8a7bec76683e9d9c7b",
+      "raw_summary_block": "Ran 40 tests in 6.175s\r\n\r\nOK"
+    },
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\final-flat-test_round9_admin.py.log",
+      "log_sha256": "8bef0f7d3d64a529f097e413bacfa8b181198751d23577ac017f169ed0c72435",
+      "raw_summary_block": "Ran 20 tests in 0.570s\r\n\r\nFAILED (failures=1)"
+    },
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\first-fix.log",
+      "log_sha256": "c0aac6bae7dad12348f21174fd36bf2b016667edcf7a27f8d8325eff3b0a996a",
+      "raw_summary_block": "Ran 7 tests in 1.141s\r\n\r\nOK"
+    },
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\fixed-flat-test_round13_review.py.log",
+      "log_sha256": "6d01b919298e1359faf7527e525f99a28caf2536392ee6be01e4488d6ced5c53",
+      "raw_summary_block": "Ran 23 tests in 0.779s\r\n\r\nOK"
+    },
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\fixed-flat-test_round9_admin.py.log",
+      "log_sha256": "5072e47192076a7ffb5d063e8f20537418a7435a7d9919ccf90987ea73759ef9",
+      "raw_summary_block": "Ran 20 tests in 0.613s\r\n\r\nOK"
+    },
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\halt-owner-green.log",
+      "log_sha256": "eaf0634ffa522db1cd2c68b9367559e4603f62ff4462e0c3748fa6902143df7e",
+      "raw_summary_block": "Ran 45 tests in 8.814s\r\n\r\nOK"
+    },
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\halt-owner-red.log",
+      "log_sha256": "a19764f97c963bc788132031dc5fc6cf730d80e75f57e921790c6a8a1035a075",
+      "raw_summary_block": "Ran 12 tests in 2.213s\r\n\r\nFAILED (failures=3)"
+    },
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\halt-pricing-green.log",
+      "log_sha256": "a2de60c4eca6fb3c9e87107b4688f2a79b47b1361042b5a60c47dbdccba6cb31",
+      "raw_summary_block": "Ran 22 tests in 4.377s\r\n\r\nOK"
+    },
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\initial-red.log",
+      "log_sha256": "0be2a5535c643f4102db5d08eeba67e4d495fdde16ec4559e6186c979921ca47",
+      "raw_summary_block": "Ran 7 tests in 0.919s\r\n\r\nFAILED (failures=4, errors=2)"
+    },
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\lock-audit-first.log",
+      "log_sha256": "c220a4232fae1f6248bc78b508d236f335649ac8da0ebcde36efe81d0a5eec3e",
+      "raw_summary_block": "Ran 30 tests in 3.835s\r\n\r\nFAILED (failures=2)"
+    },
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\lock-audit-green.log",
+      "log_sha256": "ec6e4856c8ec7f15628fa11e75fcfd6cf05514bda0fa69f3c88c062618477be1",
+      "raw_summary_block": "Ran 30 tests in 3.859s\r\n\r\nOK"
+    },
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\lock-audit-red.log",
+      "log_sha256": "e1fe0ad6ed3875276f2295f2d5a38b390952080942ea7fac89a4bcecabab3b33",
+      "raw_summary_block": "Ran 40 tests in 6.916s\r\n\r\nFAILED (failures=10)"
+    },
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\regression-test_round13_review.py.log",
+      "log_sha256": "68827fe41327e865a34ee763abcd2c8b7969d50705b5f6e4de1a44255552ac2d",
+      "raw_summary_block": "Ran 23 tests in 0.855s\r\n\r\nOK"
+    },
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\regression-test_round21_program.py.log",
+      "log_sha256": "ff3d98c628f933c0a9e86a3ed42e7ef76da502cab064b8d246960c3fa68ba0cf",
+      "raw_summary_block": "Ran 9 tests in 0.727s\r\n\r\nOK"
+    },
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\regression-test_round25all.py.log",
+      "log_sha256": "ce2f813cf1fe8c58f149370224207ce829d22b4990986d76053be59bf0f54443",
+      "raw_summary_block": "Ran 15 tests in 3.274s\r\n\r\nOK"
+    },
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\regression-test_round4.py.log",
+      "log_sha256": "7f8559fa8bc8bf2778a5da630af5040046efd2b31659115c191ce5c79b5564f2",
+      "raw_summary_block": "Ran 29 tests in 1.126s\r\n\r\nOK"
+    },
+    {
+      "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly\\regression-test_round9_admin.py.log",
+      "log_sha256": "69152c34d75ce511d29ea3a137eaf2440d58d4c857839b69be2587d573faaf87",
+      "raw_summary_block": "Ran 20 tests in 0.654s\r\n\r\nOK"
+    }
+  ],
+  "scope_audit": {
+    "base": "f46ab0e5c9fcad32ac4afbd9cec19c8acac14a0a",
+    "head": "4fc6d1f774a8b4aa64815dfba41d418366eb69e4",
+    "changed_files": [
+      "tools/crossex_exec/engine.py",
+      "tools/crossex_exec/equity.py",
+      "tools/crossex_exec/flatness.py",
+      "tools/crossex_exec/recovery.py",
+      "tools/crossex_exec/tests/round26_fixtures.py",
+      "tools/crossex_exec/tests/test_round26_halt.py",
+      "tools/crossex_exec/tests/test_round26_locks.py",
+      "tools/crossex_exec/tests/test_round26_pricing.py"
+    ],
+    "changed_methods": {
+      "tools/crossex_exec/engine.py": [
+        "Engine.flatten_all"
+      ],
+      "tools/crossex_exec/equity.py": [
+        "EquityAdmin.apply",
+        "EquityAdmin.local_flat",
+        "EquityAdmin.read_flat_accounts",
+        "EquityAdmin.state_check"
+      ],
+      "tools/crossex_exec/recovery.py": [
+        "recover_observed_stops"
+      ]
+    },
+    "protected_files": {
+      "tools/crossex_exec/limits.py": {
+        "base_blob": "cb10f2f48570e437df09c5d2403a040d7b93af09",
+        "head_blob": "cb10f2f48570e437df09c5d2403a040d7b93af09",
+        "unchanged": true
+      },
+      "tools/crossex_exec/ownership.py": {
+        "base_blob": "b061a3c7cad965e54f2aa57fe6ab900a6239658e",
+        "head_blob": "b061a3c7cad965e54f2aa57fe6ab900a6239658e",
+        "unchanged": true
+      },
+      "tools/crossex_exec/execution.py": {
+        "base_blob": "bcb35edce8841b3f5cf5717edf7e79a90716fc06",
+        "head_blob": "bcb35edce8841b3f5cf5717edf7e79a90716fc06",
+        "unchanged": true
+      },
+      "tools/crossex_exec/transport.py": {
+        "base_blob": "4f67cea2ad752d336fcfc329ec8371819ace2b6f",
+        "head_blob": "4f67cea2ad752d336fcfc329ec8371819ace2b6f",
+        "unchanged": true
+      },
+      "tools/crossex_exec/adapters.py": {
+        "base_blob": "2f64964c5420249f67ef9325952f10f4955bb7fd",
+        "head_blob": "2f64964c5420249f67ef9325952f10f4955bb7fd",
+        "unchanged": true
+      },
+      "tools/crossex_exec/admission.py": {
+        "base_blob": "85d0609116e11810ce17cf44efa7b2fcac2ee2d2",
+        "head_blob": "85d0609116e11810ce17cf44efa7b2fcac2ee2d2",
+        "unchanged": true
+      },
+      "tools/crossex_exec/funding.py": {
+        "base_blob": "4191f558aa30cf847e3bcee63a42a4a12ef9a9d8",
+        "head_blob": "4191f558aa30cf847e3bcee63a42a4a12ef9a9d8",
+        "unchanged": true
+      },
+      "tools/crossex_exec/program_risk.py": {
+        "base_blob": "8448eca5862e9e43ca76f60c32317d21f9fa8c82",
+        "head_blob": "8448eca5862e9e43ca76f60c32317d21f9fa8c82",
+        "unchanged": true
+      },
+      "tools/crossex_exec/accounts.py": {
+        "base_blob": "e525df60600246aa5913eb86ad12c280e4c703d7",
+        "head_blob": "e525df60600246aa5913eb86ad12c280e4c703d7",
+        "unchanged": true
+      },
+      "tools/crossex_exec/stops.py": {
+        "base_blob": "8c04aafcef88b36898842eb3f98561f0d7cccd92",
+        "head_blob": "8c04aafcef88b36898842eb3f98561f0d7cccd92",
+        "unchanged": true
+      },
+      "tools/crossex_exec/program_accounting.py": {
+        "base_blob": "a1f5a1cff07cea15114dc5045c03d2088b0b3cf5",
+        "head_blob": "a1f5a1cff07cea15114dc5045c03d2088b0b3cf5",
+        "unchanged": true
+      }
+    },
+    "existing_test_files": 104,
+    "existing_tests_modified": [],
+    "lock_calls": [
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 1197,
+        "call": "self.stops.discard",
+        "reason": "'unknown_exposure_unavailable'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 1241,
+        "call": "self.alert",
+        "reason": "'unhedged_position'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 107,
+        "call": "self.stops.add",
+        "reason": "reason"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 578,
+        "call": "self.alert",
+        "reason": "'foreign_bitget_unfilled_orders'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 794,
+        "call": "self.alert",
+        "reason": "'isolated_position'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 796,
+        "call": "self.stops.recovered",
+        "reason": "'isolated_position'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 1075,
+        "call": "self.alert",
+        "reason": "'unknown_order'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 1240,
+        "call": "self.stops.add",
+        "reason": "'repair_stopped'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 1406,
+        "call": "self.alert",
+        "reason": "'close_incomplete'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 91,
+        "call": "self.stops.add",
+        "reason": "reason"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 345,
+        "call": "self.alert",
+        "reason": "'external_identity_unverifiable'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 359,
+        "call": "self.alert",
+        "reason": "'account_snapshot_unavailable'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 370,
+        "call": "self.stops.recovered",
+        "reason": "'account_snapshot_unavailable'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 373,
+        "call": "self.stops.recovered",
+        "reason": "'account_liability'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 570,
+        "call": "self.alert",
+        "reason": "'halting_startup_account_unavailable'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 608,
+        "call": "self.alert",
+        "reason": "'accounting_pending'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 771,
+        "call": "self.alert",
+        "reason": "'position_mismatch'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 781,
+        "call": "self.stops.discard",
+        "reason": "reason"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 832,
+        "call": "self.stops.recovered",
+        "reason": "'external_identity_unverifiable'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 834,
+        "call": "self.stops.recovered",
+        "reason": "'external_income_unverifiable'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 848,
+        "call": "self.stops.discard",
+        "reason": "'daily_loss'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 880,
+        "call": "self.alert",
+        "reason": "'daily_loss'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 904,
+        "call": "self.alert",
+        "reason": "reason"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 910,
+        "call": "self.alert",
+        "reason": "'account_snapshot_unavailable'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 1116,
+        "call": "self.alert",
+        "reason": "'negative_local_position'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 1164,
+        "call": "self.stops.discard",
+        "reason": "reason"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 1191,
+        "call": "self.alert",
+        "reason": "'unknown_exposure_unavailable'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 1401,
+        "call": "self.alert",
+        "reason": "'unknown_close'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 1465,
+        "call": "self.alert",
+        "reason": "'entry_accounting_unknown'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 1485,
+        "call": "self.alert",
+        "reason": "'exit_pricing_unavailable'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 614,
+        "call": "self.alert",
+        "reason": "'entry_accounting_unknown'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 727,
+        "call": "self.alert",
+        "reason": "'program_income_unverifiable'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 837,
+        "call": "self.stops.recovered",
+        "reason": "reason"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 1130,
+        "call": "self.alert",
+        "reason": "'funding_settlement_accounting_required'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 1448,
+        "call": "self.alert",
+        "reason": "'funding_refresh_failed'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 335,
+        "call": "self.alert",
+        "reason": "'account_snapshot_unavailable'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 777,
+        "call": "self.stops.discard",
+        "reason": "'position_mismatch'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 1502,
+        "call": "self.alert",
+        "reason": "'flatten_retry_pending'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 1545,
+        "call": "self.alert",
+        "reason": "'flatten_snapshot_unavailable'"
+      },
+      {
+        "file": "tools/crossex_exec/engine.py",
+        "line": 1533,
+        "call": "self.stops.recovered",
+        "reason": "lock"
+      },
+      {
+        "file": "tools/crossex_exec/execution.py",
+        "line": 266,
+        "call": "self.alert",
+        "reason": "'unknown_order'"
+      },
+      {
+        "file": "tools/crossex_exec/execution.py",
+        "line": 277,
+        "call": "self.alert",
+        "reason": "'fills_pending'"
+      },
+      {
+        "file": "tools/crossex_exec/limits.py",
+        "line": 88,
+        "call": "self.alert",
+        "reason": "'account_liability'"
+      },
+      {
+        "file": "tools/crossex_exec/limits.py",
+        "line": 92,
+        "call": "self.stops.add",
+        "reason": "'account_liability'"
+      },
+      {
+        "file": "tools/crossex_exec/limits.py",
+        "line": 115,
+        "call": "self.alert",
+        "reason": "'account_equity_drop'"
+      },
+      {
+        "file": "tools/crossex_exec/limits.py",
+        "line": 120,
+        "call": "self.stops.add",
+        "reason": "'account_equity_drop'"
+      },
+      {
+        "file": "tools/crossex_exec/recovery.py",
+        "line": 104,
+        "call": "engine.stops.recovered",
+        "reason": "reason"
+      },
+      {
+        "file": "tools/crossex_exec/recovery.py",
+        "line": 121,
+        "call": "engine.stops.recovered",
+        "reason": "reason"
+      },
+      {
+        "file": "tools/crossex_exec/recovery.py",
+        "line": 112,
+        "call": "engine.stops.recovered",
+        "reason": "reason"
+      },
+      {
+        "file": "tools/crossex_exec/__main__.py",
+        "line": 285,
+        "call": "engine.alert",
+        "reason": "'cycle_failed_closed'"
+      }
+    ],
+    "automatic_lock_tests": {
+      "account_liability": "LockRecoveryTests.test_account_liability",
+      "account_snapshot_unavailable": "LockRecoveryTests.test_account_snapshot_unavailable",
+      "accounting_pending": "LockRecoveryTests.test_accounting_pending",
+      "close_incomplete": "LockRecoveryTests.test_close_incomplete",
+      "cycle_failed_closed": "LockRecoveryTests.test_cycle_failed_closed",
+      "daily_loss": "LockRecoveryTests.test_daily_loss",
+      "entry_accounting_unknown": "LockRecoveryTests.test_entry_accounting_unknown",
+      "exit_pricing_unavailable": "LockRecoveryTests.test_exit_pricing_unavailable",
+      "external_baseline_unverifiable": "LockRecoveryTests.test_external_baseline_unverifiable",
+      "external_identity_unverifiable": "LockRecoveryTests.test_external_identity_unverifiable",
+      "external_income_unverifiable": "LockRecoveryTests.test_external_income_unverifiable",
+      "fills_pending": "LockRecoveryTests.test_fills_pending",
+      "flatten_retry_pending": "LockRecoveryTests.test_flatten_retry_pending",
+      "flatten_snapshot_unavailable": "HaltRecoveryTests.test_last_snapshot_timeout_recovers_on_tick_and_halted_can_be_released",
+      "foreign_bitget_unfilled_orders": "LockRecoveryTests.test_foreign_bitget_unfilled_orders",
+      "funding_refresh_failed": "LockRecoveryTests.test_funding_refresh_failed",
+      "funding_settlement_accounting_required": "LockRecoveryTests.test_funding_settlement_accounting_required",
+      "halting_startup_account_unavailable": "LockRecoveryTests.test_halting_startup_account_unavailable",
+      "history_coverage": "LockRecoveryTests.test_history_coverage",
+      "isolated_position": "LockRecoveryTests.test_isolated_position",
+      "negative_local_position": "LockRecoveryTests.test_negative_local_position",
+      "position_mismatch": "LockRecoveryTests.test_position_mismatch",
+      "program_income_unverifiable": "LockRecoveryTests.test_program_income_unverifiable",
+      "repair_stopped": "LockRecoveryTests.test_repair_stopped",
+      "unhedged_position": "LockRecoveryTests.test_unhedged_position",
+      "unknown_close": "LockRecoveryTests.test_unknown_close",
+      "unknown_exposure_unavailable": "LockRecoveryTests.test_unknown_exposure_unavailable",
+      "unknown_order": "LockRecoveryTests.test_unknown_order"
+    },
+    "new_test_methods": {
+      "LockRecoveryTests": [
+        "test_account_liability",
+        "test_account_snapshot_unavailable",
+        "test_accounting_pending",
+        "test_close_incomplete",
+        "test_cycle_failed_closed",
+        "test_daily_loss",
+        "test_entry_accounting_unknown",
+        "test_exit_pricing_unavailable",
+        "test_external_baseline_unverifiable",
+        "test_external_identity_unverifiable",
+        "test_external_income_unverifiable",
+        "test_fills_pending",
+        "test_flatten_retry_pending",
+        "test_foreign_bitget_unfilled_orders",
+        "test_funding_refresh_failed",
+        "test_funding_settlement_accounting_required",
+        "test_halting_startup_account_unavailable",
+        "test_history_coverage",
+        "test_isolated_position",
+        "test_negative_local_position",
+        "test_pair_owner_recovery_does_not_clear_another_owner",
+        "test_position_mismatch",
+        "test_program_income_unverifiable",
+        "test_real_missing_leg_does_not_recover_from_extra_other_leg",
+        "test_repair_stopped",
+        "test_unhedged_position",
+        "test_unknown_close",
+        "test_unknown_exposure_unavailable",
+        "test_unknown_global_and_equity_halts_do_not_auto_release",
+        "test_unknown_order"
+      ],
+      "HaltRecoveryTests": [
+        "test_closed_pair_label_cannot_hide_confirmed_local_inventory",
+        "test_flatten_audit_failure_keeps_lock_until_successful_retry",
+        "test_halt_clears_only_proven_closed_pair_repair_owners",
+        "test_halt_final_proof_recovers_confirmed_order_locks_before_process_exit",
+        "test_halt_waits_for_three_distinct_matches_before_releasing_mismatch",
+        "test_last_snapshot_timeout_recovers_on_tick_and_halted_can_be_released",
+        "test_mixed_residual_is_external_to_flatten_and_admin_but_still_blocks_its_contract",
+        "test_offline_flatten_recovery_audit_failure_rolls_back_epoch_and_locks",
+        "test_old_position_snapshot_cannot_certify_a_newer_close",
+        "test_persisted_flatten_lock_does_not_bypass_pending_orders_or_real_inventory",
+        "test_persisted_halted_flatten_lock_requires_fresh_proof_and_can_be_released_offline",
+        "test_unknown_flatten_owner_cannot_bypass_release_preconditions"
+      ],
+      "PricingRecoveryTests": [
+        "test_journal_change_during_book_read_invalidates_quantity_evidence",
+        "test_slow_books_unlock_despite_account_version_change_every_retry",
+        "test_stale_or_shallow_books_keep_lock_then_fresh_depth_recovers"
+      ]
+    },
+    "new_test_count": 45,
+    "handoff_prior_content_preserved": true
+  },
+  "review": "self_review_no_delegation",
+  "old_tests_changed": [],
+  "log_directory": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r26-msx_k0ly",
+  "operational_boundary": {
+    "wsl_used": false,
+    "server_accessed": false,
+    "live_account_accessed": false,
+    "deployed": false
+  },
+  "notes": [
+    "Final acceptance uses only validation_runs at code_commit; preliminary runs preceded the final owner/streak fix.",
+    "Intermediate fixture errors and regression failures are retained; no pre-existing tests were edited.",
+    "Funding/account/PnL proofs, unknown owners and manual equity halt release remain independent gates."
+  ]
+}
