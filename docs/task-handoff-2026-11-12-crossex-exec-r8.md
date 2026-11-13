@@ -3086,3 +3086,74 @@ Python 3.10 fill_sim: Ran 158 tests in 32.350s — OK
 没有修改其他任务文件；原始合成库、性能迭代、审计 JSON 和日志指针保留在被忽略的 `output/round27-*` 下，未提交数据库、临时运行脚本或凭据。开始时没有已有 WIP/未跟踪文件需要清理。本轮按当前协作限制未委派代理，验证为源码自审、Git/AST 范围检查和本地自动测试，不声称独立终审或线上验收。
 
 下一任务先读本节、任务书和验收 JSON。独立终审或获授权的服务器影子验收另开任务，检查实际 RSS/cgroup、冷启动、账户快照时效、SQLite I/O 与持续运行成本；不得把本轮推送解释为部署或开实盘授权。
+
+
+<a id="round28"></a>
+
+## 第二十八轮（2026-11-13，残留仓位锁恢复与纯数量对账）
+
+### 范围、基线与小步提交
+
+先读第二十六、二十七轮交接，按 [第二十八轮任务书](crossex-exec-round28-2026-11-13.md) 仅修复两个恢复活性 P1。固定工作树 `C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec-r8`，分支 `codex/crossex-exec-r8`。起始 HEAD `cc05b1b`，工作区干净，与远端同步。
+
+| 提交 | 内容 |
+|---|---|
+| `4874353` | 测试先行，复现残留锁计数停滞、恢复写入中断、无浮盈余仓和不明确 PnL 异常 |
+| `9fa3f6d` | 计数与 HALTING 恢复均读取仓位锁；数量对账不读取浮盈；明确 PnL 拒绝原因 |
+
+本节及验收 JSON 另作交接提交。最终代码/测试验收提交为 `9fa3f6dbc2982168eea1a2bc840c9dfef76750cb`；推送目标固定 `origin codex/crossex-exec-r8`，不 force push、不 amend、不 reset。
+
+### P1-A：残留仓位锁可以继续恢复
+
+- `Engine.reconcile_positions` 与 `flatten_all` 使用相同的恢复判定：兼容布尔标志，并检查 `stops.reasons` 中的持久化仓位锁。`stop_reason` 只是 UI 投影；即使标志已清、UI 显示 `total_loss` 或 `account_equity_drop`，残留锁仍会推进计数。
+- 保留原连续三份不同采样、无待确认订单/记账、快照晚于最新成交/终态以及数量匹配检查。最终平仓快照的原 10 秒新鲜性门禁不变；重放同一份快照不能重复计数。
+- 第三次匹配后先清兼容标志，再调用现有 `StopLocks.recovered`，把全局 owner 解锁与 `POSITION_MATCH_RECOVERED` 审计放在同一事务。清标志后中断仍可按残留锁重试；写锁/审计失败回滚且保留内存锁，不能提前进入 HALTED。
+- 程序全平并完成仓位锁恢复后进入 `HALTED`，累计亏损/权益熔断及其 `halt_reason` 保留。测试验证错误确认被拒绝，正确 `release_halt` 才恢复 RUNNING；未改任何锁的自动/人工裁定、亏损阈值或基线重置规则。
+
+### P1-B：纯数量证明与浮盈认证分开
+
+- `Engine.reconcile_positions` 显式调用 `split(snapshot, pnl=False)`；`flatten_all` 的共享空仓证明原本已使用相同数量模式。原始 route/raw symbol/DEX 身份检查、程序成交账本、数量不足和未决记账保护仍生效。
+- `ProgramOwnership.split` 需要 PnL 时先明确验证程序仓位对应字段是否存在，再解析有限数值。缺字段、非字典、空值、NaN 或非法数值均抛出 `ExternalUnverifiable('program_income_unverifiable')`，不再由 KeyError/TypeError 驱动重试；不把缺失浮盈补成零。
+- 两路由分别复现 `position_mismatch + 程序已全平 + 用户同合约余仓 0.4 + 无 upnl/upnl_by_position`：三份新采样后解除仓位锁并进入需人工释放的 HALTED；余仓保留为 `external_positions`，无新增发送，同一原始合约的开仓禁令仍有效。后续收益认证仍独立要求完整证据。
+
+### 测试先行、崩溃边界与范围审计
+
+新增 `test_round28_recovery.py` 共 **8 个测试方法**。初始红灯原始结果为 `Ran 8 tests in 6.871s` / `FAILED (failures=18, errors=8)`，均为预期行为反例，未通过改旧测试消除失败；实现后同组 `Ran 8 tests in 8.327s` / `OK`。
+
+崩溃矩阵覆盖 7 个恢复写入边界：`position_snapshot_at`、`position_match_streak`、`position_mismatch`、`stop_locks`、`stop_reason`、`POSITION_MATCH_RECOVERED` 和 `state=HALTED`，各测写入前/后及两种熔断原因，共 **28 个子案例**。使用 `BaseException` 穿透 Engine 的普通重试捕获，丢弃旧 Engine 并重新打开文件 SQLite，从持久状态恢复；这是本地崩溃注入/重启模型，未声称 OS 强杀或断电实测。每个案例最终只有一条恢复审计，亏损基线在人工释放前不变，正确人工确认可用。
+
+另测写锁/写审计的普通 I/O 失败后同进程重试、重复采样、待确认记账、未知 owner 与人工锁保留、真实丢腿，以及原始合约身份不一致。保留用户余仓的复现覆盖 crossex 与 bitget 两条路由。
+
+相对 `cc05b1b`，原有 **126 个 crossex_exec 测试及 fill_sim 文件** Git 对象全部未变，无删测、跳过或放宽。AST 审计确认生产代码只改 `Engine.reconcile_positions` 和 `ProgramOwnership.split`，变化文件通过 3.10 语法解析。`limits.py`、`execution.py`、`transport.py`、`adapters.py`、`admission.py`、`accounts.py`、`stops.py`、`equity.py`、`flatness.py`、`background.py`、`policy.py`、`program_accounting.py` 和 `program_risk.py` 均未改；订单构建、发送、查询、撤单及减仓方法不变。
+
+### 双版本全量验收与原始汇总
+
+使用 Windows 原生解释器，四套完整测试串行运行，无筛选：
+
+```text
+python -m unittest discover -s tools/crossex_exec/tests -v
+python -m unittest discover -s tools/fill_sim/tests -v
+```
+
+Python 3.12.10：`C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe`。
+
+Python 3.10.20：`C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe`，即用户指定解释器。
+
+```text
+Python 3.12 crossex_exec: Ran 802 tests in 211.051s — OK
+Python 3.12 fill_sim: Ran 158 tests in 31.138s — OK
+Python 3.10 crossex_exec: Ran 802 tests in 273.969s — OK
+Python 3.10 fill_sim: Ran 158 tests in 33.626s — OK
+```
+
+四次退出码均为 0，无 skip。两个解释器的 INVARIANTS 与 PROGRAM_INVARIANTS 均通过 `20261111 / 20261112 / 20261113` 三种子；每个 INVARIANTS 种子 2712 轮（2400 随机轮），十项不变量各检查 2712 次；每个 PROGRAM_INVARIANTS 种子 12 个场景。
+
+完整命令、代码提交、解释器、原始汇总块、退出码、原始日志 SHA256、全部模拟器输出及范围审计见 [第二十八轮验收 JSON](crossex-exec-r28-validation-2026-11-13.json)。日志以 subprocess 二进制输出保存于 `C:\Users\wubin\AppData\Local\Temp\crossex-r28-9wkmq35u`，未经过 PowerShell 文本重写。
+
+### 线上状态、产物与下一任务
+
+按用户明确边界，未运行 WSL，未访问服务器、真实账户或交易接口；没有线上备份、部署或健康检查，线上版本未核实。本轮使用离线账户模拟、本地 SQLite 及回环测试，不把推送等同于部署或实盘授权。
+
+只提交本轮两个实现文件、新测试和交接/验收文件；原有工作区产物未清理。被忽略的 `output/crossex-r28-logdir.txt`、`output/validate-round28.py`、`output/document-round28.py` 和临时目录中的日志/范围审计保留，不入库。没有未跟踪的非忽略任务文件、凭据或数据库需要提交。
+
+按当前协作约束未委派代理；验收为源码自审、Git/AST 审计和本地全量测试，不声称独立终审或服务器验证。下一模块/独立终审应另开任务，先读本节、任务书与验收 JSON；服务器影子验收须遵守新任务授权范围。
