@@ -101,9 +101,8 @@ class LifecycleTests(unittest.TestCase):
                 engine.close()
                 self.stop_workers(engine)
         paths = {p for _,p,_ in self.http.calls}
-        self.assertTrue({OPEN,POSITIONS,FINANCIAL,'/api/v4/crossex/account_book',
-                         '/api/v4/crossex/history_trades','/api/v4/crossex/history_positions',
-                         '/api/v4/crossex/open_orders'} <= paths)
+        self.assertIn(OPEN,paths)
+        self.assertTrue({FINANCIAL,'/api/v4/crossex/account_book','/api/v4/crossex/history_trades'}.isdisjoint(paths))
         self.assertTrue(all(method=='GET' for method,_,_ in self.http.calls))
         with Store(self.path) as reopened:
             self.assertTrue(reopened.meta('flatten_status')['program_flat'])

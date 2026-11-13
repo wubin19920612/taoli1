@@ -51,6 +51,10 @@ def enable(world,scenario):
             dict(exchange_type='HYPERLIQUID',coin='USDT',balance=str(100+world.external_cash))]},
             bitget={'assets':[dict(coin='USDT',balance=str(30000+world.venues[1].realized))]})
         result['notionals']={KEY:str(world.external_qty*100)} if world.external_qty else {}
+        for key,qty in result['positions'].items():
+            if key!=KEY:
+                n=0 if key.startswith('crossex|') else 1
+                result['notionals'][key]=str(qty*world.prices[n]*world.multipliers[n])
         if scenario=='margin' and world.step%24>=1:
             result['margins']=['1.5','4']
         return result
@@ -85,6 +89,7 @@ def enable(world,scenario):
     world.accounts.validate_startup=snapshot
     world.accounts.position_snapshot=positions
     world.accounts.activity=activity
+    world.accounts.program_activity=lambda contracts,start,end:world.accounts.activity(start,end)
     for venue in world.venues:
         venue.open_orders=lambda:[]
     world.store.set_meta('external_catalog',dict(at=world.now,rules=[rule(SYMBOL)]))

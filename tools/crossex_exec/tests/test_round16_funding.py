@@ -58,20 +58,20 @@ class DailyFundingTests(ExternalFixture, unittest.TestCase):
         self.catalog((OWN, EXT))
 
     def test_opposite_days_first_omission_blocks_without_rolling_any_checkpoint(self):
-        anchor = copy.deepcopy(self.store.meta('external_equity_anchor'))
-        checkpoint = copy.deepcopy(self.store.meta('funding_checkpoint'))
+        anchor = copy.deepcopy(self.store.meta('program_funding_anchor'))
+        checkpoint = copy.deepcopy(self.store.meta('program_funding_checkpoint'))
         self.opposite_days()
-        with self.assertRaisesRegex(ValueError, 'external_income_unverifiable'):
+        with self.assertRaisesRegex(ValueError, 'program_income_unverifiable'):
             self.prove()
-        self.assertEqual(self.store.meta('external_equity_anchor'), anchor)
-        self.assertEqual(self.store.meta('funding_checkpoint'), checkpoint)
+        self.assertEqual(self.store.meta('program_funding_anchor'), anchor)
+        self.assertEqual(self.store.meta('program_funding_checkpoint'), checkpoint)
         self.assertFalse(self.engine.can_open())
         with self.assertRaises(ValueError):
             self.engine.check_order(intent(ex='bitget'))
 
     def test_restart_and_late_cash_rows_do_not_create_missing_boundary_evidence(self):
         self.opposite_days()
-        anchor = copy.deepcopy(self.store.meta('external_equity_anchor'))
+        anchor = copy.deepcopy(self.store.meta('program_funding_anchor'))
         with Store(self.path) as reopened:
             engine = Engine(reopened, self.market, self.accounts, clock=lambda:self.now)
             try:
@@ -79,7 +79,7 @@ class DailyFundingTests(ExternalFixture, unittest.TestCase):
                     self.book = copy.deepcopy(rows)
                     with self.subTest(rows=len(rows)), self.assertRaises(ValueError):
                         self.prove(engine)
-                    self.assertEqual(reopened.meta('external_equity_anchor'), anchor)
+                    self.assertEqual(reopened.meta('program_funding_anchor'), anchor)
                     self.assertFalse(engine.can_open())
             finally:
                 engine.close()
@@ -94,7 +94,7 @@ class DailyFundingTests(ExternalFixture, unittest.TestCase):
         self.assertEqual(dec(first['program_daily']), 0)
         self.assertEqual(dec(first['program_total']), 25)
         self.assertTrue(first['funding_daily_verified'])
-        checkpoint = self.store.meta('funding_checkpoint')
+        checkpoint = self.store.meta('program_funding_checkpoint')
         self.assertEqual(checkpoint['captured_at'], self.now)
         today = self.funding_row(boundary+4*3600000, -25, 'today')
         self.now = boundary/1000+4*3600+1
@@ -104,7 +104,7 @@ class DailyFundingTests(ExternalFixture, unittest.TestCase):
             engine = Engine(reopened, self.market, self.accounts, clock=lambda:self.now)
             try:
                 with self.assertRaises(ValueError): self.prove(engine)
-                self.assertEqual(reopened.meta('funding_checkpoint'), checkpoint)
+                self.assertEqual(reopened.meta('program_funding_checkpoint'), checkpoint)
                 self.book.append(today)
                 value = self.prove(engine)
                 self.assertEqual(dec(value['program_daily']), -25)
@@ -155,10 +155,10 @@ class DailyFundingTests(ExternalFixture, unittest.TestCase):
         self.assertTrue(value['funding_daily_verified'])
 
     def test_checkpoint_commit_failure_cannot_advance_anchor_or_history(self):
-        before={k:self.store.meta(k) for k in ('funding_checkpoint','external_equity_anchor','external_verified_history')}
+        before={k:self.store.meta(k) for k in ('program_funding_checkpoint','program_funding_anchor','program_verified_history')}
         original=self.store.set_meta
         def fail(key,value):
-            if key=='funding_checkpoint': raise ValueError('test_write_failure')
+            if key=='program_funding_checkpoint': raise ValueError('test_write_failure')
             return original(key,value)
         self.now+=1
         with patch.object(self.store,'set_meta',side_effect=fail),self.assertRaises(ValueError):
@@ -169,7 +169,7 @@ class DailyFundingTests(ExternalFixture, unittest.TestCase):
     def test_current_uta_lifetime_crossing_days_has_no_net_zero_exemption(self):
         from tools.crossex_exec.funding import daily_continuity, funding_positions
         from tools.crossex_exec.external_accounting import history_index
-        self.store.set_meta('funding_checkpoint',None)
+        self.store.set_meta('program_funding_checkpoint',None)
         start=int(self.now*1000)
         def snap(end):
             return dict(captured_at=end/1000,accounting_at=end/1000,

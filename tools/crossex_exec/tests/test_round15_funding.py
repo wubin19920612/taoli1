@@ -56,7 +56,7 @@ class FundingTests(ExternalFixture, unittest.TestCase):
     def test_first_missing_offsetting_funding_is_not_zero_then_delayed_rows_recover(self):
         self.assertTrue(self.prove()['verified'])
         self.settle()
-        with self.assertRaisesRegex(ValueError, 'external_income_unverifiable'):
+        with self.assertRaisesRegex(ValueError, 'program_income_unverifiable'):
             self.prove()
         self.assertFalse(self.engine.can_open())
         with self.assertRaises(ValueError):

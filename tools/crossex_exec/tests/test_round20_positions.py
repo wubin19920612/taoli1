@@ -122,8 +122,8 @@ class PositionTests(PositionFixture, unittest.TestCase):
                 self.now += 1
                 self.engine.reconcile()
                 self.assertIsNone(self.store.meta('account_snapshot_error'))
-                self.assertIn('isolated_position',self.store.meta('stop_locks'))
-                self.assertFalse(self.engine.can_open())
+                self.assertNotIn('isolated_position',self.store.meta('stop_locks'))
+                self.assertTrue(self.engine.can_open())
                 self.assertEqual(self.engine.account_cache.read()['positions'],
                                  {'crossex|'+symbol+'|long':dec(2)})
         self.assertEqual(self.store.all_orders(), [])
@@ -197,8 +197,8 @@ class LifecycleTests20(PositionFixture, unittest.TestCase):
             self.stop_workers(self.engine)
             self.engine.refresh_accounts()
             self.engine.tick()
-            self.assertFalse(self.engine.can_open())
-            self.assertIn('isolated_position',self.store.meta('stop_locks'))
+            self.assertTrue(self.engine.can_open())
+            self.assertNotIn('isolated_position',self.store.meta('stop_locks'))
             config = dict(CROSSEX_EXEC_API_TOKEN='offline-read-r20',
                 CROSSEX_EXEC_ADMIN_TOKEN='offline-admin-r20', CROSSEX_EXEC_API_BIND='127.0.0.1')
             real = api._Server
@@ -230,7 +230,7 @@ class LifecycleTests20(PositionFixture, unittest.TestCase):
             self.assertNotIn('isolated_position',self.store.meta('stop_locks'))
             self.assertFalse(self.store.meta('position_mismatch'))
             # Registration never silently rewrites the attribution baseline.
-            self.assertFalse(self.engine.can_open())
+            self.assertTrue(self.engine.can_open())
             self.assertEqual(request('POST','equity/rebaseline',dict(confirm=True,reason='offline_epoch'))[0],200)
             self.now += 1
             self.engine.refresh_accounts()

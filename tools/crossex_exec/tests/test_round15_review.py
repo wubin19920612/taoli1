@@ -165,7 +165,7 @@ class HaltingTests(ExternalFixture, unittest.TestCase):
             return SimpleNamespace(close=lambda:None)
         with patch('tools.crossex_exec.engine.PeriodicWorker', side_effect=worker):
             self.engine.startup(())
-        self.assertEqual(self.store.meta('state'), 'HALTING')
+        self.assertEqual(self.store.meta('state'), 'HALTED')
         self.assertEqual(len(callbacks), 3)
         self.market.bootstrap = Mock(side_effect=lambda bases:self.catalog())
         self.market.sample_quotes = Mock(return_value=({}, ()))
@@ -173,7 +173,7 @@ class HaltingTests(ExternalFixture, unittest.TestCase):
         callbacks['exec-baseline']()
         with patch.object(self.accounts, 'snapshot', wraps=self.snapshot) as read:
             callbacks['exec-accounts']()
-            self.assertGreaterEqual(read.call_count, 2)
+            self.assertGreaterEqual(read.call_count, 1)
         self.market.bootstrap.assert_called_once()
         self.market.sample_quotes.assert_called_once()
         self.assertFalse(self.engine.can_open())

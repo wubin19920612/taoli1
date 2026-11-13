@@ -57,17 +57,20 @@ class FundingOriginTests(ExternalFixture, unittest.TestCase):
         exec(compile(code, '<committed-r15-funding>', 'exec'), counters.__dict__)
         module.funding_positions = counters.funding_positions
         module.funding_continuity = counters.funding_continuity
+        from legacy_cash_diagnostics import anchor, snapshot as diagnostic_snapshot
+        from tools.crossex_exec.external import ExternalRegistry
+        anchor(self)
         old = self.store.meta('external_equity_anchor')
         old.pop('funding_daily_proof', None)
         for row in old['funding_positions'].values(): row.pop('settled_ms', None)
         self.store.set_meta('external_equity_anchor', old)
         self.store.set_meta('funding_checkpoint', None)
         self.opposite_days()
-        snapshot = self.engine.read_account_snapshot()
+        snapshot = diagnostic_snapshot(self)
         self.engine.account_cache.publish(snapshot, self.now)
         snapshot = self.engine.account_cache.read()
-        value = module.ExternalAccounting(self.store, self.engine.external,
-                                          lambda:self.now).evaluate(snapshot, self.engine.external.split(snapshot))
+        value = module.ExternalAccounting(self.store, ExternalRegistry(self.store,lambda:self.now),
+                                          lambda:self.now).evaluate(snapshot, ExternalRegistry(self.store,lambda:self.now).split(snapshot))
         self.assertTrue(value['verified'])
         self.assertEqual(dec(value['program_daily']), 0)
         rolled = self.store.meta('external_equity_anchor')
@@ -108,19 +111,19 @@ class FundingOriginTests(ExternalFixture, unittest.TestCase):
             self.assert_upgrade_stopped(restored, rolled)
 
     def test_certified_anchor_can_replace_missing_checkpoint_and_records_source(self):
-        anchor = self.store.meta('external_equity_anchor')
+        anchor = self.store.meta('program_funding_anchor')
         proof = anchor.get('funding_daily_proof', {})
         self.assertEqual(proof.get('version'), 1)
         self.assertEqual(proof.get('source'), 'audited_baseline')
-        self.store.set_meta('funding_checkpoint', None)
+        self.store.set_meta('program_funding_checkpoint', None)
         self.now += 1
         value = self.prove()
         self.assertTrue(value['funding_daily_verified'])
-        self.assertEqual(self.store.meta('funding_checkpoint')['funding_daily_proof']['source'],
+        self.assertEqual(self.store.meta('program_funding_checkpoint')['funding_daily_proof']['source'],
                          'daily_continuity')
 
     def test_legacy_or_tampered_anchor_cannot_replace_missing_checkpoint(self):
-        original = self.store.meta('external_equity_anchor')
+        original = self.store.meta('program_funding_anchor')
         for mode in ('missing', 'version', 'source', 'payload'):
             anchor = copy.deepcopy(original)
             proof = anchor.setdefault('funding_daily_proof', {})
@@ -129,28 +132,29 @@ class FundingOriginTests(ExternalFixture, unittest.TestCase):
             if mode == 'source': proof['source'] = 'legacy_net'
             if mode == 'payload': anchor['program_funding_carry'] = '999'
             with self.subTest(mode=mode):
-                self.store.set_meta('external_equity_anchor', anchor)
-                self.store.set_meta('funding_checkpoint', None)
+                self.store.set_meta('program_funding_anchor', anchor)
+                self.store.set_meta('program_funding_checkpoint', None)
                 with self.assertRaises(ValueError): self.prove()
-                self.assertEqual(self.store.meta('external_equity_anchor'), anchor)
-                self.assertIsNone(self.store.meta('funding_checkpoint'))
+                self.assertEqual(self.store.meta('program_funding_anchor'), anchor)
+                self.assertIsNone(self.store.meta('program_funding_checkpoint'))
 
     def test_daily_roll_has_bound_proof_and_failed_write_cannot_leave_certificate(self):
         boundary = (int(self.now)//86400+1)*86400
         self.now = boundary+1
         self.catalog((r16.OWN, r16.EXT))
-        before = self.store.meta('external_equity_anchor')
+        before = self.store.meta('program_funding_anchor')
         original = self.store.set_meta
         def fail(key, value):
-            if key == 'funding_checkpoint': raise ValueError('write_failed')
+            if key == 'program_funding_checkpoint': raise ValueError('write_failed')
             return original(key, value)
         with patch.object(self.store, 'set_meta', side_effect=fail), self.assertRaises(ValueError):
             self.prove()
-        self.assertEqual(self.store.meta('external_equity_anchor'), before)
+        self.assertEqual(self.store.meta('program_funding_anchor'), before)
         self.prove()
-        rolled = self.store.meta('external_equity_anchor')
-        self.assertEqual(rolled['funding_daily_proof']['source'], 'daily_continuity')
-        self.store.set_meta('funding_checkpoint', None)
+        rolled = self.store.meta('program_funding_anchor')
+        self.assertEqual(rolled,before)
+        self.assertEqual(self.store.meta('program_funding_checkpoint')['funding_daily_proof']['source'], 'daily_continuity')
+        self.store.set_meta('program_funding_checkpoint', None)
         self.now += 1
         self.assertTrue(self.prove()['funding_daily_verified'])
 

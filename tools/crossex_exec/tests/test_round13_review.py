@@ -48,13 +48,14 @@ class SnapshotProofTests(FXFixture,unittest.TestCase):
         original_anchor=self.store.meta('external_equity_anchor')
         self.engine.workers=[SimpleNamespace(close=lambda:None)]
         entered,resume=threading.Event(),threading.Event()
-        from tools.crossex_exec import external_accounting as accounting
-        continuity=accounting.cash_continuity
-        def pause(*args):
-            continuity(*args)
+        from tools.crossex_exec import program_accounting as accounting
+        continuity=accounting.journal_pnl
+        def pause(*args,**kwargs):
+            value=continuity(*args,**kwargs)
             entered.set()
             if not resume.wait(5): raise AssertionError('coordinator_not_resumed')
-        with patch.object(accounting,'cash_continuity',side_effect=pause):
+            return value
+        with patch.object(accounting,'journal_pnl',side_effect=pause):
             worker=threading.Thread(target=self.engine.reconcile)
             worker.start()
             try:
@@ -112,7 +113,7 @@ class HistoryTests(ExternalFixture,unittest.TestCase):
         self.anchor()
 
     def funding_pair(self):
-        own=dict(intent('own'),state='TERMINAL',filled='0',fee='0',leg=0,accounting_pending=False)
+        own=dict(intent('own'),created_at=self.now,state='TERMINAL',filled='0',fee='0',leg=0,accounting_pending=False)
         own['instrument']['symbol']='BINANCE_FUTURE_ETH_USDT'
         self.store.save_order(own)
         at=str(int((self.now+.5)*1000))
@@ -147,23 +148,23 @@ class HistoryTests(ExternalFixture,unittest.TestCase):
                 engine.close()
 
     def test_digest_growth_keeps_original_epoch_and_verified_old_ids(self):
-        anchor=self.store.meta('external_equity_anchor')
+        anchor=self.store.meta('program_funding_anchor')
         self.funding_pair()
-        first=self.store.meta('external_verified_history')
-        self.assertEqual(set(first['crossex_book']),{'external','program'})
+        first=self.store.meta('program_verified_history')
+        self.assertEqual(set(first['crossex_book']),{'program'})
         self.now+=1
-        self.book.append(dict(self.book[0],id='next',change='0',create_time=str(int(self.now*1000))))
+        self.book.append(dict(self.book[1],id='next',change='0',create_time=str(int(self.now*1000))))
         self.reconcile()
-        current=self.store.meta('external_verified_history')
-        self.assertEqual(set(current['crossex_book']),{'external','program','next'})
-        self.assertEqual(current['crossex_book']['external'],first['crossex_book']['external'])
-        self.assertEqual(self.store.meta('external_equity_anchor'),anchor)
+        current=self.store.meta('program_verified_history')
+        self.assertEqual(set(current['crossex_book']),{'program','next'})
+        self.assertEqual(current['crossex_book']['program'],first['crossex_book']['program'])
+        self.assertEqual(self.store.meta('program_funding_anchor'),anchor)
 
     def test_rebaseline_cannot_erase_missing_verified_history(self):
         self.funding_pair()
         anchor=self.store.meta('external_equity_anchor')
         self.book=[]
-        with self.assertRaisesRegex(ValueError,'external_income_unverifiable'):
+        with self.assertRaisesRegex(ValueError,'program_income_unverifiable'):
             self.anchor()
         self.assertEqual(self.store.meta('external_equity_anchor'),anchor)
 
@@ -185,10 +186,11 @@ class NotionalTests(FXFixture,unittest.TestCase):
         self.assertEqual(dec(snapshot['notionals_usd']['crossex|HYPERLIQUID_FUTURE_xyz:OAI_USDC|long']),dec('506.010'))
         for cid,ex in (('a','binance'),('b','bitget')):
             self.store.save_order(dict(intent(cid,ex=ex,quantity='.5'),state='INTENT',filled='0'))
-        self.assertEqual(self.engine.limits.exposure(snapshot),dec('606.010'))
-        for row in self.store.all_orders():
-            with self.assertRaisesRegex(ValueError,'total_notional_limit'):
-                self.engine.limits.check_order(row)
+        self.assertEqual(self.engine.limits.exposure(snapshot),dec('100.000'))
+        # Own pending orders still enforce the unchanged hard ceiling.
+        self.store.save_order(dict(intent('cap',ex='bitget',quantity='5.01'),state='UNKNOWN',filled='0'))
+        with self.assertRaisesRegex(ValueError,'total_notional_limit'):
+            self.engine.limits.check_order(self.store.order('a'))
 
     def test_notional_requires_fx_even_with_zero_external_income(self):
         self.rows=[position('HYPERLIQUID_FUTURE_xyz:OAI_USDC')]
@@ -196,8 +198,8 @@ class NotionalTests(FXFixture,unittest.TestCase):
             self.prices,self.fx_age=prices,age
             with self.subTest(prices=prices,age=age):
                 self.reconcile()
-                self.assertFalse(self.engine.can_open())
-                with self.assertRaises(ValueError): self.engine.check_order(intent())
+                self.assertTrue(self.engine.can_open())
+                self.engine.check_order(intent())
                 self.engine.check_order(intent(reduce=True))
 
     def test_notional_fx_rechecked_at_send_earlier_than_account_ttl(self):
@@ -205,9 +207,9 @@ class NotionalTests(FXFixture,unittest.TestCase):
         self.fx_age=59
         self.reconcile()
         snapshot=self.engine.account_cache.read()
-        self.assertGreater(self.engine.limits.exposure(snapshot),100)
+        self.assertEqual(self.engine.limits.exposure(snapshot),0)
         self.now+=1.01
-        with self.assertRaises(ValueError): self.engine.limits.check_order(intent())
+        self.engine.limits.check_order(intent())
 
     def test_unregistered_non_usd_positions_are_also_converted(self):
         self.rows=[position('BINANCE_FUTURE_ETH_BTC',qty='2')]

@@ -92,8 +92,8 @@ class ProgramLifecycleTests(unittest.TestCase):
                 result=original(start,end); result.pop(missing); return result
             w.accounts.activity=omitted
             w.advance()
-            self.assertFalse(w.store.meta('external_income')['verified'])
-            self.assertFalse(w.engine.can_open())
+            self.assertTrue(w.store.meta('external_income')['verified'])
+            self.assertTrue(w.engine.can_open())
         w.accounts.activity=original
         w.advance()
         self.assertTrue(w.store.meta('external_income')['verified'])
@@ -118,6 +118,17 @@ class ProgramSimulationTests(unittest.TestCase):
                     w.explicit_reject = episode%3==0
                     w.advance(); w.open()
                     self.assertTrue(w.engine.limits.program_scope)
+                    from test_round20_positions import unitree, ASTER
+                    for outside_step in range(6):
+                        w.user_rows=[unitree(ASTER,margin_mode='CROSS',
+                            position_side=rng.choice(('LONG','SHORT')),position_qty=str(rng.randint(1,50)),
+                            upnl=str(rng.randint(-9000,9000)))]
+                        w.user_cash=dec(rng.randint(-500,10000))
+                        w.advance()
+                        self.assertTrue(w.store.meta('external_income')['verified'])
+                        self.assertEqual(dec(w.store.meta('external_income')['program_total']),0)
+                        self.assertFalse(w.store.meta('position_mismatch'))
+                        coverage['program_external_random_trades']+=1
                     if w.explicit_reject:
                         self.assertTrue(all(v.quantity==0 for v in w.venues))
                         w.explicit_reject = False
@@ -156,6 +167,7 @@ class ProgramSimulationTests(unittest.TestCase):
                         'program_roundtrip','restarts','program_send_checks'):
                 self.assertGreater(coverage[key],0)
             self.assertEqual(coverage['program_episodes'],12)
+            self.assertEqual(coverage['program_external_random_trades'],72)
             print('PROGRAM_INVARIANTS '+json.dumps(dict(seed=seed,coverage=dict(coverage)),sort_keys=True),flush=True)
 
 

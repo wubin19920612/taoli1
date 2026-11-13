@@ -74,10 +74,16 @@ class ObservedFixture(ExternalFixture):
 
     def prove(self):
         self.now += 1
-        snapshot = self.engine.read_account_snapshot()
-        self.engine.account_cache.publish(snapshot, self.now)
-        snapshot = self.engine.account_cache.read()
-        return self.engine.external_accounting.evaluate(snapshot, self.engine.external.split(snapshot))
+        # R21 keeps the R19 cash parser as an optional diagnostic. The engine's
+        # actual opening proof is separately exercised by ObservedProgramWorld.
+        from legacy_cash_diagnostics import prove
+        return prove(self)
+
+    def anchor(self):
+        result=super().anchor()
+        from legacy_cash_diagnostics import anchor
+        anchor(self)
+        return result
 
 
 class ObservedProgramWorld(ProgramWorld):

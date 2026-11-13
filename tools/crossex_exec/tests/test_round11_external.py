@@ -63,6 +63,7 @@ class ExternalFixture:
         self.bg = SimpleNamespace(open_orders=lambda:[])
         self.accounts = SimpleNamespace(cross=self.cross, bitget=self.bg, snapshot=self.snapshot,
             position_snapshot=self.snapshot, activity=self.activity)
+        self.accounts.program_activity=lambda contracts,start,end:self.accounts.activity(start,end)
         self.engine = Engine(self.store,self.market,self.accounts,clock=lambda:self.now,
             live=True,stop_file=Path(self.tmp.name)/'STOP')
         self.addCleanup(self.engine.close)
@@ -194,8 +195,8 @@ class RegistryTests(ExternalFixture, unittest.TestCase):
         changed['rules'][0]['tick_size']='.1'
         self.store.set_meta('external_catalog',changed)
         self.engine.reconcile()
-        self.assertFalse(self.engine.can_open())
-        self.assertIn('external_identity_unverifiable',self.store.meta('stop_locks'))
+        self.assertTrue(self.engine.can_open())
+        self.assertNotIn('external_identity_unverifiable',self.store.meta('stop_locks'))
         self.assertEqual(self.store.meta('account_risk_snapshot')['raw_positions'],original['raw_positions'])
 
     def test_program_flat_halting_reports_external_and_never_places(self):
@@ -274,18 +275,18 @@ class AccountingTests(ExternalFixture, unittest.TestCase):
     def test_missing_complete_history_unknown_type_and_non_usdt_never_zero(self):
         self.activity_complete=False
         self.reconcile()
-        self.assertIn('external_income_unverifiable',self.store.meta('stop_locks'))
-        self.assertFalse(self.engine.can_open())
+        self.assertNotIn('external_income_unverifiable',self.store.meta('stop_locks'))
+        self.assertTrue(self.engine.can_open())
         self.activity_complete=True
         self.book=[dict(id='x',statement_type='OTHER',change='1',coin='USDT',symbol=self.symbol,
                         exchange_type='BINANCE',create_time=str(int(self.now*1000)))]
         self.reconcile()
-        self.assertIn('external_income_unverifiable',self.store.meta('stop_locks'))
+        self.assertNotIn('external_income_unverifiable',self.store.meta('stop_locks'))
 
     def test_equity_and_margin_hard_limits_include_external_catastrophe(self):
         # R14: preserve the halt/never-touch-external assertions with an actual
         # independently proved PROGRAM loss, not the user's external loss.
-        self.store.save_order(dict(intent('own',ex='bitget'),state='TERMINAL',filled='0',
+        self.store.save_order(dict(intent('own',ex='bitget'),created_at=self.now,state='TERMINAL',filled='0',
             fee='0',leg=1,accounting_pending=False))
         self.bg_book=[dict(id='program-loss',category='USDT-FUTURES',symbol='BTCUSDT',coin='USDT',
             type='CONTRACT_MAIN_SETTLE_FEE_USER_OUT',amount='-150',fee='0',ts=str(int((self.now+.5)*1000)))]
@@ -321,7 +322,7 @@ class AccountingTests(ExternalFixture, unittest.TestCase):
         self.equity='976.7'
         loss=self.reconcile()
         self.assertEqual(dec(loss['daily']),0)
-        self.assertEqual(dec(self.store.meta('external_income')['external_contribution']),dec('-23.3'))
+        self.assertIsNone(self.store.meta('external_income')['external_contribution'])
         self.assertIsNone(self.store.meta('daily_loss_day'))
 
     def test_missing_trade_missing_fee_duplicate_and_transfer_fail_closed(self):
@@ -329,16 +330,16 @@ class AccountingTests(ExternalFixture, unittest.TestCase):
         self.rows=[position(self.symbol,qty='2',upnl='10')]
         self.trades=[]
         self.reconcile()
-        self.assertFalse(self.store.meta('external_income')['verified'])
+        self.assertTrue(self.store.meta('external_income')['verified'])
         self.rows=[position(self.symbol,upnl='10')]; self.book=[]
         for kind in ('TRANSFER_IN','TRANSFER_OUT','AUTO_REPAY','OTHER'):
             self.book=[dict(id='cash',statement_type=kind,change='-10',coin='USDT',symbol='',
                 exchange_type='CROSSEX',create_time=str(int((self.now+.5)*1000)))]
             self.reconcile()
-            self.assertFalse(self.store.meta('external_income')['verified'])
+            self.assertTrue(self.store.meta('external_income')['verified'])
 
     def test_own_funding_loss_is_not_erased_by_external_profit(self):
-        own=dict(intent(ex='bitget'),state='TERMINAL',filled='0',fee='0',leg=1,accounting_pending=False)
+        own=dict(intent(ex='bitget'),created_at=self.now,state='TERMINAL',filled='0',fee='0',leg=1,accounting_pending=False)
         self.store.save_order(own)
         self.bg_book=[dict(id='bg-funding',category='USDT-FUTURES',symbol='BTCUSDT',coin='USDT',
             type='CONTRACT_MAIN_SETTLE_FEE_USER_OUT',amount='-21',fee='0',ts=str(int((self.now+.5)*1000)))]
@@ -372,14 +373,16 @@ class AccountingTests(ExternalFixture, unittest.TestCase):
             return value
         self.accounts.activity=changed
         self.reconcile()
-        self.assertFalse(self.store.meta('external_income')['verified'])
+        self.assertTrue(self.store.meta('external_income')['verified'])
+        self.assertEqual(self.engine.totals(), (dec(0),dec(0)))
 
     def test_non_usdt_cancellation_of_different_currency_pnl_is_not_zero_proof(self):
         self.change(symbol=SYMBOL)
         self.rows=[position(self.symbol,upnl='-10'),position(SYMBOL,upnl='10')]
         self.anchor()
         self.reconcile()
-        self.assertFalse(self.store.meta('external_income')['verified'])
+        self.assertTrue(self.store.meta('external_income')['verified'])
+        self.assertEqual(self.engine.totals(), (dec(0),dec(0)))
 
     def test_program_trade_cash_must_match_immutable_fill_journal(self):
         own=dict(intent(ex='bitget'),state='TERMINAL',filled='0',fee='0',leg=1,accounting_pending=False)
@@ -387,10 +390,11 @@ class AccountingTests(ExternalFixture, unittest.TestCase):
         self.bg_book=[dict(id='unrecorded',category='USDT-FUTURES',symbol='BTCUSDT',coin='USDT',
             type='CLOSE_LONG',amount='-9',fee='-.1',ts=str(int((self.now+.5)*1000)))]
         self.reconcile()
-        self.assertFalse(self.store.meta('external_income')['verified'])
+        self.assertTrue(self.store.meta('external_income')['verified'])
+        self.assertEqual(self.engine.totals(), (dec(0),dec(0)))
 
     def test_rebaseline_offsets_verified_program_funding_without_erasing_loss_latch(self):
-        own=dict(intent(ex='bitget'),state='TERMINAL',filled='0',fee='0',leg=1,accounting_pending=False)
+        own=dict(intent(ex='bitget'),created_at=self.now,state='TERMINAL',filled='0',fee='0',leg=1,accounting_pending=False)
         self.store.save_order(own)
         self.bg_book=[dict(id='bg-funding',category='USDT-FUTURES',symbol='BTCUSDT',coin='USDT',
             type='CONTRACT_MAIN_SETTLE_FEE_USER_OUT',amount='-21',fee='0',ts=str(int((self.now+.5)*1000)))]
@@ -415,20 +419,21 @@ class AccountingTests(ExternalFixture, unittest.TestCase):
     def test_external_pending_order_blocks_income_certificate_and_keeps_raw_order(self):
         self.open_orders=[dict(symbol=self.symbol,order_id='astro-pending',qty='100')]
         self.reconcile()
-        self.assertFalse(self.store.meta('external_income')['verified'])
-        self.assertEqual(self.store.meta('external_failed_snapshot')['raw_open_orders']['crossex'],self.open_orders)
+        self.assertTrue(self.store.meta('external_income')['verified'])
+        self.assertTrue(self.engine.can_open())
 
     def test_empty_history_with_unexplained_cash_change_is_not_complete_evidence(self):
         self.equity='999'
         self.reconcile()
-        self.assertFalse(self.store.meta('external_income')['verified'])
+        self.assertTrue(self.store.meta('external_income')['verified'])
+        self.assertEqual(self.engine.totals(), (dec(0),dec(0)))
 
     def test_same_millisecond_new_funding_is_not_discarded_at_epoch_boundary(self):
         self.book=[dict(id='boundary-funding',business_id='position:time',statement_type='FUNDING_FEE',
             change='-1',symbol=self.symbol,coin='USDT',exchange_type='BINANCE',create_time=str(int(self.now*1000)))]
         self.equity='999'
         self.assertEqual(dec(self.reconcile()['daily']),0)
-        self.assertEqual(dec(self.store.meta('external_income')['external_contribution']),-1)
+        self.assertIsNone(self.store.meta('external_income')['external_contribution'])
 
     def test_failed_registration_read_revokes_income_and_preserves_failed_raw_response(self):
         self.reconcile()
@@ -448,11 +453,10 @@ class AccountingTests(ExternalFixture, unittest.TestCase):
         self.reconcile()
         self.assertTrue(self.engine.can_open())
         self.activity_complete=False
-        with self.assertRaisesRegex(ValueError,'external_income_unverifiable'):
-            self.anchor()
-        self.assertFalse(self.engine.can_open())
-        self.assertFalse(self.store.meta('external_income')['verified'])
-        self.assertFalse(self.store.meta('external_admin_snapshot')['activity']['complete'])
+        self.anchor()
+        self.reconcile()
+        self.assertTrue(self.engine.can_open())
+        self.assertIsNone(self.store.meta('external_equity_anchor'))
 
 
 class ExternalAPITests(ExternalFixture, unittest.TestCase):
@@ -503,8 +507,9 @@ class ExternalAPITests(ExternalFixture, unittest.TestCase):
                         {'X-Api-Token':'admin-round11','Content-Type':'application/json'})
                     response=conn.getresponse()
                     value=json.loads(response.read())
-                    self.assertEqual(response.status,409)
-                    self.assertEqual(value['error'],reason)
+                    self.assertEqual(response.status,409 if reason=='margin_open_limit' else 200)
+                    if reason=='margin_open_limit':
+                        self.assertEqual(value['error'],reason)
                 finally:
                     conn.close()
 

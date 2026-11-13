@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from tools.crossex_exec.external import digest
 from tools.crossex_exec.security import Redactor
-from test_exec import setUpModule, tearDownModule
+from test_exec import intent, setUpModule, tearDownModule
 from test_round11_external import ExternalFixture, position
 
 
@@ -13,22 +13,23 @@ class ResourceSafetyTests(ExternalFixture, unittest.TestCase):
     def setUp(self):
         super().setUp()
         self.symbol = 'BINANCE_FUTURE_BTC_USDT'
-        self.change(symbol=self.symbol)
-        self.rows = [position(self.symbol)]
+        self.store.save_order(dict(intent('funding-owner'),created_at=self.now,state='TERMINAL',
+            filled='0',fee='0',accounting_pending=False))
+        self.rows = []
         self.anchor()
         self.now += 1
         self.book = [dict(id=str(n),business_id=str(n),symbol=self.symbol,exchange_type='BINANCE',
-            coin='USDT',statement_type='TRANSACTION',change='0',create_time=str(int(self.now*1000)))
+            coin='USDT',statement_type='FUNDING_FEE',change='0',create_time=str(int(self.now*1000)))
             for n in range(250)]
 
     def test_one_history_index_per_income_proof_and_unchanged_rows_reuse_hashes(self):
-        from tools.crossex_exec import external_accounting as accounting
+        from tools.crossex_exec import program_accounting as accounting
         original = accounting.history_index
         with patch.object(accounting,'history_index',wraps=original) as index:
             self.engine.reconcile()
             self.assertTrue(self.store.meta('external_income')['verified'])
             self.assertEqual(index.call_count, 1)
-        with patch.object(accounting,'digest',wraps=digest) as hashed:
+        with patch('tools.crossex_exec.external_accounting.digest',wraps=digest) as hashed:
             self.now += 1
             self.engine.reconcile()
             self.assertTrue(self.store.meta('external_income')['verified'])
@@ -37,7 +38,7 @@ class ResourceSafetyTests(ExternalFixture, unittest.TestCase):
     def test_full_window_recheck_detects_missing_revised_and_late_cached_rows(self):
         self.engine.reconcile()
         self.assertTrue(self.store.meta('external_income')['verified'])
-        before = copy.deepcopy(self.store.meta('external_verified_history'))
+        before = copy.deepcopy(self.store.meta('program_verified_history'))
         truth = copy.deepcopy(self.book)
         for mode in ('missing','changed','partial'):
             self.book = copy.deepcopy(truth)
@@ -49,7 +50,7 @@ class ResourceSafetyTests(ExternalFixture, unittest.TestCase):
             self.engine.reconcile()
             self.assertFalse(self.store.meta('external_income')['verified'])
             self.assertFalse(self.engine.can_open())
-            self.assertEqual(self.store.meta('external_verified_history'), before)
+            self.assertEqual(self.store.meta('program_verified_history'), before)
         self.book = truth
         self.activity_complete = True
         self.now += 1
@@ -68,19 +69,19 @@ class ResourceSafetyTests(ExternalFixture, unittest.TestCase):
 
     def test_unchanged_verified_ledger_is_not_serialized_and_rewritten(self):
         self.engine.reconcile()
-        before = self.store.meta('external_verified_history')
+        before = self.store.meta('program_verified_history')
         with patch.object(self.store,'set_meta',wraps=self.store.set_meta) as writes:
             self.now += 1
             self.engine.reconcile()
             self.assertTrue(self.store.meta('external_income')['verified'])
-            self.assertFalse(any(c.args[0]=='external_verified_history' for c in writes.call_args_list))
+            self.assertFalse(any(c.args[0]=='program_verified_history' for c in writes.call_args_list))
         self.book.append(dict(self.book[-1],id='new-row',create_time=str(int(self.now*1000))))
         self.now += 1
         with patch.object(self.store,'set_meta',wraps=self.store.set_meta) as writes:
             self.engine.reconcile()
             self.assertTrue(self.store.meta('external_income')['verified'])
-            self.assertEqual(sum(c.args[0]=='external_verified_history' for c in writes.call_args_list),1)
-        after = self.store.meta('external_verified_history')
+            self.assertEqual(sum(c.args[0]=='program_verified_history' for c in writes.call_args_list),1)
+        after = self.store.meta('program_verified_history')
         self.assertEqual({k:after['crossex_book'][k] for k in before['crossex_book']},before['crossex_book'])
         self.assertIn('new-row',after['crossex_book'])
 

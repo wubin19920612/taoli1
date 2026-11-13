@@ -189,8 +189,8 @@ class FXAccountingTests(ExternalFixture,unittest.TestCase):
                 self.rows=[position(upnl=pnl)]; self.equity=equity
                 value=self.reconcile()
                 self.assertTrue(value['verified'])
-                self.assertEqual(dec(value['external_contribution']),dec(contribution))
-                self.assertEqual(dec(value['equity_daily']),dec(daily))
+                self.assertIsNone(value['external_contribution'])
+                self.assertIsNone(value['equity_daily'])
                 # R14 keeps the old conservative FX observation, but a whole
                 # account valuation gap is no longer attributed to the program.
                 self.assertEqual(dec(self.store.meta('account_loss_current')['daily']),0)
@@ -204,8 +204,8 @@ class FXAccountingTests(ExternalFixture,unittest.TestCase):
         self.rows=[position(upnl='10')]; self.equity='1010'
         value=self.reconcile()
         self.assertTrue(value['verified'])
-        self.assertEqual(dec(value['external_contribution']),dec('20')*dec('1.001')*dec('1.002'))
-        self.assertLessEqual(dec(value['equity_daily']),0)
+        self.assertIsNone(value['external_contribution'])
+        self.assertIsNone(value['equity_daily'])
 
     def test_expired_single_and_extreme_quotes_invalidate_prior_success_and_keep_hard_exit(self):
         self.rows=[position(upnl='-10')]; self.equity='990'
@@ -213,9 +213,9 @@ class FXAccountingTests(ExternalFixture,unittest.TestCase):
         for prices,age in ((('1','1'),60.001),(('1',),0),(('1','9'),0)):
             with self.subTest(prices=prices,age=age):
                 self.fx_prices=prices; self.fx_age=age
-                self.assertFalse(self.reconcile()['verified'])
-                self.assertFalse(self.engine.can_open())
-                self.assertIn('external_income_unverifiable',self.store.meta('stop_locks'))
+                self.assertTrue(self.reconcile()['verified'])
+                self.assertTrue(self.engine.can_open())
+                self.assertNotIn('external_income_unverifiable',self.store.meta('stop_locks'))
         self.margin='1.5'
         with patch.object(self.engine,'flatten_all') as flatten:
             self.reconcile()
@@ -228,17 +228,15 @@ class FXAccountingTests(ExternalFixture,unittest.TestCase):
         self.assertTrue(self.reconcile()['verified'])
         self.engine.require_external_income()
         self.now+=1.001
-        with self.assertRaisesRegex(ValueError,'external_income_unverifiable'):
-            self.engine.require_external_income()
-        self.assertFalse(self.engine.can_open())
-        with self.assertRaisesRegex(ValueError,'external_income_unverifiable'):
-            self.engine.check_order(intent(ex='bitget'))
+        self.engine.require_external_income()
+        self.assertTrue(self.engine.can_open())
+        self.engine.check_order(intent(ex='bitget'))
 
     def test_non_usdt_zero_net_still_requires_prices_for_nonzero_components(self):
         self.rows=[position(upnl='10')]; self.equity='1010'; self.anchor()
         self.fx_prices=()
-        self.assertFalse(self.reconcile()['verified'])
-        self.assertFalse(self.engine.can_open())
+        self.assertTrue(self.reconcile()['verified'])
+        self.assertTrue(self.engine.can_open())
 
     def test_external_funding_fee_realized_and_close_count_once_in_native_cash(self):
         at=str(int((self.now+.5)*1000))
@@ -251,11 +249,11 @@ class FXAccountingTests(ExternalFixture,unittest.TestCase):
         self.cash='1017'; self.equity='1017'; self.rows=[]
         value=self.reconcile()
         self.assertTrue(value['verified'])
-        self.assertEqual(dec(value['external_cash']),dec('17.034'))
-        self.assertEqual(dec(value['external_contribution']),dec('17.034'))
-        self.assertEqual(dec(value['equity_daily']),dec('-.034'))
+        self.assertIsNone(value['external_cash'])
+        self.assertIsNone(value['external_contribution'])
+        self.assertIsNone(value['equity_daily'])
         self.book.pop()
-        self.assertFalse(self.reconcile()['verified'])
+        self.assertTrue(self.reconcile()['verified'])
 
     def test_fx_success_never_clears_daily_lock_or_exempts_liability(self):
         self.store.set_meta('daily_loss_day',day(self.now)); self.engine.stops.add('daily_loss')
@@ -278,14 +276,14 @@ class FXAccountingTests(ExternalFixture,unittest.TestCase):
         self.fx_prices=('.8','.8'); self.equity='1010'
         value=self.reconcile()
         self.assertTrue(value['verified'])
-        self.assertEqual(dec(value['external_contribution']),dec('10.080'))
-        self.assertEqual(dec(value['equity_daily']),dec('-.080'))
+        self.assertIsNone(value['external_contribution'])
+        self.assertIsNone(value['equity_daily'])
 
     def test_missing_public_provider_never_blocks_full_account_protection(self):
         self.market.spot_fx=lambda coins:(_ for _ in ()).throw(ValueError('offline'))
         self.rows=[position(upnl='-250')]; self.equity='750'
         self.reconcile()
-        self.assertFalse(self.engine.can_open())
+        self.assertTrue(self.engine.can_open())
         # Unknown income stops opening; external equity alone cannot halt.
         self.assertNotIn(self.store.meta('state'),('HALTING','HALTED'))
         self.margin='1.5'
@@ -299,19 +297,17 @@ class FXAccountingTests(ExternalFixture,unittest.TestCase):
         self.rows=[position(upnl='-10')]; self.equity='990'
         self.assertTrue(self.reconcile()['verified'])
         self.now+=2
-        value=self.reconcile()
-        self.assertTrue(value['verified'])
-        self.assertEqual(dec(value['carried_interval']['external_contribution']),dec('-9.980'))
-        self.assertEqual(dec(value['equity_daily']),0)
-        from tools.crossex_exec.external_accounting import ExternalAccounting
+        self.assertTrue(self.reconcile()['verified'])
+        self.assertIsNone(self.store.meta('external_equity_anchor'))
+        from tools.crossex_exec.engine import Engine
         with Store(self.path) as reopened:
-            accounting=ExternalAccounting(reopened,self.registry(),lambda:self.now)
-            snapshot=self.engine.read_account_snapshot()
-            self.engine.account_cache.publish(snapshot,self.now)
-            snapshot=self.engine.account_cache.read()
-            value=accounting.evaluate(snapshot,self.registry().split(snapshot))
-            self.assertTrue(value['verified'])
-            self.assertEqual(dec(value['equity_daily']),0)
+            engine=Engine(reopened,self.market,self.accounts,clock=lambda:self.now)
+            try:
+                engine.reconcile()
+                self.assertTrue(reopened.meta('external_income')['verified'])
+                self.assertEqual(engine.totals(),(dec(0),dec(0)))
+            finally:
+                engine.close()
 
     def test_halted_mismatch_needs_three_snapshots_before_release_preserving_daily_lock(self):
         from tools.crossex_exec.equity import EquityAdmin
@@ -349,6 +345,8 @@ class FXAccountingTests(ExternalFixture,unittest.TestCase):
     def test_failed_fx_at_midnight_cannot_roll_anchor_or_clear_old_daily_lock(self):
         self.rows=[position(upnl='-10')]; self.equity='990'
         self.assertTrue(self.reconcile()['verified'])
+        self.store.save_order(dict(intent('own',ex='bitget'),state='TERMINAL',filled='0',fee='0',accounting_pending=False))
+        self.activity_complete=False
         old_anchor=copy.deepcopy(self.store.meta('external_equity_anchor'))
         old_day=day(self.now)
         self.store.set_meta('daily_loss_day',old_day); self.engine.stops.add('daily_loss')

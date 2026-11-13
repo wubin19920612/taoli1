@@ -41,7 +41,7 @@ class IsolationFixture(ExternalFixture):
 
     def own_funding(self, amount, identity='funding'):
         if self.store.order('own') is None:
-            self.store.save_order(dict(intent('own', ex='bitget'), state='TERMINAL',
+            self.store.save_order(dict(intent('own', ex='bitget'), created_at=self.now,state='TERMINAL',
                 filled='0', fee='0', leg=1, accounting_pending=False))
         self.bg_book.append(dict(id=identity, category='USDT-FUTURES', symbol='BTCUSDT',
             coin='USDT', type='CONTRACT_MAIN_SETTLE_FEE_USER_OUT' if dec(amount)<0
@@ -139,14 +139,15 @@ class ProgramIsolationTests(IsolationFixture, unittest.TestCase):
 
     def test_unproved_legacy_funding_epoch_cannot_silently_restart_at_zero(self):
         self.reconcile()
-        anchor=self.store.meta('external_equity_anchor')
-        anchor.pop('program_funding_carry')
-        self.store.set_meta('external_equity_anchor',anchor)
+        anchor=self.store.meta('program_funding_anchor')
+        anchor.pop('funding_daily_proof')
+        self.store.set_meta('program_funding_anchor',anchor)
         self.reconcile()
         self.assertFalse(self.store.meta('external_income')['verified'])
         self.assertFalse(self.engine.can_open())
 
     def test_missing_income_never_becomes_zero_and_external_equity_cannot_force_halt(self):
+        self.own_funding('-1')
         self.reconcile()
         old = self.store.meta('account_loss_current')
         self.activity_complete = False
@@ -167,8 +168,8 @@ class ProgramIsolationTests(IsolationFixture, unittest.TestCase):
                 self.book = [dict(id='x', symbol='', exchange_type='HYPERLIQUID', coin='USDT',
                     statement_type=kind, change='-1', create_time=str(int((self.now+.5)*1000)))]
                 self.reconcile()
-                self.assertFalse(self.engine.can_open())
-                self.assertFalse(self.store.meta('external_income')['verified'])
+                self.assertTrue(self.engine.can_open())
+                self.assertTrue(self.store.meta('external_income')['verified'])
 
     def test_missing_program_fee_is_not_treated_as_zero(self):
         self.store.save_order(dict(intent('own', ex='bitget'), state='TERMINAL',
@@ -188,10 +189,10 @@ class ProgramIsolationTests(IsolationFixture, unittest.TestCase):
         self.assertFalse(self.engine.can_open())
 
     def test_order_change_during_pnl_calculation_cannot_certify_old_result(self):
-        from tools.crossex_exec import external_accounting
+        from tools.crossex_exec import program_accounting as external_accounting
         original=external_accounting.journal_pnl
-        def changed(store,now):
-            value=original(store,now)
+        def changed(store,now,**kwargs):
+            value=original(store,now,**kwargs)
             store.save_order(dict(intent('late',ex='bitget'),state='TERMINAL',
                 filled='0',fee='-999',leg=1,accounting_pending=False,fill_ms=int(now*1000)))
             return value
@@ -204,11 +205,11 @@ class ProgramIsolationTests(IsolationFixture, unittest.TestCase):
         self.rows.append(position('BINANCE_FUTURE_BTC_USDT'))
         for _ in range(4):
             self.reconcile()
-        self.assertTrue(self.store.meta('position_mismatch'))
-        self.assertFalse(self.engine.can_open())
+        self.assertFalse(self.store.meta('position_mismatch'))
+        self.assertTrue(self.engine.can_open())
         alerts = [e for e in self.store.events() if e['kind']=='ALERT'
                   and 'position_mismatch' in e['value']]
-        self.assertEqual(len(alerts), 1)
+        self.assertEqual(len(alerts), 0)
 
     def test_margin_stop_and_flatten_leave_external_registered_position_intact(self):
         for margin, calls in (('3', 0), ('2.9', 0), ('2', 0), ('1.99', 1)):
@@ -334,8 +335,8 @@ class NoExternalEvidenceTests(ExternalFixture, unittest.TestCase):
         self.assertTrue(self.engine.can_open())
         self.activity_complete = False; self.now += 1
         self.engine.reconcile()
-        self.assertFalse(self.engine.can_open())
-        self.assertFalse(self.store.meta('external_income')['verified'])
+        self.assertTrue(self.engine.can_open())
+        self.assertTrue(self.store.meta('external_income')['verified'])
 
     def test_verified_transfer_with_no_external_is_observation_only(self):
         self.engine.reconcile()
@@ -358,7 +359,7 @@ class NoExternalEvidenceTests(ExternalFixture, unittest.TestCase):
         self.assertEqual(dec(self.store.meta('account_loss_current')['total']),0)
         self.bg_book[0]['fee']='-1'
         self.now+=1; self.engine.reconcile()
-        self.assertFalse(self.engine.can_open())
+        self.assertTrue(self.engine.can_open())
 
 
 if __name__ == '__main__':

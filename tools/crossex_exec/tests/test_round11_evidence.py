@@ -81,6 +81,8 @@ class EvidenceTests(ExternalFixture,unittest.TestCase):
         # R14 preserves the 601-USD hard ceiling using an unregistered position;
         # registered external notional is tested separately as excluded.
         snapshot['notionals']={'crossex|BINANCE_FUTURE_ETH_USDC|long':'601'}
+        # R21: external marks are excluded; preserve 601 ceiling with own pending exposure.
+        self.store.save_order(dict(intent('own-cap',ex='bitget',quantity='6.01'),state='UNKNOWN',filled='0'))
         # Explicit two-source FX whose conservative upper bound is exactly 1:
         # retain the original 601-USD boundary assertion without assuming a peg.
         from test_round12_fx import quotes
@@ -153,8 +155,8 @@ with Store(sys.argv[1]) as store:
         self.assertEqual(len(view['external_positions']),2)
         self.rows.append(position('HYPERLIQUID_FUTURE_xyz:OAI_USDC'))
         self.engine.reconcile()
-        self.assertTrue(self.store.meta('position_mismatch'))
-        self.assertFalse(self.engine.can_open())
+        self.assertFalse(self.store.meta('position_mismatch'))
+        self.assertTrue(self.engine.can_open())
 
     def test_tracking_before_midnight_also_freezes_program_floating_baseline(self):
         from collections import Counter

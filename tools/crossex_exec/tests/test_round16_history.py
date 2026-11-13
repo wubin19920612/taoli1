@@ -135,12 +135,14 @@ class DiagnosticShutdownTests(ExternalFixture,unittest.TestCase):
     def test_unregistered_position_nonzero_also_logs_fresh_classification(self):
         self.rows.append(position('BINANCE_FUTURE_BTC_USDT'))
         with patch('tools.crossex_exec.__main__.emit') as emit:
-            self.assertEqual(finish_shutdown(self.engine),1)
+            self.assertEqual(finish_shutdown(self.engine),0)
         status=self.store.meta('flatten_status')
-        self.assertTrue(status['verified']); self.assertFalse(status['program_flat'])
-        self.assertEqual(len(status['external_positions']),2)
-        self.assertEqual(len(status['remaining_positions']),1)
-        self.assertIn(unittest.mock.call('shutdown_positions',**status),emit.call_args_list)
+        self.assertTrue(status['verified'])
+        self.assertTrue(status['program_flat'])
+        self.assertFalse(status['account_flat'])
+        self.assertEqual(len(status['external_positions']),3)
+        self.assertFalse(status['remaining_positions'])
+        emit.assert_called_once_with('shutdown_positions',**status)
 
     def test_pending_write_cannot_exit_zero_with_only_external_remote_positions(self):
         self.engine.executor.pending_writes['pending']=(dict(intent('pending'),state='UNKNOWN'),None)
@@ -149,52 +151,54 @@ class DiagnosticShutdownTests(ExternalFixture,unittest.TestCase):
         self.assertFalse(self.store.meta('flatten_status')['program_flat'])
 
     def test_activity_exception_has_diagnostic_in_snapshot_and_alert(self):
+        from test_exec import intent
+        self.store.save_order(dict(intent('own',ex='bitget'),state='TERMINAL',filled='0',fee='0',created_at=self.now,accounting_pending=False))
         self.anchor()
         self.accounts.activity=Mock(side_effect=APIError('rate_limited'))
         self.engine.reconcile()
         snapshot=self.store.meta('external_failed_snapshot')
         self.assertEqual(snapshot['activity']['failure']['error_kind'],'rate_limited')
         alerts=[json.loads(r['value']) for r in self.store.events() if r['kind']=='ALERT'
-                and json.loads(r['value']).get('reason')=='external_income_unverifiable']
+                and json.loads(r['value']).get('reason')=='program_income_unverifiable']
         self.assertTrue(alerts)
         self.assertEqual(alerts[-1]['activity_failure'],snapshot['activity']['failure'])
 
     def test_checkpoint_rebaseline_is_audited_and_rollback_keeps_it(self):
         self.anchor(); self.engine.reconcile()
-        before=self.store.meta('funding_checkpoint')
+        before=self.store.meta('program_funding_checkpoint')
         audit=self.anchor()
-        self.assertEqual(audit['old']['funding_checkpoint'],before)
-        current=self.store.meta('funding_checkpoint')
+        self.assertEqual(audit['old']['program_funding_checkpoint'],before)
+        current=self.store.meta('program_funding_checkpoint')
         self.assertEqual(current['equity_revision'],self.store.meta('equity_baseline_revision'))
-        self.assertEqual(current['captured_at'],self.store.meta('external_equity_anchor')['captured_at'])
+        self.assertEqual(current['captured_at'],self.store.meta('program_funding_anchor')['captured_at'])
         with patch.object(self.store,'event',side_effect=sqlite3.OperationalError('test_audit_failure')):
             with self.assertRaises(sqlite3.OperationalError): self.anchor()
-        self.assertEqual(self.store.meta('funding_checkpoint'),current)
+        self.assertEqual(self.store.meta('program_funding_checkpoint'),current)
 
     def test_large_real_adapter_activity_reaches_verified_external_income(self):
-        self.rows=[position('BINANCE_FUTURE_BTC_USDT')]
-        self.change(symbol='BINANCE_FUTURE_BTC_USDT')
+        from test_exec import intent
+        self.store.save_order(dict(intent('own'),state='TERMINAL',filled='0',fee='0',created_at=self.now,accounting_pending=False))
         self.anchor()
         self.now+=1
         at=str(int(self.now*1000))
         cross_http,bg_http=Mock(),Mock()
         def response(m,p,q,**kw):
             if not p.endswith('/account_book'): return []
-            return [dict(id=str(n),business_id=str(n),statement_type='TRANSACTION',change='0',
+            return [dict(id=str(n),business_id=str(n),statement_type='FUNDING_FEE',change='0',
                 coin='USDT',symbol='BINANCE_FUTURE_BTC_USDT',exchange_type='BINANCE',create_time=at)
                 for n in range((q['page']-1)*1000,min(q['page']*1000,21001))]
         cross_http.request.side_effect=response
         bg_http.request.return_value=dict(list=[],cursor='')
-        self.accounts.activity=Accounts(CrossEx(cross_http),Bitget(bg_http)).activity
+        self.accounts.program_activity=Accounts(CrossEx(cross_http),Bitget(bg_http)).program_activity
         self.engine.reconcile()
         self.assertTrue(self.store.meta('external_income')['verified'])
-        self.assertEqual(len(self.store.meta('external_activity')['crossex_book']),21001)
+        self.assertEqual(len(self.store.meta('program_activity')['crossex_book']),21001)
         self.assertEqual(len([c for c in cross_http.request.call_args_list if c.args[1].endswith('/account_book')]),22)
 
     def test_three_registered_positions_replace_previous_shutdown_failure(self):
         self.rows.append(position('BINANCE_FUTURE_BTC_USDT'))
         with patch('tools.crossex_exec.__main__.emit'):
-            self.assertEqual(finish_shutdown(self.engine),1)
+            self.assertEqual(finish_shutdown(self.engine),0)
         old=self.store.meta('flatten_status')['attempt_id']
         self.change(symbol='BINANCE_FUTURE_BTC_USDT')
         self.activity_complete=False

@@ -90,6 +90,8 @@ class ProgramWorld(World):
         self.explicit_reject = False
         self.hide_cash = False
         self.hide_history = False
+        self.user_rows = []
+        self.user_cash = dec(0)
         self.venues = [ProgramVenue(self,n) for n in (0,1)]
         self.accounts.cross, self.accounts.bitget = self.venues
         self.accounts.activity = self.activity
@@ -123,6 +125,17 @@ class ProgramWorld(World):
                 bitget=dict(assets=[dict(coin='USDT', debt='0',
                 balance=str(30000+self.venues[1].realized+self.venues[1].funding_cash))])))
         result['notionals']={k:str(q*self.prices[0 if k.startswith('crossex|') else 1]) for k,q in result['positions'].items()}
+        from tools.crossex_exec.accounts import remote_positions
+        for row in self.user_rows:
+            result['raw_positions']['crossex'].append(copy.deepcopy(row))
+            for key,quantity in remote_positions([row],[]).items():
+                result['positions'][key]=quantity
+                result['notionals'][key]=str(quantity*dec(row['mark_price']))
+                result['upnl_by_position'][key]=row['upnl']
+        user_pnl=sum((dec(r['upnl']) for r in self.user_rows),dec(0))
+        result['upnl']=str(dec(result['upnl'])+user_pnl)
+        result['equity_by_venue']['crossex']=str(dec(result['equity_by_venue']['crossex'])+user_pnl+self.user_cash)
+        result['equity']=str(sum(map(dec,result['equity_by_venue'].values()),dec(0)))
         return result
 
     def activity(self, start, end):
