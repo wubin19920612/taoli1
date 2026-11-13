@@ -9,7 +9,7 @@ from .cash_identity import cash_identity, program_contract_identity
 from .position_values import key_currency, usd_value, position_identity
 from .external_fx import NATIVE_USD, quote_band
 from .program_funding import (ADVERSE_POLICY, OWNERSHIP_KEY, observe_funding_ownership,
-                              allocate_funding, funding_flat_contracts)
+                              allocate_funding)
 
 
 def funding_view(snapshot,contracts,orders):
@@ -161,10 +161,9 @@ class ProgramAccounting:
         ownership=store.meta(OWNERSHIP_KEY,{})
         original_journal=journal_fingerprint(store)
         daily,realized=journal_pnl(store,cutoff,fx=snapshot.get('external_fx',{}))
-        flat=funding_flat_contracts(store)
-        if {k:dec(q) for k,q in projection['positions'].items() if tuple(k.split('|')[:2]) not in flat}!=journal_positions(store):
-            # Keep openings stopped while quantities disagree. Durable ownership
-            # intervals survive this failure and still apply once extras leave.
+        if any(dec(projection['positions'].get(k,0))<q for k,q in journal_positions(store).items()):
+            # Missing program inventory is unsafe. Extra inventory is local to
+            # its raw contract and its funding is allocated adversely below.
             raise ValueError('program_position_mismatch')
         index=history_index(activity,self._history_hashes)
         previous=store.meta('program_verified_history',{})

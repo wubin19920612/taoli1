@@ -759,10 +759,8 @@ class Engine:
                     from .alerts import emit
                     emit(self.store,self.clock,'program_contract_mixed',dict(contracts=conflicts),
                          event_kind='PROGRAM_CONTRACT_MIXED',sink=self.alert_sink,status=conflicts)
-            from .program_funding import funding_flat_contracts
-            flat=funding_flat_contracts(self.store)
-            observed={k:q for k,q in observed.items() if tuple(k.split('|')[:2]) not in flat}
-        same=observed==expected
+        same=(all(dec(observed.get(k,0))>=q for k,q in expected.items())
+              if self.limits.program_scope else observed==expected)
         previous=self.store.meta('position_snapshot_at',0)
         if captured>previous:
             self.store.set_meta('position_snapshot_at',captured)

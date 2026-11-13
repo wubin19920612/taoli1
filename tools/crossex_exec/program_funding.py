@@ -2,6 +2,7 @@
 
 The original merged ledger/counters are still verified before allocation. Closed
 intervals charge every expense and credit no income; no quantity ratio is needed.
+Sampled program-flat interiors exclude both signs, with adverse transition gaps.
 """
 from tools.fill_sim.core import dec
 from .external import route_symbol
@@ -56,7 +57,7 @@ def observe_funding_ownership(store,snapshot,at,orders):
         current=list(store.iter_orders(exclude_states=('SHADOW','UNSENT')))
         stable=orders==current
         previous=store.meta(OWNERSHIP_KEY,{})
-        state=dict(previous,version=3,contracts=dict(previous.get('contracts',{})))
+        state=dict(previous,version=4,contracts=dict(previous.get('contracts',{})))
         now=int(at*1000)
         for contract in sorted(program_contracts(store)):
             name='|'.join(contract)
@@ -69,8 +70,25 @@ def observe_funding_ownership(store,snapshot,at,orders):
             origin=min((int(float(r['created_at'])*1000) for r in rows),default=now)
             maximum=_maximum_program_positions(rows)
             mixed=any(q>maximum.get(k,dec(0)) for k,q in remote.items())
-            pending=any(r['state'] in ('INTENT','SENT','ACK','UNKNOWN') for r in rows)
+            pending=any(r['state'] in ('INTENT','SENT','ACK','UNKNOWN') or r.get('accounting_pending') for r in rows)
             flat=not local and not pending
+            flat_periods=[dict(v) for v in old.get('flat_periods',[])]
+            entries=sorted(r['cid'] for r in rows if not r['reduce_only'])
+            if stable:
+                period=next((v for v in reversed(flat_periods) if v['to_ms'] is None),None)
+                # Even an entry/exit entirely between samples invalidates the
+                # flat gap. Durable new intents count, never just current qty.
+                changed=entries!=old.get('entry_cids',entries)
+                if period is not None and (not flat or changed):
+                    period['to_ms']=now
+                    period=None
+                if flat:
+                    if period is None:
+                        period=dict(from_ms=old.get('last_ms',origin),first_flat_ms=now,
+                                    last_flat_ms=now,to_ms=None)
+                        flat_periods.append(period)
+                    else:
+                        period['last_flat_ms']=now
             intervals=[]
             for prior in old.get('intervals',[]):
                 interval=dict(prior,policy=ADVERSE_POLICY)
@@ -111,7 +129,9 @@ def observe_funding_ownership(store,snapshot,at,orders):
                     end=interval['to_ms']
                     interval['flat_until_ms']=min((int(float(r['created_at'])*1000) for r in rows
                         if not r['reduce_only'] and int(float(r['created_at'])*1000)>=end),default=None)
-            record=dict(old,last_ms=now,intervals=intervals)
+            record=dict(old,last_ms=now,intervals=intervals,flat_periods=flat_periods)
+            if stable:
+                record['entry_cids']=entries
             if stable and (not mixed or flat):
                 record['last_clean_ms']=now
             state['contracts'][name]=record
@@ -121,16 +141,23 @@ def observe_funding_ownership(store,snapshot,at,orders):
 
 
 def allocate_funding(ownership,route,row,at,value):
-    """Finalize each closed-interval expense in full and each income as zero."""
-    intervals=ownership.get('contracts',{}).get(route+'|'+row['symbol'],{}).get('intervals',[])
+    """Attribute each bill adversely wherever sample ordering is uncertain."""
+    record=ownership.get('contracts',{}).get(route+'|'+row['symbol'],{})
+    intervals=record.get('intervals',[])
     matches=[v for v in intervals if v['from_ms']<=at and (v['to_ms'] is None or at<=v['to_ms'])]
+    if matches:
+        # An ongoing mix limits this contract, not the whole account. Complete
+        # raw ledger/counter proof still precedes allocation in the caller.
+        return min(value,dec(0)),True
+    flat=[v for v in record.get('flat_periods',[])
+          if v['from_ms']<=at and (v['to_ms'] is None or at<=v['to_ms'])]
+    if flat:
+        # Both sampled boundaries, and the gaps to the first occupied/flat
+        # sample, remain adverse. Only the proved zero-position interior is 0.
+        boundary=any(not v['first_flat_ms']<at<v['last_flat_ms'] for v in flat)
+        return min(value,dec(0)) if boundary else dec(0),True
     if not matches:
-        if any(v.get('closed_by')=='program_flat' and v['to_ms']<at
+        if not record.get('flat_periods') and any(v.get('closed_by')=='program_flat' and v['to_ms']<at
                and (v.get('flat_until_ms') is None or at<v['flat_until_ms']) for v in intervals):
             return dec(0),True
         return value,False
-    if any(v['to_ms'] is None for v in matches):
-        raise ValueError('program_funding_attribution_unverifiable')
-    # Both endpoints are included, including already seen IDs and delayed cash.
-    # No old uncertain ratio can turn a closed interval into a permanent stop.
-    return min(value,dec(0)),True
