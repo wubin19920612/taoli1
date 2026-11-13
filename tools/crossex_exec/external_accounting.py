@@ -17,12 +17,13 @@ from .cash_identity import cash_identity, program_contract_identity
 
 BITGET_FUNDING = frozenset(('CONTRACT_MAIN_SETTLE_FEE_USER_IN','CONTRACT_MAIN_SETTLE_FEE_USER_OUT'))
 BITGET_TRADING = frozenset(('OPEN_LONG','OPEN_SHORT','CLOSE_LONG','CLOSE_SHORT','BUY_DEAL','SELL_DEAL'))
+CONVERSION_SYMBOL = 'HYPERLIQUID_CONVERT_USDC_USDT'
 
 
 def capital_transfer(row, *, bitget=False):
     kind=row['type' if bitget else 'statement_type']
-    # Exact documented transfer enums only. No borrowing/interest/conversion
-    # aliases and no contract cash disguised as a transfer.
+    # Exact transfer enums only; other approved non-contract cash is checked
+    # separately, never via aliases or contract cash disguised as a transfer.
     allowed=('TRANSFER_IN','TRANSFER_OUT')
     if kind not in allowed:
         return False
@@ -32,6 +33,37 @@ def capital_transfer(row, *, bitget=False):
             or (bitget and dec(row['fee'])!=0)
             or (kind.endswith('_IN') and value<=0) or (kind.endswith('_OUT') and value>=0)):
         raise ValueError('capital_transfer_unverifiable')
+    return True
+
+
+def non_contract_cashflow(row):
+    """Approved external flows; cash_continuity still accounts for every row."""
+    if capital_transfer(row):
+        return True
+    kind=row['statement_type']
+    if row['symbol']==CONVERSION_SYMBOL:
+        domain=(row['exchange_type'],row['coin'])
+        value=dec(row['change'])
+        if (kind!='TRANSACTION' or domain not in (('HYPERLIQUID','USDC'),('CROSSEX','USDT'))
+                or (domain==('HYPERLIQUID','USDC') and value>=0)
+                or (domain==('CROSSEX','USDT') and value<=0)):
+            raise ValueError('unattributed_cashflow')
+        return True
+    if kind=='INTEREST_ISOLATED':
+        if (row['symbol']!='' or row['exchange_type']!='LIGHTER' or row['coin']!='USDC'
+                or dec(row['change'])>=0):
+            raise ValueError('unattributed_cashflow')
+        return True
+    return False
+
+
+def conversion_trade(row):
+    if row.get('business_type')!='CONVERT':
+        return False
+    if (row['symbol']!=CONVERSION_SYMBOL or row['exchange_type']!='HYPERLIQUID'
+            or row['fee_coin']!='' or row['position_side']!=''
+            or dec(row['fee'])!=0 or dec(row['rpnl'])!=0):
+        raise ValueError('trade_identity')
     return True
 
 
@@ -90,7 +122,7 @@ def program_activity(store,activity,captured,anchor=None):
     def is_new(name,identity):
         return anchor is not None and identity not in anchor['history_index'][name]
     for row,at in unique_rows(activity['crossex_book'],'id',start,end):
-        if capital_transfer(row):
+        if non_contract_cashflow(row):
             continue
         key=('crossex',row['symbol'])
         if key not in owned:
@@ -390,11 +422,11 @@ class ExternalAccounting:
             symbol=row['symbol']
             kind=row['statement_type']
             value=dec(row['change'])
-            if capital_transfer(row):
+            if non_contract_cashflow(row):
                 continue
             if kind not in ('TRANSACTION','TRADING_FEE','FUNDING_FEE','LIQUIDATION_FEE'):
-                # Transfers, repayment, interest, conversions and unknown entries
-                # are not contract income. No cancellation/zero assumption.
+                # Anything outside the explicit external-flow/contract enums
+                # is still unknown, even if opposite entries cancel to zero.
                 raise ValueError('unattributed_cashflow')
             if symbol in external:
                 i=external[symbol]
@@ -419,6 +451,8 @@ class ExternalAccounting:
             else:
                 raise ValueError('cash_ownership_unknown')
         for row,at in unique_rows(activity['crossex_trades'],'transaction_id',start,end):
+            if conversion_trade(row):
+                continue
             symbol=row['symbol']
             if symbol not in external:
                 if ('crossex',symbol) not in owned:
