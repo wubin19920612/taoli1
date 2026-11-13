@@ -12,6 +12,25 @@ OWNERSHIP_KEY = 'program_funding_ownership'
 ADVERSE_POLICY = 'adverse_only_mixed_interval'
 
 
+def _maximum_program_positions(rows):
+    """An observation bound only; never authority to send a reduction."""
+    net,unconfirmed={},{}
+    for row in rows:
+        key='|'.join((*route_symbol(row['instrument']),row['position_side']))
+        lifecycle=(row['pair_id'],row.get('leg'),key)
+        filled=dec(row.get('filled',0))
+        net[lifecycle]=net.get(lifecycle,dec(0))+filled*(-1 if row['reduce_only'] else 1)
+        if not row['reduce_only'] and row['state'] in ('SENT','ACK','UNKNOWN'):
+            unconfirmed[lifecycle]=unconfirmed.get(lifecycle,dec(0))+max(dec(0),dec(row['quantity'])-filled)
+    result={}
+    for lifecycle,quantity in net.items():
+        # A close reported before its entry already consumes some of that
+        # entry's maximum possible fill. Do not hide outside inventory in it.
+        key=lifecycle[2]
+        result[key]=result.get(key,dec(0))+max(dec(0),quantity+unconfirmed.get(lifecycle,dec(0)))
+    return result
+
+
 def observe_funding_ownership(store,snapshot,at,orders):
     """Persist even when history is unavailable or income certification fails."""
     with store.transaction():
@@ -31,12 +50,8 @@ def observe_funding_ownership(store,snapshot,at,orders):
             remote={k:dec(q) for k,q in projection['positions'].items() if tuple(k.split('|')[:2])==contract}
             rows=[r for r in current if route_symbol(r['instrument'])==contract]
             origin=min((int(float(r['created_at'])*1000) for r in rows),default=now)
-            possible={}
-            for row in rows:
-                if not row['reduce_only'] and row['state'] in ('SENT','ACK','UNKNOWN'):
-                    key=name+'|'+row['position_side']
-                    possible[key]=possible.get(key,dec(0))+max(dec(0),dec(row['quantity'])-dec(row.get('filled',0)))
-            mixed=any(q>local.get(k,dec(0))+possible.get(k,dec(0)) for k,q in remote.items())
+            maximum=_maximum_program_positions(rows)
+            mixed=any(q>maximum.get(k,dec(0)) for k,q in remote.items())
             pending=any(r['state'] in ('INTENT','SENT','ACK','UNKNOWN') for r in rows)
             flat=not local and not pending
             intervals=[]
@@ -44,7 +59,7 @@ def observe_funding_ownership(store,snapshot,at,orders):
                 interval=dict(prior,policy=ADVERSE_POLICY)
                 first,last=interval.get('first_mixed_ms'),interval.get('observed_ms')
                 start,end=interval.get('from_ms'),interval.get('to_ms')
-                if (type(start) is not int or type(first) is not int or type(last) is not int
+                if ('to_ms' not in interval or type(start) is not int or type(first) is not int or type(last) is not int
                         or not start<=first<=last
                         or end is not None and (type(end) is not int or last>end)):
                     # Missing old sampling evidence cannot justify any credit.
@@ -55,7 +70,7 @@ def observe_funding_ownership(store,snapshot,at,orders):
                     if type(end) is not int or end<origin:
                         interval['to_ms']=None
                 intervals.append(interval)
-            active=intervals[-1] if intervals and intervals[-1]['to_ms'] is None else None
+            active=next((v for v in reversed(intervals) if v['to_ms'] is None),None)
             if mixed and not flat:
                 if active is None:
                     start=old.get('last_clean_ms',old.get('last_ms',origin))
@@ -63,10 +78,13 @@ def observe_funding_ownership(store,snapshot,at,orders):
                                 policy=ADVERSE_POLICY)
                     intervals.append(active)
                 active['observed_ms']=now
-            elif active is not None and stable:
+            elif stable:
                 # The remaining remote quantity may be entirely external after
-                # the program flattens. It must not keep this interval open.
-                active['to_ms']=now
+                # the program flattens. Also close older migrated open intervals,
+                # not just the last record, so no legacy gap can strand proof.
+                for interval in intervals:
+                    if interval['to_ms'] is None:
+                        interval['to_ms']=now
             record=dict(old,last_ms=now,intervals=intervals)
             if stable and (not mixed or flat):
                 record['last_clean_ms']=now
