@@ -77,6 +77,37 @@ class MixedFundingTests(unittest.TestCase):
         self.assertEqual(w.store.meta('program_funding_checkpoint'), checkpoint)
         self.assertFalse(w.engine.can_open())
 
+    def test_new_charge_at_clean_boundary_cannot_be_diluted_by_old_mixed_ratio(self):
+        w = self.world()
+        venue = w.venues[0]
+        own = venue.quantity
+        venue.quantity = own*9
+        venue.settle('-90'); w.advance()
+        venue.quantity = own
+        w.advance()
+        self.assertEqual(w.engine.totals(), (dec(-10), dec(-10)))
+        # Millisecond timestamps cannot order a fresh charge against the clean
+        # observation. Refuse that ambiguity rather than dilute a -21 loss.
+        venue.settle('-21'); w.advance()
+        self.assertFalse(w.store.meta('external_income')['verified'])
+        self.assertFalse(w.engine.can_open())
+
+    def test_unknown_entry_during_mixed_interval_remains_unverifiable_after_query(self):
+        w = self.world()
+        venue = w.venues[0]
+        entry = next(w.store.iter_orders(reduce_only=False))
+        own = venue.quantity
+        w.store.save_order(dict(entry, state='UNKNOWN', filled='0'))
+        venue.quantity = own*3
+        venue.settle('-90'); w.advance()
+        w.store.save_order(entry)
+        venue.quantity = own
+        w.advance()
+        income = w.store.meta('external_income')
+        self.assertFalse(income['verified'])
+        self.assertEqual(income['income_failure']['condition'], 'program_funding_attribution_unverifiable')
+        self.assertFalse(w.engine.can_open())
+
 
 if __name__ == '__main__':
     unittest.main()

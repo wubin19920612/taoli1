@@ -47,6 +47,16 @@ class TrackingPnlTests(unittest.TestCase):
         w.engine.save_tracking_upnl(pair, w.books(w.instruments), w.now)
         self.assertEqual(dec(w.store.meta('program_last_upnl')['upnl']), owned*dec(-10))
 
+    def test_legacy_polluted_daily_baseline_cannot_mask_a_program_loss(self):
+        w = ProgramWorld()
+        self.addCleanup(w.close)
+        w.advance(); w.open(); w.advance()
+        w.store.set_meta('program_daily_upnl', dict(day=day(w.now), upnl='-9000',
+            positions={'crossex|'+ASTER+'|long':'-9000'}, captured_at=w.now))
+        w.venues[0].settle('-21'); w.advance()
+        self.assertFalse(w.store.meta('external_income')['verified'])
+        self.assertFalse(w.engine.can_open())
+
 
 if __name__ == '__main__':
     unittest.main()
