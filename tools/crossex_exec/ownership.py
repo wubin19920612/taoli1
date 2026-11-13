@@ -27,14 +27,25 @@ def retain_crash_claims(store):
 
 
 def journal_positions(store, *, pair_id=None):
-    result = {}
+    lifecycles, unresolved = {}, {}
     for row in store.iter_orders(exclude_states=('SHADOW','UNSENT'), **(
             {'pair_id':pair_id} if pair_id is not None else {})):
         key = '|'.join((*route_symbol(row['instrument']),row['position_side']))
+        lifecycle = (row['pair_id'],row.get('leg'),key)
         qty = dec(row.get('filled',0)) * (-1 if row['reduce_only'] else 1)
-        result[key] = result.get(key,dec(0))+qty
-    if any(q<0 for q in result.values()):
-        raise ValueError('negative_local_position')
+        lifecycles[lifecycle] = lifecycles.get(lifecycle,dec(0))+qty
+        if not row['reduce_only'] and row['state'] in ('SENT','ACK','UNKNOWN'):
+            unresolved[lifecycle] = unresolved.get(lifecycle,dec(0))+max(dec(0),dec(row['quantity'])-qty)
+    result = {}
+    for lifecycle,qty in lifecycles.items():
+        if qty<0:
+            if -qty>unresolved.get(lifecycle,dec(0)):
+                raise ValueError('negative_local_position')
+            # A confirmed close can arrive before its opening fill. Keep querying
+            # that lifecycle, but assign it ZERO reduction authority meanwhile.
+            qty=dec(0)
+        key=lifecycle[2]
+        result[key]=result.get(key,dec(0))+qty
     return {k:q for k,q in result.items() if q}
 
 
