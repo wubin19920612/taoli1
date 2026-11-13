@@ -12,6 +12,10 @@ const pct = (n: number | null | undefined, digits = 2) => typeof n === "number" 
 // Use the displayed precision for chart lines, validation and action snapshots too.
 const displayThresholds = ({ open, close }: Thresholds): Thresholds => ({ open: Number(open.toFixed(2)), close: Number(close.toFixed(2)) });
 const directionLabel = (d: Direction) => d === "long1_short2" ? "左多右空" : "右多左空";
+const normalizedDex = (dex: string | null | undefined) => dex?.trim().toLowerCase() || "main";
+const dexDescription = (buy: string | null, sell: string | null) => buy !== null && sell !== null
+  ? `买 ${buy} / 卖 ${sell}` : buy ?? sell ?? "main";
+export type TemplateDexSelection = Partial<Record<"leg1" | "leg2", string>>;
 function readFee() {
   try {
     const stored = localStorage.getItem(feeKey);
@@ -85,8 +89,10 @@ function TemplateCreateModal({ snapshot, onClose, onCreated }: {
     submitAstroCard={() => void submit()} changeCardTarget={() => {}} />;
 }
 
-export function PairTemplateCard({ result, onLinesChange }: {
+export function PairTemplateCard({ result, onLinesChange, onSwitchDex, switchDexDisabled = false }: {
   result: PairSpreadQueryResult; onLinesChange: (lines: TemplateLines | null) => void;
+  onSwitchDex?: (dexes: TemplateDexSelection) => void;
+  switchDexDisabled?: boolean;
 }) {
   const [fee, setFee] = useState(readFee);
   const [profit, setProfit] = useState(0.15);
@@ -173,6 +179,23 @@ export function PairTemplateCard({ result, onLinesChange }: {
     {multiplied ? <Alert type="warning" message="带倍数的价差暂不支持建卡" /> : !route ? <Alert type="warning" message="缺少两腿原始市场信息，请刷新盘口后建卡" /> : null}
     {!recommendation.insufficient && !valid ? <Alert type="error" message="开仓阈值必须大于平仓阈值，且均在 -50% 至 50% 内" /> : null}
     <p>{lookupLoading ? "正在查找已有卡片…" : lookup?.count === 1 ? `已有卡片 ${lookup.pair_name}：开 ${pct(lookup.open_spread_pct)} → ${pct(open)} / 平 ${pct(lookup.close_spread_pct)} → ${pct(close)}` : lookup?.count ? "找到多条对应卡片，请在 Astro 确认路线，暂不支持修改" : "未找到对应卡片，修改不可用"}</p>
+    {route ? lookup?.other_dex_cards?.map((card, index) => {
+      const buyDex = ["hl", "gc-hl"].includes(card.buy_ex) ? normalizedDex(card.buy_dex) : null;
+      const sellDex = ["hl", "gc-hl"].includes(card.sell_ex) ? normalizedDex(card.sell_dex) : null;
+      const cardDex = dexDescription(buyDex, sellDex);
+      const currentDex = dexDescription(
+        route.buy_exchange === "hyperliquid" ? normalizedDex(route.buy_dex ?? (route.buy_raw_symbol?.includes(":") ? route.buy_raw_symbol.split(":")[0] : null)) : null,
+        route.sell_exchange === "hyperliquid" ? normalizedDex(route.sell_dex ?? (route.sell_raw_symbol?.includes(":") ? route.sell_raw_symbol.split(":")[0] : null)) : null
+      );
+      return <Alert key={index} className="pair-template-dex-warning" type="warning" showIcon
+        message={`Astro 已有卡片 ${card.pair_name} 使用 HL ${cardDex}（开 ${pct(card.open_spread_pct)} / 平 ${pct(card.close_spread_pct)}），当前查询的是 HL ${currentDex}，价差可能不同`}
+        action={onSwitchDex ? <Button size="small" disabled={switchDexDisabled || busy} onClick={() => {
+          const dexes: TemplateDexSelection = {};
+          if (buyDex !== null) dexes[recommendation.direction === "long1_short2" ? "leg1" : "leg2"] = buyDex;
+          if (sellDex !== null) dexes[recommendation.direction === "long1_short2" ? "leg2" : "leg1"] = sellDex;
+          onSwitchDex(dexes);
+        }}>切换到 {cardDex} 查询</Button> : undefined} />;
+    }) : null}
     {lookupError ? <Alert type="error" message={`查卡失败：${lookupError}`} /> : null}
     {notice ? <Alert type="info" message={notice} /> : null}
     <Space wrap>

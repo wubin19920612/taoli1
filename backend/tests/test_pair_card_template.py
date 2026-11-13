@@ -114,6 +114,7 @@ def test_lookup_live_card_count(connected, count):
     data = response.json()
     assert data["found"] == bool(count)
     assert data["count"] == count
+    assert data["other_dex_cards"] == []
     assert remote.reads == 1
     if count == 1:
         assert data["open_spread_pct"] == pytest.approx(float(data["open_position"]) * 100)
@@ -218,18 +219,65 @@ def test_ratio_preview_lookup_and_update_use_inverse_mapping(connected):
     assert remote.updated[0]["closePosition"] == _ratio_position(0.5)
 
 
-def test_lookup_and_update_do_not_match_other_hyperliquid_dex(connected, monkeypatch):
-    client, remote, app = connected
-    monkeypatch.setattr(app.state.astro_hl_gc_catalog, "supports_opportunity", AsyncMock(return_value=False))
+def _hyperliquid_route(client, app, monkeypatch, buy_hl):
+    monkeypatch.setattr(app.state.astro_hl_gc_catalog, "supports_opportunity", AsyncMock(return_value=True))
+    index = 0 if buy_hl else 1
+    side = "buy" if buy_hl else "sell"
     markets = app.state.snapshot_store.get_all_markets()
-    markets[0] = markets[0].model_copy(update={"exchange": "hyperliquid", "raw_symbol": "xyz:BTC", "dex": "xyz"})
+    markets[index] = markets[index].model_copy(update={"exchange": "hyperliquid", "raw_symbol": "para:BTC", "dex": "para"})
+    markets[1 - index] = markets[1 - index].model_copy(update={"exchange": "bitget", "raw_symbol": "BTCUSDT"})
     app.state.snapshot_store.set_all_markets(markets)
     _install_exact_books(app)
-    selected = {**route(), "buy_exchange": "hyperliquid", "buy_raw_symbol": "xyz:BTC", "buy_dex": "xyz"}
+    selected = {**route(), "sell_exchange" if buy_hl else "buy_exchange": "bitget",
+                f"{side}_exchange": "hyperliquid", f"{side}_raw_symbol": "para:BTC", f"{side}_dex": "para"}
     preview = client.post("/api/astro/instrument/preview", json=selected).json()
     assert preview["can_submit"]
-    remote.pairs = [{**preview["pair"], "aHlDex": "abc"}]
-    assert client.post("/api/astro/instrument/card/lookup", json=selected).json()["count"] == 0
+    return selected, preview["pair"]
+
+
+@pytest.mark.parametrize("buy_hl", [True, False])
+@pytest.mark.parametrize("exchange", ["hl", "gc-hl"])
+@pytest.mark.parametrize("dex_fields,expected_dex", [
+    ({"HlDex": "xyz"}, "xyz"),
+    ({"HlDex": "abc", "EffectiveHlDex": "xyz"}, "xyz"),
+    ({"HlDex": ""}, "main"),
+    ({"HlDex": "para"}, "para"),
+])
+def test_lookup_other_dex_cards_and_strict_update(connected, monkeypatch, buy_hl, exchange, dex_fields, expected_dex):
+    client, remote, app = connected
+    selected, pair = _hyperliquid_route(client, app, monkeypatch, buy_hl)
+    prefix, exchange_key = ("a", "buyEx") if buy_hl else ("b", "sellEx")
+    card = {**pair, exchange_key: exchange, **{f"{prefix}{key}": value for key, value in dex_fields.items()},
+            "openPosition": "0.012000", "closePosition": "-0.002000", "status": False}
+    remote.pairs = [card]
+    response = client.post("/api/astro/instrument/card/lookup", json=selected)
+    assert response.status_code == 200
+    lookup = response.json()
+    assert remote.reads == 1
+    same_dex = expected_dex == "para"
+    assert lookup["count"] == int(same_dex)
+    assert lookup["found"] is same_dex
+    assert lookup["other_dex_cards"] == ([] if same_dex else [{
+        "pair_name": pair["name"], "buy_ex": card["buyEx"], "sell_ex": card["sellEx"],
+        "buy_dex": expected_dex if buy_hl else None, "sell_dex": None if buy_hl else expected_dex,
+        "open_spread_pct": 1.2, "close_spread_pct": -0.2, "status": False,
+    }])
+    if same_dex:
+        return
     response = client.post("/api/astro/instrument/card/update", json={"route": selected, "open_spread_pct": 1, "close_spread_pct": 0})
     assert response.status_code == 404
     assert not remote.updated
+
+
+def test_lookup_keeps_current_card_and_all_other_dex_cards_from_one_read(connected, monkeypatch):
+    client, remote, app = connected
+    selected, pair = _hyperliquid_route(client, app, monkeypatch, True)
+    remote.pairs = [pair, {**pair, "aHlDex": "xyz"}, {**pair, "aHlDex": "abc", "buyEx": "gc-hl"},
+                    {**pair, "aHlDex": "xyz", "name": "ETH"},
+                    {**pair, "aHlDex": "xyz", "type": "SF"},
+                    {**pair, "aHlDex": "xyz", "sellEx": "aster"}]
+    lookup = client.post("/api/astro/instrument/card/lookup", json=selected).json()
+    assert lookup["found"] is True
+    assert lookup["count"] == 1
+    assert [card["buy_dex"] for card in lookup["other_dex_cards"]] == ["xyz", "abc"]
+    assert remote.reads == 1

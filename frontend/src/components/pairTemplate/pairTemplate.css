@@ -3,5 +3,6 @@
 .pair-template-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
 .pair-template-grid label { display: block; margin-bottom: 8px; }
 .pair-template-selected { border: 2px solid #1677ff; }
+.pair-template-dex-warning { margin: 8px 0; }
 .pair-template-backtest { border-top: 1px solid #e2e8f0; padding: 8px 0; }
 @media (max-width: 1000px) { .pair-template-grid { grid-template-columns: 1fr; } }

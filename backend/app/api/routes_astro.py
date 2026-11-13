@@ -34,7 +34,7 @@ from app.models.pair_spread import normalize_pair_spread_symbol
 from app.models.settings import AstroCardSettings, FeeSettings, RiskSettings
 from app.services.astro_client import AstroClientError, AstroSdkClient
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig, position_to_pct
-from app.services.astro_alerts import _same_route
+from app.services.astro_alerts import _same_exchange_route, _same_route
 from app.services.arb_mvp_client import ArbMvpClient
 from app.services.arb_mvp_planner import ArbMvpPlanner
 from app.services.astro_preadd import AstroPreaddService
@@ -750,18 +750,37 @@ async def _instrument_card_plan(request: Request, route: AstroInstrumentRouteReq
     return opportunity, plan.pair, variants or [plan.pair]
 
 
-async def _matching_instrument_cards(request: Request, variants: list[dict]) -> list[dict]:
+async def _list_instrument_cards(request: Request) -> list[dict]:
     try:
-        pairs = await _astro_client(request).list_pairs()
+        return await _astro_client(request).list_pairs()
     except AstroClientError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+async def _matching_instrument_cards(request: Request, variants: list[dict]) -> list[dict]:
+    pairs = await _list_instrument_cards(request)
     return [pair for pair in pairs if any(_same_route(pair, variant) for variant in variants)]
 
 
 @router.post("/instrument/card/lookup")
 async def lookup_astro_instrument_card(route: AstroInstrumentRouteRequest, request: Request) -> dict:
     _, _, variants = await _instrument_card_plan(request, route)
-    pairs = await _matching_instrument_cards(request, variants)
+    all_pairs = await _list_instrument_cards(request)
+    pairs = [pair for pair in all_pairs if any(_same_route(pair, variant) for variant in variants)]
+    other_dex_cards = [
+        {
+            "pair_name": card.get("name"), "buy_ex": card.get("buyEx"), "sell_ex": card.get("sellEx"),
+            "buy_dex": (card.get("aEffectiveHlDex") or card.get("aHlDex") or "main")
+                       if card.get("buyEx") in {"hl", "gc-hl"} else None,
+            "sell_dex": (card.get("bEffectiveHlDex") or card.get("bHlDex") or "main")
+                        if card.get("sellEx") in {"hl", "gc-hl"} else None,
+            "open_spread_pct": position_to_pct(card["openPosition"], card["type"]),
+            "close_spread_pct": position_to_pct(card["closePosition"], card["type"]),
+            "status": card.get("status"),
+        }
+        for card in all_pairs
+        if any(_same_exchange_route(card, variant) and not _same_route(card, variant) for variant in variants)
+    ]
     pair = pairs[0] if len(pairs) == 1 else None
     return {
         "found": bool(pairs), "count": len(pairs),
@@ -772,6 +791,7 @@ async def lookup_astro_instrument_card(route: AstroInstrumentRouteRequest, reque
         "close_position": str(pair["closePosition"]) if pair else None,
         "open_spread_pct": position_to_pct(pair["openPosition"], pair["type"]) if pair else None,
         "close_spread_pct": position_to_pct(pair["closePosition"], pair["type"]) if pair else None,
+        "other_dex_cards": other_dex_cards,
     }
 
 

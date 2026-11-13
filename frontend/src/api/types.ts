@@ -1420,6 +1420,17 @@ export interface AstroInstrumentRouteRequest {
   sell_market_type: MarketType;
 }
 
+export interface AstroOtherDexCard {
+  pair_name: string;
+  buy_ex: string;
+  sell_ex: string;
+  buy_dex: string | null;
+  sell_dex: string | null;
+  open_spread_pct: number | null;
+  close_spread_pct: number | null;
+  status: boolean | null;
+}
+
 export interface AstroCardLookup {
   found: boolean;
   count: number;
@@ -1430,6 +1441,7 @@ export interface AstroCardLookup {
   close_position: string | null;
   open_spread_pct: number | null;
   close_spread_pct: number | null;
+  other_dex_cards?: AstroOtherDexCard[];
 }
 
 export interface AstroFieldAssumption {

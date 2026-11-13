@@ -36,6 +36,50 @@ beforeEach(() => {
 });
 
 describe("PairTemplateCard", () => {
+  it.each([
+    { hlLeg: "leg1", reversed: false }, { hlLeg: "leg2", reversed: false },
+    { hlLeg: "leg1", reversed: true }, { hlLeg: "leg2", reversed: true }
+  ] as const)("warns about other DEX cards and switches the correct $hlLeg (reversed=$reversed)", async ({ hlLeg, reversed }) => {
+    const result = fixture();
+    result[hlLeg] = { ...result[hlLeg], exchange: "hyperliquid", dex: "para" };
+    result.current![hlLeg] = { ...result.current![hlLeg], exchange: "hyperliquid", dex: "para", raw_symbol: "para:BTC" };
+    if (reversed) result.points = result.points.map((point) => ({ ...point, spread_pct: -point.spread_pct }));
+    const route = templateRoute(result, reversed ? "long2_short1" : "long1_short2")!;
+    const buyHl = route.buy_exchange === "hyperliquid";
+    vi.mocked(lookupInstrumentAstroCard).mockResolvedValue({ ...existing, found: false, count: 0, pair_name: null,
+      other_dex_cards: ["xyz", "main"].map((dex) => ({ pair_name: "BTC", buy_ex: buyHl ? "gc-hl" : route.buy_exchange,
+        sell_ex: buyHl ? route.sell_exchange : "hl", buy_dex: buyHl ? dex : null, sell_dex: buyHl ? null : dex,
+        open_spread_pct: 1.2, close_spread_pct: 0.3, status: true })) });
+    const onSwitchDex = vi.fn();
+    render(<PairTemplateCard result={result} onLinesChange={vi.fn()} onSwitchDex={onSwitchDex} />);
+    const warning = await screen.findByText("Astro 已有卡片 BTC 使用 HL xyz（开 1.20% / 平 0.30%），当前查询的是 HL para，价差可能不同");
+    expect(warning.closest(".ant-alert-warning")).toBeTruthy();
+    expect(button("修改卡片").hasAttribute("disabled")).toBe(true);
+    fireEvent.click(button("修改卡片"));
+    expect(updateInstrumentAstroCard).not.toHaveBeenCalled();
+    fireEvent.click(button("切换到 xyz 查询"));
+    expect(onSwitchDex).toHaveBeenLastCalledWith({ [hlLeg]: "xyz" });
+    fireEvent.click(button("切换到 main 查询"));
+    expect(onSwitchDex).toHaveBeenLastCalledWith({ [hlLeg]: "main" });
+  });
+  it("shows both HL legs and maps both DEXes back to page order", async () => {
+    const result = fixture();
+    for (const leg of ["leg1", "leg2"] as const) {
+      result[leg] = { ...result[leg], exchange: "hyperliquid", dex: "para" };
+      result.current![leg] = { ...result.current![leg], exchange: "hyperliquid", dex: "para", raw_symbol: "para:BTC" };
+    }
+    result.points = result.points.map((point) => ({ ...point, spread_pct: -point.spread_pct }));
+    vi.mocked(lookupInstrumentAstroCard).mockResolvedValue({ ...existing, other_dex_cards: [{
+      pair_name: "BTC", buy_ex: "hl", sell_ex: "gc-hl", buy_dex: "xyz", sell_dex: "main",
+      open_spread_pct: 1.2, close_spread_pct: null, status: true
+    }] });
+    const onSwitchDex = vi.fn();
+    render(<PairTemplateCard result={result} onLinesChange={vi.fn()} onSwitchDex={onSwitchDex} />);
+    await screen.findByText("Astro 已有卡片 BTC 使用 HL 买 xyz / 卖 main（开 1.20% / 平 —），当前查询的是 HL 买 para / 卖 para，价差可能不同");
+    fireEvent.click(button("切换到 买 xyz / 卖 main 查询"));
+    expect(onSwitchDex).toHaveBeenCalledWith({ leg1: "main", leg2: "xyz" });
+    expect(button("修改卡片").hasAttribute("disabled")).toBe(false);
+  });
   it("renders three templates, looks up the route and sends chart lines", async () => {
     const onLinesChange = vi.fn();
     render(<PairTemplateCard result={fixture()} onLinesChange={onLinesChange} />);

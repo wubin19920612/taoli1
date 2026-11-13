@@ -1,4 +1,4 @@
-import { PairTemplateCard } from "../components/pairTemplate/PairTemplateCard";
+import { PairTemplateCard, type TemplateDexSelection } from "../components/pairTemplate/PairTemplateCard";
 import type { TemplateLines } from "../components/pairTemplate/recommend";
 import { thresholdMetric } from "../components/pairChartV2/data";
 import { redirectToLogin } from "../api/auth";
@@ -5149,6 +5149,21 @@ export function PairMonitorPage() {
     showPremiumCompare
   ]);
 
+  const switchTemplateDex = useCallback((dexes: TemplateDexSelection) => {
+    if (!result || loading) return;
+    const values = pairFormFromResult(result);
+    for (const leg of ["leg1", "leg2"] as const) {
+      if (dexes[leg] === undefined || !isHyperliquidFuture(values[`${leg}_exchange`], values[`${leg}_market_type`])) continue;
+      values[`${leg}_dex`] = dexes[leg] === "main" ? HYPERLIQUID_MAIN_DEX : dexes[leg]!;
+      // A prefix in the old symbol would override the newly selected DEX during normalization.
+      values[`${leg}_symbol`] = values[`${leg}_symbol`].split(":").pop()!;
+    }
+    const symbolMode = pairSymbolModeFromValues(values);
+    form.setFieldsValue(values);
+    setPairSymbolMode(symbolMode);
+    void runQuery({ values, symbolMode });
+  }, [form, loading, result, runQuery]);
+
   const runQueryRef = useRef(runQuery);
   useEffect(() => {
     runQueryRef.current = runQuery;
@@ -6032,7 +6047,8 @@ export function PairMonitorPage() {
             }
           />
         </section>
-        {result ? <PairTemplateCard key={JSON.stringify([result.leg1, result.leg2, result.leg2_multiplier])} result={result} onLinesChange={setTemplateLines} /> : null}
+        {result ? <PairTemplateCard key={JSON.stringify([result.leg1, result.leg2, result.leg2_multiplier])} result={result}
+          onLinesChange={setTemplateLines} onSwitchDex={switchTemplateDex} switchDexDisabled={loading} /> : null}
         <div className="pair-spread-context">
           <span>周期 {intervalLabel(result ? resultIntervalSeconds(result) : intervalSeconds)}</span>
           <span>{result ? `${dataRangeLabel(result, hours)} · ${fullTime(result.observed_at)}` : durationLabel(hours)}</span>
