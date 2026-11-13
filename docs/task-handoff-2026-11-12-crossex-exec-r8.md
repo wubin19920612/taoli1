@@ -3007,3 +3007,82 @@ Python 3.10 fill_sim:     Ran 158 tests in 31.972s — OK
 仅使用 Windows 原生 Python、离线账户夹具、本地 SQLite 与回环接口。按本轮明确约束，没有运行 WSL，没有访问服务器、真实账户或交易接口，没有备份线上数据库或部署；线上版本未核实。原始测试日志保留在 `C:\Users\wubin\AppData\Local\Temp\crossex-r26-msx_k0ly`，工作树 `output/crossex-r26-logdir.txt` 为被忽略的本地路径指针，不入库。
 
 本轮按当前协作约束未委派代理；审计为源码自审、Git/AST 范围核验及本地测试，不声称独立终审或生产验收。推送固定 `origin codex/crossex-exec-r8`，只做普通快进推送。下一任务先读本节、任务书和验收 JSON；独立终审、服务器/影子验收或其他主要模块另开任务，服务器访问仍需另行授权。
+
+
+<a id="round27"></a>
+
+## 第二十七轮（2026-11-13，基线统计与账户刷新）
+
+### 范围与提交
+
+按 [第二十七轮任务书](crossex-exec-round27-2026-11-13.md) 实施，仅涉及 crossex_exec 基线采样、窗口统计和存储。固定工作树 `C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec-r8`，分支 `codex/crossex-exec-r8`，起始 HEAD `f34576a`，工作区干净、比远端领先任务书提交一个。验收代码提交 `9500a70f841e8557739c06a3bec04d2dd34b3739`。
+
+| 提交 | 内容 |
+|---|---|
+| `95c7d5f` | 测试先行：冻结旧 Baseline，复现账户刷新/关闭在统计期间超时 |
+| `3c08e6d` | 增量窗口、DB 变更版本、分批持久化、关闭和发布校验 |
+| `a30ca23` | 缓存收紧为 48 MiB，避免扫描大于缓存时反复淘汰全部窗口 |
+| `24a6bbb` | 独立只读快照、精确 MAD 选择、关闭后不再触碰已关闭连接及补充对拍 |
+| `9500a70` | 显式计入统计字符串占用，补充极长 Decimal 文本的内存边界回归 |
+
+最终交接和验收 JSON 独立提交；文档提交号与普通推送回执见最终报告。目标固定 `origin codex/crossex-exec-r8`，不 force push、不 amend、不 reset，不包含其他任务文件。
+
+### 改法与业务边界
+
+- `Engine.refresh_baselines` 不再持 `_lifecycle_lock` 包住整轮工作；该锁原本与 `store.lock` 是同一把锁。`refresh_accounts`、下单、发送和后台 worker 调度原样保留。
+- `Baseline._record_states` 每批处理 64 个 pair；文件 SQLite 使用单独的只读连接和 512 KiB 页缓存，每批结束释放 WAL 读快照，逐 pair 解码最多 721 个样本。中位数、MAD、缓存编解码都在账户共享锁外计算。写样本每批最多 64 条、写状态每批最多 64 条、清理过期样本每批最多 128 条；跨批释放共享锁。
+- `baseline_revision` 的 INSERT/UPDATE/DELETE 触发器使重复 bucket、补写、删除、原始 SQL 和其他连接写入都能被检测；历史库升级只增加小表/触发器，不扫描或装载全部旧样本。正常追加只读新 bucket；回溯时间、补写、编辑、缓存未命中都回到 DB 的精确窗口。未提交事务里的观察不进缓存，避免回滚后版本号复用污染缓存。发布时在事务内再次比较版本，冲突最多重试三次，仍冲突则拒绝发布。
+- 常驻窗口仅保存紧凑 double 时间戳与原始 Decimal 文本，bps 不转 float、不量化。缓存满后保留已接纳的窗口，其余 pair 逐个读 DB；空窗口和移除的 base 释放额度。缓存不是持久化事实，重启后直接从 DB 恢复。
+- 统计仍使用原 Decimal 中位数。MAD 在已排序价格差的两个单调距离序列中选择中间值，再按原 bucket 顺序恢复相等值的 Decimal 精度，省去第二次完整排序；包括偶数中位数舍入后落到中间区间外的情况。反向比例仍逐观测执行原变换，再取中位数/MAD；结构性锁存仍按正向 unordered pair 保存。
+- 保留原规则：6h 时间窗口两端包含，因而边界可有 **721 条**（任务书的 720 是规模近似）；ready 同时要求 ≥300 条、跨度 ≥10800s、最新样本年龄在 0–90s；结构阈值仍为 `abs(center) >= 80` 或 `MAD >= 40`，重查仍为 600s，缺历史不清锁存，亏损冷却不变。
+- 新样本/分批状态写入前撤销参考报价，整轮完成后才发布本轮捕获的完整报价；不会把旧报价与部分新统计混用。采样失败、计算失败或采样/计算完成时整轮年龄超过 20s，参考报价保持为空。刷新期间准入可能因缺参考报价拒绝，账户刷新和接口可继续运行。后台旧轮次也不能覆盖期间按需检查发布的较新窗口。
+- `active_transaction` 在同一 Store 锁内先检查 `_closed`，再进入 SQLite 事务；所有发布/清理都受此门禁保护。`close()` 不等待整轮统计，关闭后的后台结果不落库，采样中关闭并释放数据库连接也不会再访问该连接。
+
+### 内存上界
+
+缓存有 **48 MiB（50,331,648 字节）计费硬上限**与 **8,192 项**双重上限，每项按 payload + 4,096 字节元数据余量 + 4×key 长度 + 4×全部统计字符串长度计费。单项 payload 上限 128 KiB，超限或非规范文本直接使用 DB 路径；没有几百万个 Python tuple/Decimal 的常驻列表。短期工作集限定为每次一个 ≤721 行窗口、每批 ≤64 个统计结果、≤128 条清理，以及一份 512 KiB 只读 SQLite 页缓存；这些短期对象另计，不将缓存限额声称为整个进程 RSS 的硬上限。
+
+按任务书 `6899×720 = 4,967,280` 个样本，假设每个 bps 文本 32 字符：全部驻留的紧凑 payload 约 `4,967,280×(8+32+1) = 194.2 MiB`，加每 pair 的保守计费约 **223.7 MiB**（另按两个统计字符串各 32 字符计费）。最终实现不会全部驻留，超过 48 MiB 的部分直接从 DB 读取。基准轮末缓存 1,814–1,815 个窗口、三轮结束采样最大计费 **47.9921 MiB**；独立基准进程峰值 RSS **82.49 MiB**，起始 RSS 见验收 JSON。相对该独立基准起点的增量约 59 MiB；线上原进程约 100MB 是任务书提供的规模，不能把本机结果作为线上 Linux RSS 保证。
+
+仓库 service 的 `MemoryMax=192M` 未改，不依靠提高服务限额交付。缓存预算之外的既有账户/市场/API 工作集和 Linux/cgroup 峰值仍需后续获授权的影子实机验收。
+
+### 合成数据每轮前后对照
+
+同一本机 Windows Python 3.12.10，467 个 base、7,005 个 pair、初始 **6,164,400 行**（每 pair 880 条），每轮追加一条，6h 活动窗口最多 721 条。seed、旧版、新版分别独立进程运行；旧版从本地 `f34576a` 加载原 baseline/storage/public_store，并恢复旧 Engine 的整轮持锁方式。最终三轮对照连续执行，之前不同缓存方案的探针不作为交付指标。
+
+| 轮次 | 旧版 wall | 新版 wall | 旧版最长持锁 | 新版最长持锁 |
+|---|---:|---:|---:|---:|
+| 1，首次加载 | 9.110s | 8.998s | 9.110s | 226.6ms |
+| 2 | 9.516s | 8.399s | 9.516s | 51.4ms |
+| 3 | 9.585s | 8.229s | 9.585s | 51.8ms |
+
+热身后均值 **9.551s → 8.314s，下降约 13.0%**；首次加载单列，不将它混入热轮均值。三轮全部 pair 的完整 `baseline_status + baseline_quotes` SHA256 逐轮一致；校验包含 Decimal 字符串、count、时间、ready、blocked、checked_at 等字段。统计计算/只读窗口阻塞的并发测试要求真实 `Engine.refresh_accounts` 在 750ms 内完成，另验证 Store 读和 close 的同一时限。测得的锁时长包含 SQLite 提交/检查点 I/O，不是硬实时保证；未测服务器、真实网络或巨量过期积压的整轮耗时。
+
+复现脚本：`python -m tools.crossex_exec.benchmark_baseline --mode seed --directory <新目录>`，再分别运行同目录 `--mode before`、`--mode after`。默认即上述完整规模，可用 `--bases` 缩放；全部输入合成，不读生产库或凭据。
+
+### 回归与审计
+
+新增 **23 项**回归，覆盖大窗口并发、只读查询阻塞、DB 变更/版本冲突、事务回滚、缓存字节/条目上限、极长 Decimal 统计文本与扫描抖动、重启恢复、端点/时钟回退、重复 bucket、反向比值、报价失效和关闭竞态。另含 150 组固定随机种子的不同样本数、精度和舍入方式 MAD 对拍，确保与旧稳定排序的 Decimal 文本一致。
+
+相对 `f34576a`，原有 **124 个测试及 fill_sim 文件**对象全部未变，无删测/跳过/放宽；AST 审计确认 Engine 仅修改 `refresh_baselines`。`limits.py`、`execution.py`、`transport.py`、`adapters.py`、`admission.py`、`accounts.py`、`background.py`、`policy.py` 和 service 模板均未改。变化 Python 文件通过 3.10 语法解析。
+
+完整命令未加筛选：`python -m unittest discover -s tools/crossex_exec/tests -v` 与 `python -m unittest discover -s tools/fill_sim/tests -v`。3.12.10 使用本机安装；3.10.20 使用任务书指定解释器。
+
+```text
+Python 3.12 crossex_exec: Ran 794 tests in 215.718s — OK
+Python 3.12 fill_sim: Ran 158 tests in 30.627s — OK
+Python 3.10 crossex_exec: Ran 794 tests in 234.792s — OK
+Python 3.10 fill_sim: Ran 158 tests in 32.350s — OK
+```
+
+四次退出码均为 0，无 skip。两个解释器的 INVARIANTS 与 PROGRAM_INVARIANTS 均完整通过 `20261111 / 20261112 / 20261113` 三种子；每个 INVARIANTS 种子 2712 轮（2400 随机轮），十项不变量各检查 2712 次；每个 PROGRAM_INVARIANTS 种子完成 12 个场景。
+
+完整命令、解释器、退出码、原始日志 SHA256、模拟器输出、范围审计和基准数据见 [第二十七轮验收 JSON](crossex-exec-r27-validation-2026-11-13.json)。日志按 subprocess 二进制保存，目录 `C:\Users\wubin\AppData\Local\Temp\crossex-r27-uwf13dez`；中间版本的全量结果不代替以上最终代码验收。
+
+### 线上状态与下一步
+
+本轮只使用 Windows 原生 Python、离线账户夹具、本地 SQLite 与回环测试，未运行 WSL，未访问服务器、真实账户或交易接口；没有线上备份、部署或健康检查。任务书提供的影子版本/现象未在本轮重新核验。
+
+没有修改其他任务文件；原始合成库、性能迭代、审计 JSON 和日志指针保留在被忽略的 `output/round27-*` 下，未提交数据库、临时运行脚本或凭据。开始时没有已有 WIP/未跟踪文件需要清理。本轮按当前协作限制未委派代理，验证为源码自审、Git/AST 范围检查和本地自动测试，不声称独立终审或线上验收。
+
+下一任务先读本节、任务书和验收 JSON。独立终审或获授权的服务器影子验收另开任务，检查实际 RSS/cgroup、冷启动、账户快照时效、SQLite I/O 与持续运行成本；不得把本轮推送解释为部署或开实盘授权。

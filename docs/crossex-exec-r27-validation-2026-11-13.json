@@ -1,0 +1,312 @@
+{
+  "round": 27,
+  "date": "2026-11-13",
+  "branch": "codex/crossex-exec-r8",
+  "base": "f34576a",
+  "tested_commit": "9500a70f841e8557739c06a3bec04d2dd34b3739",
+  "code_commits": [
+    "95c7d5f4aeb352472d98509bf35b608590fd16ab test(crossex-exec): reproduce baseline refresh lock starvation and freeze oracle",
+    "3c08e6d20391efa23419eb1238d1f5813098ace6 fix(crossex-exec): bound incremental baseline windows and release refresh locks",
+    "a30ca23c010e75fe1ddd07ace6eb52c0d556f99a fix(crossex-exec): cap baseline cache at 48 MiB without scan thrashing",
+    "24a6bbbc926f5202ebe2beaf3d2f5c9cbbd0718a perf(crossex-exec): read bounded snapshots and select exact median deviations",
+    "9500a70f841e8557739c06a3bec04d2dd34b3739 fix(crossex-exec): include Decimal result text in the cache budget"
+  ],
+  "full_validation": {
+    "head": "9500a70f841e8557739c06a3bec04d2dd34b3739",
+    "runs": [
+      {
+        "python": "3.12",
+        "executable": "C:\\Users\\wubin\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+        "suite": "crossex_exec",
+        "command": [
+          "C:\\Users\\wubin\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tools/crossex_exec/tests",
+          "-v"
+        ],
+        "exit_code": 0,
+        "wall_seconds": 216.72267179982737,
+        "summary": [
+          "Ran 794 tests in 215.718s"
+        ],
+        "terminal": [
+          "OK"
+        ],
+        "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r27-uwf13dez\\3.12-crossex_exec.log",
+        "sha256": "bf2f830c94ceca1ca0c048a2373b52fe507b4132a7497e53cf96fb9a597bef3f",
+        "simulator_lines": [
+          "INVARIANTS seed=20261111 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 35, '1b': 80, '1c': 25, '1d': 104, '2': 94, '3': 115, '4': 94, '5': 600, '6': 23, '7': 363} coverage={'account_failures': 151, 'baseline_admission': 94, 'cooldown_active': 167, 'db_failures': 22, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 162, 'halted': 362, 'halting_retry': 1, 'intent_write_abort': 21, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 94, 'opened_pairs': 47, 'partial_fill': 27, 'position_failures': 137, 'position_read': 4071, 'query': 4284, 'query_failures': 1429, 'recovery_obligation': 23, 'reduce': 115, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 722, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'skip_baseline_not_flat': 75, 'skip_book_skew': 28, 'skip_book_stale': 112, 'skip_funding_diff': 56, 'skip_not_single_venue_outlier': 129, 'skip_size_too_small': 1, 'skip_too_few_venues': 26, 'skip_volume_too_low': 1, 'timeout_ack': 28, 'timeout_unknown': 21, 'zero_fill': 20}",
+          "INVARIANTS seed=20261112 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 27, '1b': 76, '1c': 13, '1d': 97, '2': 88, '3': 103, '4': 88, '5': 600, '6': 30, '7': 388} coverage={'account_failures': 116, 'baseline_admission': 88, 'cooldown_active': 24, 'db_failures': 16, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 152, 'halted': 387, 'halting_retry': 1, 'intent_write_abort': 15, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 88, 'opened_pairs': 44, 'partial_fill': 24, 'position_failures': 139, 'position_read': 4085, 'query': 4963, 'query_failures': 634, 'recovery_obligation': 30, 'reduce': 103, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 722, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'skip_baseline_not_flat': 65, 'skip_book_skew': 20, 'skip_book_stale': 86, 'skip_funding_diff': 91, 'skip_not_single_venue_outlier': 153, 'skip_size_too_small': 1, 'skip_too_few_venues': 46, 'skip_volume_too_low': 1, 'timeout_ack': 22, 'timeout_unknown': 34, 'zero_fill': 15}",
+          "INVARIANTS seed=20261113 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 37, '1b': 98, '1c': 27, '1d': 126, '2': 114, '3': 135, '4': 114, '5': 600, '6': 31, '7': 405} coverage={'account_failures': 134, 'baseline_admission': 114, 'cooldown_active': 158, 'db_failures': 20, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 202, 'halted': 404, 'halting_retry': 1, 'intent_write_abort': 20, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 114, 'opened_pairs': 57, 'partial_fill': 27, 'position_failures': 141, 'position_read': 4069, 'query': 5509, 'query_failures': 636, 'recovery_obligation': 31, 'reduce': 135, 'restarts': 114, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 722, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'skip_baseline_not_flat': 43, 'skip_book_skew': 28, 'skip_book_stale': 73, 'skip_funding_diff': 68, 'skip_not_single_venue_outlier': 132, 'skip_size_too_small': 1, 'skip_too_few_venues': 22, 'skip_volume_too_low': 1, 'timeout_ack': 39, 'timeout_unknown': 37, 'zero_fill': 20}",
+          "PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261111}",
+          "PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261112}",
+          "PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261113}"
+        ]
+      },
+      {
+        "python": "3.12",
+        "executable": "C:\\Users\\wubin\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+        "suite": "fill_sim",
+        "command": [
+          "C:\\Users\\wubin\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tools/fill_sim/tests",
+          "-v"
+        ],
+        "exit_code": 0,
+        "wall_seconds": 31.390875299926847,
+        "summary": [
+          "Ran 158 tests in 30.627s"
+        ],
+        "terminal": [
+          "OK"
+        ],
+        "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r27-uwf13dez\\3.12-fill_sim.log",
+        "sha256": "0bcdd37aefc12a6c53093c2f89da569488e551c0f8087bf1aa1537620ad33fee",
+        "simulator_lines": []
+      },
+      {
+        "python": "3.10",
+        "executable": "C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe",
+        "suite": "crossex_exec",
+        "command": [
+          "C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tools/crossex_exec/tests",
+          "-v"
+        ],
+        "exit_code": 0,
+        "wall_seconds": 236.04896640009247,
+        "summary": [
+          "Ran 794 tests in 234.792s"
+        ],
+        "terminal": [
+          "OK"
+        ],
+        "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r27-uwf13dez\\3.10-crossex_exec.log",
+        "sha256": "c2ded5936a142a844964f75ac44e40c2b1168392503d99d2a805802373eb5353",
+        "simulator_lines": [
+          "INVARIANTS seed=20261111 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 35, '1b': 80, '1c': 25, '1d': 104, '2': 94, '3': 115, '4': 94, '5': 600, '6': 23, '7': 363} coverage={'account_failures': 151, 'baseline_admission': 94, 'cooldown_active': 167, 'db_failures': 22, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 162, 'halted': 362, 'halting_retry': 1, 'intent_write_abort': 21, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 94, 'opened_pairs': 47, 'partial_fill': 27, 'position_failures': 137, 'position_read': 4071, 'query': 424, 'query_failures': 79, 'recovery_obligation': 23, 'reduce': 115, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 149, 'scheduled_adverse': 133, 'scheduled_database': 140, 'scheduled_detail': 148, 'scheduled_equity': 142, 'scheduled_midnight': 121, 'scheduled_none': 722, 'scheduled_partial': 164, 'scheduled_positions': 136, 'scheduled_restart': 142, 'scheduled_spread': 129, 'scheduled_stale': 150, 'scheduled_timeout_ack': 146, 'scheduled_timeout_unknown': 146, 'scheduled_zero': 144, 'skip_baseline_not_flat': 75, 'skip_book_skew': 28, 'skip_book_stale': 112, 'skip_funding_diff': 56, 'skip_not_single_venue_outlier': 129, 'skip_size_too_small': 1, 'skip_too_few_venues': 26, 'skip_volume_too_low': 1, 'timeout_ack': 28, 'timeout_unknown': 21, 'zero_fill': 20}",
+          "INVARIANTS seed=20261112 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 27, '1b': 76, '1c': 13, '1d': 97, '2': 88, '3': 103, '4': 88, '5': 600, '6': 30, '7': 388} coverage={'account_failures': 116, 'baseline_admission': 88, 'cooldown_active': 24, 'db_failures': 16, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 152, 'halted': 387, 'halting_retry': 1, 'intent_write_abort': 15, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 88, 'opened_pairs': 44, 'partial_fill': 24, 'position_failures': 139, 'position_read': 4085, 'query': 438, 'query_failures': 35, 'recovery_obligation': 30, 'reduce': 103, 'restarts': 142, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 116, 'scheduled_adverse': 135, 'scheduled_database': 149, 'scheduled_detail': 128, 'scheduled_equity': 138, 'scheduled_midnight': 134, 'scheduled_none': 722, 'scheduled_partial': 159, 'scheduled_positions': 138, 'scheduled_restart': 142, 'scheduled_spread': 184, 'scheduled_stale': 145, 'scheduled_timeout_ack': 139, 'scheduled_timeout_unknown': 149, 'scheduled_zero': 134, 'skip_baseline_not_flat': 65, 'skip_book_skew': 20, 'skip_book_stale': 86, 'skip_funding_diff': 91, 'skip_not_single_venue_outlier': 153, 'skip_size_too_small': 1, 'skip_too_few_venues': 46, 'skip_volume_too_low': 1, 'timeout_ack': 22, 'timeout_unknown': 34, 'zero_fill': 15}",
+          "INVARIANTS seed=20261113 rounds=2712 random_rounds=2400 N=1 checks={'1a': 2712, '1b': 2712, '1c': 2712, '1d': 2712, '2': 2712, '3': 2712, '4': 2712, '5': 2712, '6': 2712, '7': 2712} exercised={'1a': 37, '1b': 98, '1c': 27, '1d': 126, '2': 114, '3': 135, '4': 114, '5': 600, '6': 31, '7': 405} coverage={'account_failures': 134, 'baseline_admission': 114, 'cooldown_active': 158, 'db_failures': 20, 'external_catalog_changed': 1, 'external_catastrophe': 1, 'external_closed': 1, 'external_deposit': 2, 'external_invariant_checks': 96, 'external_loss': 1, 'external_margin': 1, 'external_violent_pnl': 4, 'external_withdrawal': 2, 'full_fill': 202, 'halted': 404, 'halting_retry': 1, 'intent_write_abort': 20, 'isolation_open_checks': 40, 'mapping_buy': 1, 'mapping_opened': 2, 'mapping_sell': 1, 'open': 114, 'opened_pairs': 57, 'partial_fill': 27, 'position_failures': 141, 'position_read': 4069, 'query': 517, 'query_failures': 31, 'recovery_obligation': 31, 'reduce': 135, 'restarts': 114, 'round14_invariant_checks': 48, 'runtime_config_changed': 1, 'runtime_config_new_open': 1, 'scheduled_account': 134, 'scheduled_adverse': 151, 'scheduled_database': 156, 'scheduled_detail': 134, 'scheduled_equity': 144, 'scheduled_midnight': 142, 'scheduled_none': 722, 'scheduled_partial': 152, 'scheduled_positions': 141, 'scheduled_restart': 114, 'scheduled_spread': 153, 'scheduled_stale': 145, 'scheduled_timeout_ack': 157, 'scheduled_timeout_unknown': 134, 'scheduled_zero': 133, 'skip_baseline_not_flat': 43, 'skip_book_skew': 28, 'skip_book_stale': 73, 'skip_funding_diff': 68, 'skip_not_single_venue_outlier': 132, 'skip_size_too_small': 1, 'skip_too_few_venues': 22, 'skip_volume_too_low': 1, 'timeout_ack': 39, 'timeout_unknown': 37, 'zero_fill': 20}",
+          "PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261111}",
+          "PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261112}",
+          "PROGRAM_INVARIANTS {\"coverage\": {\"full_fill\": 40, \"open\": 20, \"position_read\": 524, \"program_delayed_funding\": 8, \"program_episodes\": 12, \"program_explicit_rejection\": 4, \"program_external_random_trades\": 72, \"program_roundtrip\": 8, \"program_send_checks\": 40, \"query\": 40, \"reduce\": 20, \"restarts\": 20}, \"seed\": 20261113}"
+        ]
+      },
+      {
+        "python": "3.10",
+        "executable": "C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe",
+        "suite": "fill_sim",
+        "command": [
+          "C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tools/fill_sim/tests",
+          "-v"
+        ],
+        "exit_code": 0,
+        "wall_seconds": 33.261750099947676,
+        "summary": [
+          "Ran 158 tests in 32.350s"
+        ],
+        "terminal": [
+          "OK"
+        ],
+        "log": "C:\\Users\\wubin\\AppData\\Local\\Temp\\crossex-r27-uwf13dez\\3.10-fill_sim.log",
+        "sha256": "110e4ae0498fff35678084b90715fdcecb797be4cd12d5872cd74ed5292380b7",
+        "simulator_lines": []
+      }
+    ]
+  },
+  "scope_audit": {
+    "base": "f34576a",
+    "head": "9500a70f841e8557739c06a3bec04d2dd34b3739",
+    "engine_changed_methods": [
+      "refresh_baselines"
+    ],
+    "existing_test_and_fill_sim_files": 124,
+    "changed_existing_files": [],
+    "protected_unchanged": {
+      "limits.py": true,
+      "execution.py": true,
+      "transport.py": true,
+      "adapters.py": true,
+      "admission.py": true,
+      "accounts.py": true,
+      "background.py": true,
+      "policy.py": true,
+      "deploy/crossex-exec.service": true
+    },
+    "new_regressions": 23,
+    "python310_syntax": true
+  },
+  "memory": {
+    "cache_bytes": 50331648,
+    "max_entries": 8192,
+    "max_window_payload_bytes": 131072,
+    "window_sample_limit": 721,
+    "state_batch_limit": 64,
+    "sample_write_batch_limit": 64,
+    "retention_delete_batch_limit": 128,
+    "readonly_page_cache_kib": 512,
+    "accounting": "payload + 4096 + 4*len(key) + sum(4*len(statistic_text)); charge is not total RSS",
+    "all_6899x720_at_32_bps_characters_estimated_mib": 223.69956970214844,
+    "maximum_round_end_cache_mib": 47.992085456848145,
+    "measured_benchmark_peak_rss_mib": 82.48828125,
+    "service_template_memory_max": "192M unchanged; no live server measurement"
+  },
+  "benchmark": {
+    "before": {
+      "mode": "before",
+      "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+      "before_ref": "f34576a",
+      "pairs": 7005,
+      "initial_rows": 6164400,
+      "rounds": [
+        {
+          "round": 1,
+          "wall_seconds": 9.10982869984582,
+          "cpu_seconds": 8.75,
+          "max_lock_seconds": 9.109818099997938,
+          "lock_acquisitions": 1,
+          "rss_bytes": 32497664,
+          "peak_rss_bytes": 32497664,
+          "private_commit_bytes": 23482368,
+          "peak_private_commit_bytes": 23482368,
+          "state_sha256": "05bc85b403f7faf5a75168ebac50c9caa3450cf678f94ef45ee31fa9c769916d"
+        },
+        {
+          "round": 2,
+          "wall_seconds": 9.516483400017023,
+          "cpu_seconds": 9.296875,
+          "max_lock_seconds": 9.516471500042826,
+          "lock_acquisitions": 1,
+          "rss_bytes": 35151872,
+          "peak_rss_bytes": 39600128,
+          "private_commit_bytes": 25202688,
+          "peak_private_commit_bytes": 31203328,
+          "state_sha256": "9b800abf4ce820c4d9d59e1419f4d9f060e4c6e6f468e3b2c939a412dd4cd12c"
+        },
+        {
+          "round": 3,
+          "wall_seconds": 9.585055499803275,
+          "cpu_seconds": 9.375,
+          "max_lock_seconds": 9.585041200043634,
+          "lock_acquisitions": 1,
+          "rss_bytes": 35790848,
+          "peak_rss_bytes": 39751680,
+          "private_commit_bytes": 25833472,
+          "peak_private_commit_bytes": 31232000,
+          "state_sha256": "246ec1f3be7d23b48c345e66ffc89e9550cad334bc8b16a24c84be650032052a"
+        }
+      ],
+      "initial_memory": {
+        "rss_bytes": 24879104,
+        "peak_rss_bytes": 25001984,
+        "private_commit_bytes": 15036416,
+        "peak_private_commit_bytes": 15851520
+      }
+    },
+    "after": {
+      "mode": "after",
+      "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+      "before_ref": "f34576a",
+      "pairs": 7005,
+      "initial_rows": 6164400,
+      "rounds": [
+        {
+          "round": 1,
+          "wall_seconds": 8.998257800005376,
+          "cpu_seconds": 8.484375,
+          "max_lock_seconds": 0.22657439997419715,
+          "lock_acquisitions": 333,
+          "rss_bytes": 77017088,
+          "peak_rss_bytes": 77017088,
+          "private_commit_bytes": 67997696,
+          "peak_private_commit_bytes": 67997696,
+          "state_sha256": "05bc85b403f7faf5a75168ebac50c9caa3450cf678f94ef45ee31fa9c769916d",
+          "cache_charged_bytes": 50310824,
+          "cache_entries": 1815
+        },
+        {
+          "round": 2,
+          "wall_seconds": 8.39885519980453,
+          "cpu_seconds": 8.09375,
+          "max_lock_seconds": 0.05135730002075434,
+          "lock_acquisitions": 333,
+          "rss_bytes": 80687104,
+          "peak_rss_bytes": 86261760,
+          "private_commit_bytes": 70901760,
+          "peak_private_commit_bytes": 77496320,
+          "state_sha256": "9b800abf4ce820c4d9d59e1419f4d9f060e4c6e6f468e3b2c939a412dd4cd12c",
+          "cache_charged_bytes": 50323349,
+          "cache_entries": 1815
+        },
+        {
+          "round": 3,
+          "wall_seconds": 8.22877989988774,
+          "cpu_seconds": 7.90625,
+          "max_lock_seconds": 0.051767800003290176,
+          "lock_acquisitions": 333,
+          "rss_bytes": 81670144,
+          "peak_rss_bytes": 86495232,
+          "private_commit_bytes": 71950336,
+          "peak_private_commit_bytes": 77516800,
+          "state_sha256": "246ec1f3be7d23b48c345e66ffc89e9550cad334bc8b16a24c84be650032052a",
+          "cache_charged_bytes": 50308709,
+          "cache_entries": 1814
+        }
+      ],
+      "initial_memory": {
+        "rss_bytes": 25067520,
+        "peak_rss_bytes": 25067520,
+        "private_commit_bytes": 15269888,
+        "peak_private_commit_bytes": 15900672
+      }
+    },
+    "all_round_state_hashes_match": true,
+    "warm_mean_before_seconds": 9.550769449910149,
+    "warm_mean_after_seconds": 8.313817549846135,
+    "warm_reduction_percent": 12.951332419354456,
+    "artifact_directory": "C:\\Users\\wubin\\Desktop\\code\\codex\\taoli1\\.worktrees\\crossex-exec-r8\\output\\round27-delivery",
+    "limits": "Synthetic Windows-only benchmark; cold round separately reported; no production DB or network"
+  },
+  "production_file_sha256": {
+    "baseline.py": "3a015da4050e08c1f6aaa86e223fb81eed8e275e83960b93ee32b304187826e1",
+    "baseline_cache.py": "603709370a594bc994e4e6acc02d3cb96e3b0c9c0a4808c779e9bd61484d405c",
+    "storage.py": "e335e3b24b09e57eb70c67640ec57cebe159ffa3a84b486c0d26d6004e3a1b4c",
+    "public_store.py": "0a7aaa7fa4f297eb3f9513333abaabe9687e8a0acf275cec1090b1793ef92ef3",
+    "engine.py": "2cc03569101342a01c98e13dc1ef9fa8432576f3afcee6e6415dd5a003308024"
+  },
+  "test_first": {
+    "initial_test_commit": "95c7d5f",
+    "initial_tests": 6,
+    "initial_timeout_errors": 2,
+    "initial_log": "C:\\Users\\wubin\\Desktop\\code\\codex\\taoli1\\.worktrees\\crossex-exec-r8\\output\\round27-red.log",
+    "initial_log_sha256": "91753eb1d087dd328e13c46ac25291920c5a3fca2ffeb3c0ced13cb3b3a6ae14",
+    "new_final_regressions": 23,
+    "deterministic_mad_fuzz_cases": 150,
+    "final_budget_regression": "40000-digit Decimal statistic must be included in the byte charge"
+  },
+  "delivery": {
+    "push_target": "origin codex/crossex-exec-r8",
+    "push_receipt": "See final delivery response",
+    "server_access": false,
+    "wsl": false,
+    "deployment": false,
+    "live_orders": false,
+    "review": "Source self-review, Git/AST scope audit and local tests; no delegated independent review"
+  }
+}
