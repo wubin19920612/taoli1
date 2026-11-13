@@ -2578,3 +2578,87 @@ OK
 本轮仅在 Windows 离线夹具与本地回环接口上验证，没有 WSL、SSH、服务器查询、真实账户鉴权或真实交易，也没有线上数据库备份、部署或容器重启；线上版本未核实。日志目录为 `C:\Users\wubin\AppData\Local\Temp\crossex-r22-n10uad96`，测试临时 SQLite 由 fixture 清理，不提交整份日志或账户数据。
 
 Git 发布目标固定为 `origin` 的 `codex/crossex-exec-r8`，使用普通 `git push origin HEAD:refs/heads/codex/crossex-exec-r8`；本节与验收 JSON 随单独文档提交交付，推送回执和最终文档提交号以本任务最终报告为准。开始时没有其他 WIP，本轮保留已有任务书提交与全部历史交接，无 reset、clean、覆盖用户改动或 force push。后续任务先读本节、任务书和验收 JSON，再独立终审；服务器/影子验收需另开获准访问的任务，其他主要模块也另开任务。
+
+## 第二十三轮（2026-11-13，混仓资金费采样边界保守归属）
+
+### 范围、基线与小步提交
+
+按 [第二十三轮任务书](crossex-exec-round23-2026-11-13.md) 修复混仓结束采样间隔漏算程序资金费，并检查开始边界。工作树仍为 `C:\Users\wubin\Desktop\code\codex\taoli1\.worktrees\crossex-exec-r8`，分支 `codex/crossex-exec-r8`；开始 HEAD=`4df5c2e`、工作区干净，远端跟踪提交为 `e14796f`。`4df5c2e` 是已有任务书提交，保留并随本轮推送。最终代码/测试提交为 `3e477746ab1b4bd78e058cd389d7acdbb9442294`，后续仅追加本节和验收证据。
+
+| 提交 | 内容 |
+|---|---|
+| `c2ed973` | 红灯：任务书撤仓间隔 `−22` 复现；开始间隔亏损；结束间隔正负逐笔归属，两条路由均失败 |
+| `dc164e0` | 红灯及保护：账单延迟、文件 SQLite 重启、旧记录缺首个混仓采样点、稳定混仓内段及未知比例停开 |
+| `0e724fa` | 修复：持久化首个混仓采样点，采样间隔费用全额归程序，旧证据缺失不补造 |
+| `cc30c2e` | 红灯：首末混仓采样同一毫秒的程序费用仍被折减 |
+| `3e47774` | 修复：保守区间包含首末混仓采样所在毫秒，保持原干净结束端点停开规则 |
+
+### 复现、修法与验收边界
+
+新增 `tools/crossex_exec/tests/test_round23_funding.py`，使用真实 `ProgramWorld`、SQLite `:memory:` / 临时文件库及原网络隔离夹具，未修改模拟器或风险阈值。第一批 3 项测试实际失败 6 个子用例：结束间隔应为 `−22`，旧值为 `−3.333333333333333333333333333`；开始间隔应为 `−21`，旧值为 `+6.555555555555555555555555556`；结束间隔正负资金费应为 `−21`，旧值为 `+5.666666666666666666666666667`。补充持久化和旧格式检查后，7 项测试实际失败 9 个子用例。首轮修复后自审又补出两个同毫秒测试，4 个子用例先失败再修复。最终新增 9 项测试，新旧资金费专项共 14 项通过。
+
+唯一生产代码入口是 `tools/crossex_exec/program_funding.py`：
+
+- `observe_funding_ownership` 新区间保存 `first_mixed_ms`，保持首个混仓时刻不变；已有 `observed_ms` 只在混仓采样时更新，干净采样关闭区间时保留最后混仓时刻。状态格式为 version 2，原区间与 revision 绑定仍保留。
+- `allocate_funding` 对开始边界 `(from_ms, first_mixed_ms]` 和结束边界 `[observed_ms, to_ms)` 内每笔负资金费全额归程序；正资金费继续采用区间最小已观测程序比例，先逐笔归属再求和。稳定混仓内段仍采用原不利比例，不全局抬高历史费用。
+- 区间起点 `from_ms` 的原归属与 `prior_ids` 语义保留，任务书中该时刻混仓的 `−9` 仍按 1/9 计 `−1`。干净结束采样 `to_ms` 同毫秒非零账单仍保持原 `program_funding_attribution_unverifiable` 停开；首末混仓采样同毫秒的新费用改为保守全额计入。
+- 旧区间没有 `first_mixed_ms`、首末时刻顺序无效、比例不可信或原有未知成交条件存在时，不认证为零，不凭后续观测补造缺失历史，继续停开。真实账单完整性、独立累计计数、UTC 日界证明与 ownership revision 并发校验均沿用原路径。
+
+任务书原复现在两条路由均认证 `program_daily = program_funding_total = −22`，重复刷新三次仍保持日亏锁、`can_open=False`。同结果覆盖资金费账单延迟及真实文件库重启。开始/结束间隔同时包含收入与费用时，按各自不利方向归属，不能先抵销后分摊。未知比例、旧记录缺失及原干净结束同毫秒测试均保持停开。
+
+### 范围审计与线上状态
+
+与 `4df5c2e` 的 Git 对象比较确认，原有 100 个测试/夹具文件内容完全一致，仅新增本轮测试文件。`limits.py`、`engine.py`、`execution.py`、`transport.py`、`adapters.py`、`funding.py`、`program_accounting.py`、`ownership.py` 完全未改，哈希保存在验收 JSON。此次为自审，未委派代理，不称为独立终审。
+
+本轮仅在 Windows 离线夹具与本地回环接口运行；未使用 WSL，未访问服务器、真实账户或交易接口，没有线上数据库备份、部署、容器重启，线上版本未核实。日志位于 `C:\Users\wubin\AppData\Local\Temp\crossex-r23-tpxt4y5y`，SQLite 临时文件由测试 fixture 清理；仅提交代码、新增测试、此交接与验收 JSON，不提交整份日志或账户数据。
+
+残余边界：归属仍是采样估算，不能追溯从未观测的混仓；旧格式缺首个混仓采样点可能持续停开，需要独立证据和后续审阅，不得删历史、清锁或自动重基线绕过。下一任务先读本节、任务书及验收 JSON，再进行独立终审；生产/影子验收和其他主要模块须另开获准执行的任务。
+
+### 双版本全量原始汇总与交付
+
+固定代码提交 `3e477746ab1b4bd78e058cd389d7acdbb9442294`，两套解释器分别执行以下两条未筛选的 discover 全量命令；四次 unittest 退出码均为 0，无 skip：
+
+```text
+python -m unittest discover -s tools/crossex_exec/tests -v
+python -m unittest discover -s tools/fill_sim/tests -v
+```
+
+Python 3.12.10：`C:/Users/wubin/AppData/Local/Programs/Python/Python312/python.exe`。
+
+`delivery-3.12-crossex_exec.log` 原始汇总：
+
+```text
+Ran 694 tests in 213.325s
+
+OK
+```
+
+`delivery-3.12-fill_sim.log` 原始汇总：
+
+```text
+Ran 158 tests in 33.435s
+
+OK
+```
+
+Python 3.10.20：仍使用前几轮指定的 `C:/Users/wubin/AppData/Local/Temp/claude/1f5c892841cd1e82/125141d8-f3d5-4518-98a0-6a4761963215/scratchpad/uvpy/cpython-3.10-windows-x86_64-none/python.exe`。
+
+`delivery-3.10-crossex_exec.log` 原始汇总：
+
+```text
+Ran 694 tests in 226.266s
+
+OK
+```
+
+`delivery-3.10-fill_sim.log` 原始汇总：
+
+```text
+Ran 158 tests in 35.996s
+
+OK
+```
+
+两个版本均完整通过 `20261111/20261112/20261113` 的 INVARIANTS 和 PROGRAM_INVARIANTS。每个 INVARIANTS 种子 2712 轮，其中随机 2400 轮，十项不变量各检查 2712 次；每个 PROGRAM_INVARIANTS 种子 12 个程序生命周期。原始模拟器行、完整汇总正文、命令、解释器、日志 SHA256、红绿灯证据和静态比对均保存在 [crossex-exec-r23-validation-2026-11-13.json](crossex-exec-r23-validation-2026-11-13.json)。收集器首次仅匹配行首，遗漏了带 unittest verbose 前缀的模拟器行；随后从原始日志按标记完整提取并核对三个种子，未改写日志或重跑测试，收集器更正记录也保留在 JSON。
+
+本节与验收 JSON 单独作交付提交，普通推送目标为 `origin` 的 `codex/crossex-exec-r8`，推送回执及最终文档提交号以本任务最终报告为准。代码提交后仅新增文档和验收证据；开始时没有其他 WIP，既有任务书、全部旧测试和历史交接均保留，无 reset、clean、覆盖未知归属文件或 force push。本轮无待交付的未跟踪产物；临时原始日志留在上述 Temp 目录。
