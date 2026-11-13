@@ -57,6 +57,17 @@ class AutomaticOwnershipTests(PositionFixture, unittest.TestCase):
             with self.subTest(persisted=persisted), self.assertRaisesRegex(ValueError,'external_contract_forbidden'):
                 self.engine.check_order(order)
 
+    def test_startup_recovery_does_not_relabel_crashed_intent_as_external(self):
+        from unittest.mock import patch
+        order=dict(intent(),state='INTENT',filled='0',accounting_pending=True)
+        self.store.save_order(order)
+        self.http.responses['/api/v4/crossex/positions']=[unitree(order['instrument']['symbol'],margin_mode='CROSS')]
+        with patch.object(self.engine,'start_background'):
+            self.engine.startup()
+        self.assertTrue(self.store.meta('position_mismatch'))
+        self.assertFalse(self.engine.can_open())
+        self.assertFalse(self.engine.external.split(self.accounts.snapshot())['external_positions'])
+
     def test_unrelated_account_cash_and_missing_full_history_do_not_block_rebaseline(self):
         self.accounts.activity = lambda *_: (_ for _ in ()).throw(AssertionError('whole account history'))
         self.engine.limits.initialize(self.accounts.snapshot())
