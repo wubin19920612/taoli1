@@ -36,7 +36,10 @@ def setup_pair(a, b):
     store.set_all_markets([a, b])
     adapters = [Adapter(a), Adapter(b)]
     service = MarketValidationService(None, store, adapters)
-    service.registry = MarketIdentityRegistry([binding(a), binding(b)])
+    service.registry = MarketIdentityRegistry([
+        binding(row).model_copy(update={"valid_until": now + timedelta(days=60)})
+        for row in (a, b)
+    ])
     return service, a, b, adapters
 
 
