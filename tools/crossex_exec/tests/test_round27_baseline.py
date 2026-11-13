@@ -413,6 +413,16 @@ class BaselineTests(unittest.TestCase):
                 actual = module.median_deviation(values, sorted(values), center)
                 self.assertEqual(str(actual), str(expected))
 
+    def test_large_decimal_statistic_text_is_charged_to_the_cache_budget(self):
+        self.baseline._cache = WindowCache(64*1024)
+        key = pair_key('BTC', 'binance', 'bitget')
+        value = '1'*40000
+        for store in (self.store, self.old):
+            store.add_baseline_samples([(key, int(NOW//30), NOW, value)], NOW)
+        self.assertEqual(self.baseline.status('BTC', 'binance', 'bitget'),
+                         self.legacy.status('BTC', 'binance', 'bitget'))
+        self.assertTrue(self.baseline._cache.get(key) is None, 'over_budget_window_cached')
+
 
 if __name__ == '__main__':
     unittest.main()

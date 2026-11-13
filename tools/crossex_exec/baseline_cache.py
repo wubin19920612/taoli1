@@ -83,7 +83,8 @@ class WindowCache:
         payload = len(rows).to_bytes(2, 'little')+stamps+values
         # Conservatively charge key, entry, OrderedDict node, statistics, and
         # allocator overhead as well as the payload. The entry limit is separate.
-        charge = len(payload)+4096+4*len(key)
+        # Legacy Decimal result strings can be large even for a one-row window.
+        charge = len(payload)+4096+4*len(key)+sum(4*len(v) for v in stats.values() if isinstance(v, str))
         if charge > self.budget:
             return
         entry = Window(since, until, revision, payload, dict(stats), arithmetic_context(), charge)
