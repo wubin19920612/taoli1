@@ -1532,12 +1532,20 @@ class Engine:
                             for lock in sorted(FINAL_FLAT_LOCKS):
                                 self.stops.recovered(lock,'CLOSE_OBSERVATION_RECOVERED',
                                     dict(status,reason=lock,flatten_reason=reason))
+                            if self.store.meta('position_mismatch') or 'position_mismatch' in self.stops.reasons:
+                                # Keep collecting distinct observations while
+                                # HALTING; exiting now would strand the 3-read latch.
+                                self.reconcile_positions(dict(raw,captured_at=captured))
+                            if {'unhedged_position','repair_stopped'}.intersection(self.stops.reasons):
+                                for pair in self.store.iter_pairs(exclude_states=('SHADOW','SKIPPED')):
+                                    self.clear_repair_locks(pair)
                 except Exception:
                     status=dict(status,verified=False,program_flat=False,account_flat=False)
                     self.store.set_meta('flatten_status',status)
                     self.alert('flatten_snapshot_unavailable')
                     return status
-                if program_flat and self.store.meta('state')=='HALTING':
+                if (program_flat and self.store.meta('state')=='HALTING'
+                        and not self.store.meta('position_mismatch') and 'position_mismatch' not in self.stops.reasons):
                     self.store.set_meta('state','HALTED')
             return status
         finally:

@@ -43,7 +43,8 @@ class EquityAdmin:
             raise ValueError('local_orders_pending')
         locks=engine.stops.reasons if engine else store.meta('stop_locks',{})
         blockers=POSITION_LOCKS-FLATTEN_LOCKS if recover_flatten else POSITION_LOCKS
-        if store.meta('position_mismatch') or blockers.intersection(locks):
+        unknown_flatten_owner=any(set(locks.get(reason,()))-{'global'} for reason in FLATTEN_LOCKS)
+        if store.meta('position_mismatch') or blockers.intersection(locks) or unknown_flatten_owner:
             raise ValueError('position_or_order_lock')
         require_local_flat(store,engine.executor if engine else None)
 
