@@ -153,6 +153,7 @@ describe("AnnouncementsPage", () => {
       const putCall = vi.mocked(fetch).mock.calls.find((call) => String(call[0]).includes("/settings/announcements") && call[1]?.method === "PUT");
       expect(JSON.parse(String(putCall?.[1]?.body))).toMatchObject({
         other_alerts_enabled: true,
+        other_alerts_filter: "arbitrage_relevant",
         listing_delisting_alerts_enabled: true,
         launchpool_alerts_enabled: true,
         alert_exchanges: ["bybit"],
@@ -181,12 +182,52 @@ describe("AnnouncementsPage", () => {
         listing_delisting_alerts_enabled: true,
         launchpool_alerts_enabled: true,
         other_alerts_enabled: false,
+        other_alerts_filter: "arbitrage_relevant",
         bootstrap_alerts_enabled: false,
         alert_max_age_minutes: 30,
         event_reminders_enabled: true,
         event_reminder_minutes_before: 30
       });
     });
+  });
+
+  it.each(["all", "arbitrage_relevant"] as const)("loads, changes and reloads other filter from %s", async (initialFilter) => {
+    const baseFetch = vi.mocked(fetch).getMockImplementation()!;
+    let storedFilter: "all" | "arbitrage_relevant" = initialFilter;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const response = await baseFetch(input, init);
+      if (!String(input).includes("/settings/announcements")) return response;
+      if (init?.method === "PUT") {
+        storedFilter = JSON.parse(String(init.body)).other_alerts_filter;
+      }
+      return Response.json({ ...await response.json(), other_alerts_enabled: true, other_alerts_filter: storedFilter });
+    });
+    const label = (value: string) => value === "all" ? "全部其他公告" : "只推对套利有用的";
+    const view = render(<AnnouncementsPage />);
+    await screen.findByText("新币上架：WDCUSDT Bybit 永续合约");
+    await userEvent.click(screen.getByText("抓取与推送设置"));
+    expect(screen.getByText(label(initialFilter), { selector: ".ant-select-selection-item" })).toBeTruthy();
+    const nextFilter = initialFilter === "all" ? "arbitrage_relevant" : "all";
+    fireEvent.mouseDown(screen.getByLabelText("其他公告推送范围"));
+    await userEvent.click(await screen.findByText(label(nextFilter), { selector: ".ant-select-item-option-content" }));
+    await userEvent.click(screen.getByRole("button", { name: /保存公告监控/ }));
+    await waitFor(() => {
+      expect(storedFilter).toBe(nextFilter);
+      const putCall = vi.mocked(fetch).mock.calls.find(([input, init]) =>
+        String(input).includes("/settings/announcements") && init?.method === "PUT"
+      );
+      expect(JSON.parse(String(putCall?.[1]?.body))).toMatchObject({
+        other_alerts_enabled: true,
+        other_alerts_filter: nextFilter,
+        alert_exchanges: ["bybit"],
+        listing_delisting_alerts_enabled: true,
+        launchpool_alerts_enabled: true
+      });
+    });
+    view.unmount();
+    render(<AnnouncementsPage />);
+    await screen.findByText("新币上架：WDCUSDT Bybit 永续合约");
+    expect(await screen.findByText(label(nextFilter), { selector: ".ant-select-selection-item" })).toBeTruthy();
   });
 
   it("shows spot trading open separately from the notice's other stages", async () => {

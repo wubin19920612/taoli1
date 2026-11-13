@@ -3402,7 +3402,8 @@ def test_index_component_watchlist_endpoints_manage_monitored_symbols() -> None:
     assert repo.deleted_watch_ids == [created.json()["id"]]
 
 
-def test_announcement_settings_endpoint_round_trip() -> None:
+@pytest.mark.parametrize("filter_mode", [None, "all", "arbitrage_relevant"])
+def test_announcement_settings_endpoint_round_trip(filter_mode) -> None:
     app = create_app(settings=Settings(dashboard_totp_secret=TEST_TOTP_SECRET, dashboard_password="secret"))
     repo = FakeSettingsRepository(RiskSettings())
     app.state.settings_repo = repo
@@ -3418,6 +3419,7 @@ def test_announcement_settings_endpoint_round_trip() -> None:
             "alert_exchanges": ["BYBIT"],
             "launchpool_alerts_enabled": False,
             "other_alerts_enabled": True,
+            **({"other_alerts_filter": filter_mode} if filter_mode is not None else {}),
             "bootstrap_alerts_enabled": True,
             "event_reminders_enabled": True,
             "event_reminder_minutes_before": 45,
@@ -3433,6 +3435,7 @@ def test_announcement_settings_endpoint_round_trip() -> None:
     assert listed.json()["bootstrap_alerts_enabled"] is True
     assert listed.json()["launchpool_alerts_enabled"] is False
     assert listed.json()["other_alerts_enabled"] is True
+    assert listed.json()["other_alerts_filter"] == (filter_mode or "arbitrage_relevant")
     assert listed.json()["event_reminders_enabled"] is True
     assert listed.json()["event_reminder_minutes_before"] == 45
 

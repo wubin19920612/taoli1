@@ -30,6 +30,7 @@ const defaultAnnouncementSettings: AnnouncementSettings = {
   listing_delisting_alerts_enabled: true,
   launchpool_alerts_enabled: true,
   other_alerts_enabled: false,
+  other_alerts_filter: "arbitrage_relevant",
   bootstrap_alerts_enabled: false,
   event_reminders_enabled: true,
   event_reminder_minutes_before: 30
@@ -63,7 +64,9 @@ function normalizeAnnouncementSettings(values?: Partial<AnnouncementSettings>): 
     launchpool_alerts_enabled:
       values?.launchpool_alerts_enabled ?? defaultAnnouncementSettings.launchpool_alerts_enabled,
     other_alerts_enabled:
-      values?.other_alerts_enabled ?? defaultAnnouncementSettings.other_alerts_enabled
+      values?.other_alerts_enabled ?? defaultAnnouncementSettings.other_alerts_enabled,
+    other_alerts_filter:
+      values?.other_alerts_filter ?? defaultAnnouncementSettings.other_alerts_filter
   };
 }
 
@@ -662,6 +665,16 @@ export function AnnouncementsPage() {
                 </Form.Item>
                 <Form.Item label="其他公告飞书提醒" name="other_alerts_enabled" valuePropName="checked">
                   <Switch />
+                </Form.Item>
+                <Form.Item
+                  label="其他公告推送范围"
+                  name="other_alerts_filter"
+                  extra="默认只推充提、网络升级、费率、合约规格等套利相关公告，过滤活动、空投、奖励等内容；未推送的仍会记录。告警交易所白名单仍接收全部类型公告。"
+                >
+                  <Select options={[
+                    { label: "只推对套利有用的", value: "arbitrage_relevant" },
+                    { label: "全部其他公告", value: "all" }
+                  ]} />
                 </Form.Item>
                 <Form.Item label="首次启动也告警" name="bootstrap_alerts_enabled" valuePropName="checked">
                   <Switch />

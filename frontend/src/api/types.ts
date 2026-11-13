@@ -766,6 +766,7 @@ export interface AnnouncementSettings {
   listing_delisting_alerts_enabled: boolean;
   launchpool_alerts_enabled: boolean;
   other_alerts_enabled: boolean;
+  other_alerts_filter: "all" | "arbitrage_relevant";
   bootstrap_alerts_enabled: boolean;
   event_reminders_enabled: boolean;
   event_reminder_minutes_before: number;

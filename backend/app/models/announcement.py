@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator
@@ -162,6 +163,7 @@ class AnnouncementSettings(BaseModel):
     listing_delisting_alerts_enabled: bool = True
     launchpool_alerts_enabled: bool = True
     other_alerts_enabled: bool = False
+    other_alerts_filter: Literal["all", "arbitrage_relevant"] = "arbitrage_relevant"
     bootstrap_alerts_enabled: bool = False
     event_reminders_enabled: bool = True
     event_reminder_minutes_before: int = Field(default=30, ge=1, le=10_080)

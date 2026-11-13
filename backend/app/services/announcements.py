@@ -27,6 +27,7 @@ from app.runtime.supervisor import beat
 from app.services.announcement_localization import AnnouncementLocalizationService
 from app.services.announcement_polling import run_announcement_sources
 from app.services.announcement_public_pages import TelegramChannelParser
+from app.services.announcement_relevance import is_arbitrage_relevant_announcement
 
 AlertSender = Callable[[str], None | Awaitable[None]]
 SettingsLoader = Callable[[], Awaitable[AnnouncementSettings]]
@@ -2570,6 +2571,12 @@ class AnnouncementMonitor:
             should_alert_other = (
                 settings.other_alerts_enabled
                 and announcement.kind == AnnouncementKind.OTHER
+                and (
+                    settings.other_alerts_filter == "all"
+                    or is_arbitrage_relevant_announcement(
+                        announcement.title, announcement.title_zh, announcement.category,
+                    )
+                )
             )
             alert_status = (
                 "pending"

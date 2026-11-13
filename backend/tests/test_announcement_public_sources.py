@@ -75,7 +75,8 @@ async def test_official_channel_initial_history_muted_then_new_posts_alert_once(
         repo = AnnouncementRepository(db)
         sent: list[str] = []
         monitor = AnnouncementMonitor(repo, alert_sender=sent.append, now_fn=lambda: NOW)
-        settings = AnnouncementSettings(other_alerts_enabled=True)
+        # This source/dedup regression intentionally exercises unfiltered posts.
+        settings = AnnouncementSettings(other_alerts_enabled=True, other_alerts_filter="all")
         first = provider._parse_page(telegram_post("592", "Maintenance notice", "2026-09-28T07:00:00+00:00"))
         assert (await monitor.process(first, settings))[0].alert_status == "muted"
         fresh = provider._parse_page(telegram_post("593", "Weekly Update<br>New system features"))
