@@ -17,10 +17,21 @@ from auth_helpers import IsolatedSessionLookup, TEST_TOTP_SECRET, session_header
 
 
 TOKEN = "synthetic-live-exec-token"
-PATHS = ("summary", "positions", "trades", "stats")
+PATHS = ("summary", "positions", "trades", "stats", "remote-positions")
 CONTRACT = Path(__file__).resolve().parents[2] / "docs/live-exec-contract-2026-11-11.md"
 EXAMPLES = [json.loads(block) for block in re.findall(r"```json\s*(.*?)```", CONTRACT.read_text(encoding="utf-8"), re.S)]
 PAYLOADS = dict(zip(PATHS, (EXAMPLES[0], [EXAMPLES[1]], [EXAMPLES[2]], EXAMPLES[3])))
+PAYLOADS["remote-positions"] = {
+    "available": True, "snapshot_at": "2026-11-12T00:00:00Z", "snapshot_version": 17, "stale": False,
+    "positions": [{
+        "position_key": "crossex|HYPERLIQUID_FUTURE_io:OAI_USDC|short", "route": "crossex",
+        "exchange_type": "HYPERLIQUID", "business": "FUTURE", "symbol": "HYPERLIQUID_FUTURE_io:OAI_USDC",
+        "quote": "USDC", "dex": "io", "identity_verified": True, "side": "short", "quantity": "2.00000001",
+        "unrealized_pnl_native": "-2.25", "unrealized_pnl_usd": "-2.2545",
+        "valuation": "public_spot_lower_bound", "valuation_verified": True, "valuation_error": None,
+        "ownership": "unregistered", "snapshot_at": "2026-11-12T00:00:00Z", "snapshot_version": 17, "stale": False,
+    }],
+}
 REAL_ASYNC_CLIENT = httpx.AsyncClient
 
 
@@ -140,6 +151,7 @@ def test_query_whitelist_and_boundary_values(context):
     "trades?before=2026-11-11T08:00:00", "trades?before=../../summary",
     "summary?path=/orders", "positions?limit=1", "trades?days=7",
     "stats?before=x", "trades?limit=1&limit=2",
+    "remote-positions?limit=1", "remote-positions?path=/orders", "remote-positions?a=1&a=2",
 ])
 def test_invalid_query_never_contacts_upstream(context, url):
     _, client, calls, _ = context
@@ -151,7 +163,8 @@ def test_invalid_query_never_contacts_upstream(context, url):
     ("timeout", "timeout"), ("connect", "unreachable"), ("status", "upstream_http_401"),
     ("redirect", "upstream_http_302"), ("json", "invalid_json"), ("nan", "invalid_json"),
 ])
-def test_failures_are_200_and_never_expose_credentials(context, caplog, kind, reason):
+@pytest.mark.parametrize("path", ("summary", "remote-positions"))
+def test_failures_are_200_and_never_expose_credentials(context, caplog, kind, reason, path):
     _, client, _, install = context
 
     def failing(request):
@@ -167,17 +180,38 @@ def test_failures_are_200_and_never_expose_credentials(context, caplog, kind, re
 
     install(failing)
     with caplog.at_level(logging.DEBUG):
-        response = client.get("/api/live-exec/summary")
+        response = client.get(f"/api/live-exec/{path}")
     assert response.status_code == 200
     assert response.json() == {"available": False, "error": reason}
     assert TOKEN not in caplog.text
     assert TOKEN not in response.text
 
 
-def test_only_four_get_routes_exist(context):
+def test_unknown_routes_and_read_only_methods(context):
     _, client, calls, _ = context
     assert client.get("/api/live-exec/orders").status_code == 404
     assert client.post("/api/live-exec/summary").status_code == 405
+    for method in ("POST", "PUT", "PATCH", "DELETE"):
+        assert client.request(method, "/api/live-exec/remote-positions").status_code == 405
+    assert not calls
+
+
+@pytest.mark.parametrize("available,stale", [(False, True), (True, True), (True, False)])
+def test_remote_snapshot_availability_is_nested_and_empty_is_not_assumed(context, available, stale):
+    _, client, _, install = context
+    payload = {**PAYLOADS["remote-positions"], "available": available, "stale": stale, "positions": [],
+               "future_risk_scope": None}
+    install(lambda request: httpx.Response(200, json=payload, headers={"X-Upstream-Secret": TOKEN}))
+    response = client.get("/api/live-exec/remote-positions?")
+    assert response.status_code == 200
+    assert response.json() == {"available": True, "data": payload}
+    assert response.headers["Cache-Control"] == "no-store"
+    assert "X-Upstream-Secret" not in response.headers
+
+
+def test_remote_get_rejects_body_without_contacting_upstream(context):
+    _, client, calls, _ = context
+    assert client.request("GET", "/api/live-exec/remote-positions", json={"refresh": True}).status_code == 422
     assert not calls
 
 

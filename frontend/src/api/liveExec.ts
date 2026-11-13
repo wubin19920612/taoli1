@@ -23,6 +23,7 @@ export interface LiveSummary {
   baseline_ready_pairs?: Num; structural_spread_pairs?: Num; cooldown_pairs?: Num;
   opening_skip_counts?: Partial<Record<LiveOpeningSkipReason, Num>> | null;
   config_version?: Num;
+  equity_baseline_revision?: Num;
   effective_risk_limits?: { max_equity_drop_usd: Num; daily_loss_stop_usd: Num; total_loss_stop_usd: Num } | null;
 }
 interface Leg {
@@ -79,8 +80,43 @@ export interface LiveMapping {
   id: string; base: string; status: "pending" | "confirmed" | "rejected"; multiplier: string; at: Text; ratio: Num;
   legs: { market_key: string; raw_base: string; quantity_multiplier: Num }[];
 }
+export interface LiveExternalIdentity {
+  route: string; exchange_type: string; business: string; symbol: string; quote: string; dex: string;
+}
+export interface LiveExternalContract {
+  identity: LiveExternalIdentity; raw_base: string; registered: boolean; forbidden: boolean;
+  revision: number; registered_at: number; updated_at: number;
+}
+export interface LiveFlattenStatus {
+  program_flat?: boolean | null; account_flat?: boolean | null; captured_at?: number | null;
+}
+export interface LiveExternalPositions {
+  status?: string; contracts: LiveExternalContract[];
+  income?: LiveProgramIncome | null;
+  flatten_status?: LiveFlattenStatus | null;
+}
+export interface LiveProgramIncome {
+  verified?: boolean | null; reason?: Text; at?: Num; scope?: Text; day?: Text;
+  captured_at?: Num; snapshot_version?: Num; revision?: Num; equity_revision?: Num;
+  program_daily?: Text; program_total?: Text; program_funding_total?: Text; program_upnl?: Text;
+  program_journal?: Text;
+}
+export interface LiveRemotePosition {
+  position_key: string; route: string; symbol: string; side: string;
+  exchange_type?: Text; business?: Text; quote?: Text; dex?: Text; identity_verified?: boolean | null;
+  quantity?: Text; entry_price?: Text; mark_price?: Text;
+  unrealized_pnl_native?: Text; unrealized_pnl_usd?: Text;
+  valuation?: Text; valuation_verified?: boolean | null; valuation_error?: Text; ownership?: Text;
+  snapshot_at?: Text; snapshot_version?: Num; stale?: boolean | null;
+}
+export interface LiveRemotePositions {
+  available: boolean; positions: LiveRemotePosition[];
+  snapshot_at?: Text; snapshot_version?: Num; stale?: boolean | null;
+}
 export interface LiveAdminResources {
   config: LiveConfig; "config/audit": LiveConfigAudit[]; universe: LiveUniverse[]; mappings: LiveMapping[];
+  "external-positions": LiveExternalPositions;
+  "remote-positions": LiveRemotePositions;
 }
 export type LiveAdminResource = keyof LiveAdminResources;
 
@@ -91,6 +127,23 @@ const readErrors: Record<string, string> = {
 export function liveAdminReadError(reason: string): string {
   const status = /^upstream_http_(\d{3})$/.exec(reason);
   return readErrors[reason] ?? (status ? `上游响应异常 ${status[1]}` : "服务不可用");
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function optionalFields(value: Record<string, unknown>, fields: string[], kind: "string" | "number" | "boolean"): boolean {
+  return fields.every(key => value[key] == null || typeof value[key] === kind);
+}
+function remoteShape(value: unknown): boolean {
+  const metadata = (row: Record<string, unknown>) => optionalFields(row, ["snapshot_at"], "string")
+    && optionalFields(row, ["snapshot_version"], "number") && optionalFields(row, ["stale"], "boolean");
+  return isObject(value) && typeof value.available === "boolean" && metadata(value)
+    && Array.isArray(value.positions) && value.positions.every(row => isObject(row)
+      && ["position_key", "route", "symbol", "side"].every(key => typeof row[key] === "string" && row[key] !== "")
+      && metadata(row) && optionalFields(row, ["identity_verified", "valuation_verified"], "boolean")
+      && optionalFields(row, ["exchange_type", "business", "quote", "dex", "quantity", "entry_price", "mark_price",
+        "unrealized_pnl_native", "unrealized_pnl_usd", "valuation", "valuation_error", "ownership"], "string"));
 }
 
 export async function getLiveExecAdmin<K extends LiveAdminResource>(
@@ -110,7 +163,13 @@ export async function getLiveExecAdmin<K extends LiveAdminResource>(
             && Number.isFinite(rule.min) && (rule.max === null || Number.isFinite(rule.max))
             && typeof rule.integer === "boolean";
         })
-      : Array.isArray(data);
+      : resource === "remote-positions" ? remoteShape(data)
+      : resource === "external-positions" ? data && !Array.isArray(data) && Array.isArray(data.contracts)
+        && data.contracts.every((row: LiveExternalContract | null) => row && typeof row.registered === "boolean"
+          && typeof row.forbidden === "boolean" && row.identity
+          && (["route", "exchange_type", "business", "symbol", "quote", "dex"] as const)
+            .every(key => typeof row.identity[key] === "string"))
+        : Array.isArray(data);
     if (result?.available !== true || !shapeOk) return { available: false, error: "invalid_json" };
     return result;
   } catch {
@@ -125,7 +184,9 @@ export type LiveAdminWrite =
     category: Exclude<LiveCategory, "unconfirmed">; markets: string[]; underlying_market?: "US" | "KRX";
   } }
   | { resource: "mappings"; id: string; action: "confirm" | "reject";
-    expected_status: LiveMapping["status"]; expected_multiplier: string };
+    expected_status: LiveMapping["status"]; expected_multiplier: string }
+  | { resource: "external-positions"; action: "register" | "unregister";
+    identity: LiveExternalIdentity; expected_status: string; reason: string };
 
 export function hasUniversePrecondition(row: LiveUniverse): boolean {
   return typeof row.status === "string" && row.status.length === 67 && /^u1:[0-9a-f]{64}$/.test(row.status);
@@ -143,11 +204,14 @@ export class LiveAdminConflictError extends Error {
 export async function writeLiveExecAdmin(update: LiveAdminWrite): Promise<void> {
   const path = update.resource === "config" ? "config" : update.resource === "universe"
     ? `universe/${encodeURIComponent(update.base)}/${update.action}`
-    : `mappings/${encodeURIComponent(update.id)}/${update.action}`;
+    : update.resource === "external-positions" ? `external-positions/${update.action}`
+      : `mappings/${encodeURIComponent(update.id)}/${update.action}`;
   const body = update.resource === "config" ? { ...update.changes, expected_version: update.expected_version }
     : update.resource === "universe" ? {
       ...(update.action === "classify" ? update.classification : {}), expected_status: update.expected_status,
-    } : { expected_status: update.expected_status, expected_multiplier: update.expected_multiplier };
+    } : update.resource === "external-positions"
+      ? { identity: update.identity, expected_status: update.expected_status, reason: update.reason }
+      : { expected_status: update.expected_status, expected_multiplier: update.expected_multiplier };
   let response: Response;
   try {
     // Browsers supply Origin; never attach either server token. Writes are never retried.

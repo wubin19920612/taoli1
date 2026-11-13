@@ -2,6 +2,7 @@ export const mappingId = "0123456789abcdef01234567";
 export const markets = ["binance|future|SKHYNIXUSDT", "bitget|future|SKHYNIXUSDT"];
 export const universeStatus = "u1:" + "a".repeat(64);
 export const fixtures = {
+  "external-positions": { status: "x1:" + "a".repeat(64), contracts: [], income: null, flatten_status: null, projection: null },
   config: { version: 2, fallback: false, values: { order_usd_max: 50, min_venues: 3 }, schema: {
     order_usd_max: { default: 50, min: 5, max: 150, integer: false },
     min_venues: { default: 3, min: 3, max: 6, integer: true },

@@ -54,7 +54,7 @@ describe("实盘第八轮管理", () => {
     expect(screen.getAllByText(markets[0]).length).toBeGreaterThan(0);
     expect(screen.getByText("binance|future|1000PEPEUSDT")).toBeTruthy();
     expect(screen.getByText(/发现时原生价格比/)).toBeTruthy();
-    expect(screen.getByText(/保守下界/)).toBeTruthy();
+    expect(within(screen.getByText("交易范围").closest<HTMLElement>(".ant-card")!).getByText(/保守下界/)).toBeTruthy();
     expect(screen.getByText(/40 → 50/)).toBeTruthy();
     expect(writes).toHaveLength(0);
   });

@@ -25,6 +25,8 @@ UPSTREAM_PATHS = {
     "config/audit": "/api/v1/config/audit",
     "universe": "/api/v1/universe",
     "mappings": "/api/v1/mappings",
+    "external-positions": "/api/v1/external-positions",
+    "remote-positions": "/api/v1/remote-positions",
 }
 # Uvicorn's default CLI config only enables its own loggers. Audit records must
 # reach container stdout even when the root logger remains at WARNING.
@@ -181,6 +183,21 @@ async def get_mappings(request: Request) -> dict:
     return await proxy(request, "mappings")
 
 
+@router.get("/external-positions")
+async def get_external_positions(request: Request) -> dict:
+    validate_query(request, set())
+    return await proxy(request, "external-positions")
+
+
+@router.get("/remote-positions")
+async def get_remote_positions(request: Request, response: Response) -> dict:
+    validate_query(request, set())
+    if request.headers.get("content-length", "0") != "0" or request.headers.get("transfer-encoding"):
+        raise HTTPException(status_code=422, detail="invalid_body")
+    response.headers["Cache-Control"] = "no-store"
+    return await proxy(request, "remote-positions")
+
+
 def _origin(value: str) -> tuple[str, str, int]:
     parsed = urlsplit(value)
     if (parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.path
@@ -244,6 +261,31 @@ async def _body(request: Request) -> dict:
 
 
 def _validate_update(resource: str, action: str, body: dict) -> None:
+    if resource == "external-positions":
+        # Six-part raw identity, matching crossex-exec bfb2861 external.checked_identity.
+        # Ownership, catalog freshness and remote positions remain upstream decisions.
+        identity = body.get("identity")
+        if (body.keys() != {"identity", "expected_status", "reason"}
+                or not isinstance(identity, dict)
+                or identity.keys() != {"route", "exchange_type", "business", "symbol", "quote", "dex"}):
+            raise HTTPException(400, "必须提供完整外仓身份、expected_status 和登记说明")
+        symbol = identity.get("symbol")
+        match = re.fullmatch(r"([A-Z][A-Z0-9]*)_FUTURE_([^|\s_]+)_(USDT|USDC)", symbol) if isinstance(symbol, str) and len(symbol) <= 160 else None
+        if not match:
+            raise HTTPException(400, "外仓原始合约身份无效")
+        exchange, raw, quote = match.groups()
+        dex = raw.split(":")[0] if ":" in raw else ""
+        if ((":" in raw and (exchange != "HYPERLIQUID" or raw.count(":") != 1 or not all(raw.split(":"))))
+                or any(ord(char) < 32 for char in raw)
+                or identity != {"route": "crossex", "exchange_type": exchange, "business": "FUTURE",
+                                "symbol": symbol, "quote": quote, "dex": dex}):
+            raise HTTPException(400, "外仓身份各字段必须与原始合约精确一致")
+        expected, reason = body.get("expected_status"), body.get("reason")
+        if (not isinstance(expected, str) or not re.fullmatch(r"x1:[0-9a-f]{64}", expected)
+                or not isinstance(reason, str) or not reason.strip() or len(reason) > 200
+                or any(ord(char) < 32 for char in reason)):
+            raise HTTPException(400, "外仓并发状态或登记说明无效（说明须为 1 至 200 字符且无控制字符）")
+        return
     if resource == "universe":
         expected = body.get("expected_status")
         if not isinstance(expected, str) or not re.fullmatch(r"u1:[0-9a-f]{64}", expected):
@@ -295,6 +337,8 @@ def _validate_update(resource: str, action: str, body: dict) -> None:
 def _audit_parameters(resource: str, identity: str, body: dict) -> str:
     # Log meaningful numeric changes, and fingerprints/counts for untrusted identifiers.
     # No arbitrary strings, request headers, session cookies, or upstream bodies enter logs.
+    if resource == "external-positions":
+        identity = json.dumps(body["identity"], sort_keys=True, separators=(",", ":"))
     if resource == "config":
         value = body
     else:
@@ -307,8 +351,8 @@ def _audit_parameters(resource: str, identity: str, body: dict) -> str:
 
 
 async def admin_proxy(request: Request, resource: str, identity: str = "", action: str = "") -> dict | Response:
-    path = f"/api/v1/{resource}" + (f"/{identity}/{action}" if identity else "")
-    interface = f"{request.method} /{resource}" + (f"/{{id}}/{action}" if identity else "")
+    path = f"/api/v1/{resource}" + (f"/{identity}" if identity else "") + (f"/{action}" if action else "")
+    interface = f"{request.method} /{resource}" + ("/{id}" if identity else "") + (f"/{action}" if action else "")
     parameters = '{"validation":"rejected"}'
     status = 500
     try:
@@ -383,3 +427,10 @@ async def post_mapping(request: Request, identity: str, action: str) -> dict | R
     if not re.fullmatch(r"[0-9a-f]{24}", identity) or action not in {"confirm", "reject"}:
         raise HTTPException(400, "映射操作或标识无效")
     return await admin_proxy(request, "mappings", identity, action)
+
+
+@router.post("/external-positions/{action}", dependencies=[Depends(require_admin_session)], response_model=None)
+async def post_external_positions(request: Request, action: str) -> dict | Response:
+    if action not in {"register", "unregister"}:
+        raise HTTPException(400, "外仓登记操作无效")
+    return await admin_proxy(request, "external-positions", action=action)

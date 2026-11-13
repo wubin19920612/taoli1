@@ -2,14 +2,14 @@ import { Alert, Button, Card, Checkbox, Input, Modal, Space, Table, Tag, Typogra
 import { useRef, useState, type ReactNode } from "react";
 import { hasMappingPrecondition, hasUniversePrecondition, LiveAdminConflictError, liveAdminReadError, writeLiveExecAdmin, type LiveAdminWrite, type LiveCategory,
   type LiveMapping, type LiveUniverse } from "../../api/liveExec";
-import { useLiveExecAdmin } from "./useLiveExecAdmin";
+import type { useLiveExecAdmin } from "./useLiveExecAdmin";
 
 const labels: Record<string, string> = {
   min_quote_volume_usd: "单所 24 小时成交额门槛（USD）", min_venues_with_volume: "达到成交额门槛的交易所数",
   sampling_min_quote_volume_usd: "采样成交额预筛门槛（USD）", order_usd_max: "单腿名义额上限（USD）",
   depth_fraction: "较薄腿容忍带内深度占比", oi_fraction: "有效 OI 占比", max_total_open_usd: "全部未平名义额上限（USD）",
-  max_open_pairs: "同时持仓对数上限", max_equity_drop_usd: "权益回撤停机阈值（USD）",
-  daily_loss_stop_usd: "日亏停开阈值（USD）", total_loss_stop_usd: "累计亏损停机阈值（USD）",
+  max_open_pairs: "同时持仓对数上限", max_equity_drop_usd: "程序损益停机阈值（USD）",
+  daily_loss_stop_usd: "程序日亏停开阈值（USD）", total_loss_stop_usd: "程序累计亏损停机阈值（USD）",
   min_excess_bps: "最低超额价差（bp）", max_book_skew_ms: "最大盘口时间差（毫秒）",
   max_book_age_seconds: "最大盘口年龄（秒）", max_funding_diff_bps_h: "最大每小时资金费率差（bp）",
   max_funding_rate_8h: "最大八小时资金费率（比例）", max_baseline_bps: "最大基准偏移（bp）",
@@ -35,8 +35,8 @@ function MappingDetails({ mapping }: { mapping: LiveMapping }) {
 }
 
 type Pending = { update: LiveAdminWrite; title: string; details: ReactNode; configVersion?: number };
-export function LiveExecAdmin() {
-  const { data, errors, refresh } = useLiveExecAdmin();
+export function LiveExecAdmin({ management }: { management: ReturnType<typeof useLiveExecAdmin> }) {
+  const { data, errors, refresh } = management;
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [pending, setPending] = useState<Pending | null>(null);
   const [classification, setClassification] = useState<LiveUniverse | null>(null);
