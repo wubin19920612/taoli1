@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from test_market_identity_validation import NOW, binding, market
@@ -70,7 +70,9 @@ async def test_catalog_reimport_and_numeric_serialization_do_not_create_false_co
     try:
         await initialize_market_identity_schema(db)
         repo = MarketIdentityRepository(db)
-        item = binding(market())
+        item = binding(market()).model_copy(
+            update={"valid_until": datetime.now(UTC) + timedelta(days=60)}
+        )
         assert (
             item.fingerprint == type(item).model_validate_json(item.model_dump_json()).fingerprint
         )
