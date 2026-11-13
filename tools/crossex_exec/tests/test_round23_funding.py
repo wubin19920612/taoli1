@@ -43,7 +43,7 @@ class FundingBoundaryTests(unittest.TestCase):
                 venue.settle('-21'); w.advance(.5)
                 for _ in range(3):
                     w.advance()
-                self.assert_loss(w, '-22')
+                self.assert_loss(w, '-30')
 
     def test_withdrawal_gap_allocates_income_and_expense_before_netting(self):
         for leg in (0, 1):
@@ -59,9 +59,8 @@ class FundingBoundaryTests(unittest.TestCase):
                 w.advance(.5)
                 for _ in range(3):
                     w.advance()
-                # The income can still belong to the mixed 1/9 position;
-                # the expense can belong entirely to the program.
-                self.assert_loss(w, '-21')
+                # Round 24 credits no income and charges both expenses in full.
+                self.assert_loss(w, '-39')
 
     def test_entry_gap_cannot_dilute_loss_paid_before_external_entry(self):
         for leg in (0, 1):
@@ -79,7 +78,7 @@ class FundingBoundaryTests(unittest.TestCase):
                 w.advance()
                 for _ in range(3):
                     w.advance()
-                self.assert_loss(w, '-21')
+                self.assert_loss(w, '-31')
 
     def test_gap_evidence_survives_delayed_history_and_sqlite_restart(self):
         for leg in (0, 1):
@@ -100,7 +99,7 @@ class FundingBoundaryTests(unittest.TestCase):
                 w.hide_cash = False
                 for _ in range(3):
                     w.advance()
-                self.assert_loss(w, '-22')
+                self.assert_loss(w, '-30')
 
     def test_withdrawal_same_millisecond_as_last_mixed_sample_keeps_full_loss(self):
         for leg in (0, 1):
@@ -114,7 +113,7 @@ class FundingBoundaryTests(unittest.TestCase):
                 venue.settle('-21'); w.advance()
                 for _ in range(3):
                     w.advance()
-                self.assert_loss(w, '-22')
+                self.assert_loss(w, '-30')
 
     def test_entry_same_millisecond_as_first_mixed_sample_keeps_full_loss(self):
         for leg in (0, 1):
@@ -133,7 +132,7 @@ class FundingBoundaryTests(unittest.TestCase):
                     w.advance()
                 self.assert_loss(w, '-21')
 
-    def test_legacy_interval_without_first_mixed_sample_stays_stopped(self):
+    def test_legacy_interval_without_first_mixed_sample_finalizes_adverse_loss(self):
         w = self.world()
         venue = w.venues[0]
         own = venue.quantity
@@ -152,11 +151,11 @@ class FundingBoundaryTests(unittest.TestCase):
         for _ in range(3):
             w.advance()
         income = w.store.meta('external_income')
-        self.assertFalse(income['verified'], income)
-        self.assertEqual(income['income_failure']['condition'], 'program_funding_attribution_unverifiable')
+        self.assertTrue(income['verified'], income)
+        self.assert_loss(w, '-21')
         self.assertFalse(w.engine.can_open())
 
-    def test_stable_mixed_interior_keeps_original_adverse_ratios(self):
+    def test_stable_mixed_interior_also_charges_full_expense_and_zero_income(self):
         w = self.world()
         venue = w.venues[0]
         own = venue.quantity
@@ -169,10 +168,10 @@ class FundingBoundaryTests(unittest.TestCase):
         w.advance()
         income = w.store.meta('external_income')
         self.assertTrue(income['verified'], income)
-        self.assertEqual(w.engine.totals(), (dec(-5), dec(-5)))
+        self.assertEqual(w.engine.totals(), (dec(-90), dec(-90)))
         self.assertTrue(income['funding_attribution_estimated'])
 
-    def test_unprovable_gap_ratio_cannot_certify_zero(self):
+    def test_unprovable_ratio_is_irrelevant_after_interval_closes(self):
         state = dict(contracts={'route|raw': dict(intervals=[dict(
             from_ms=1000, first_mixed_ms=2000, observed_ms=3000, to_ms=4000,
             certain=False, lower=dict(owned='0', remote='9'),
@@ -180,8 +179,8 @@ class FundingBoundaryTests(unittest.TestCase):
         for at in (1500, 3500):
             for amount in ('-21', '90'):
                 with self.subTest(at=at, amount=amount):
-                    with self.assertRaisesRegex(ValueError, 'program_funding_attribution_unverifiable'):
-                        allocate_funding(state, 'route', dict(id='cash', symbol='raw'), at, dec(amount))
+                    self.assertEqual(allocate_funding(state, 'route', dict(id='cash', symbol='raw'), at, dec(amount)),
+                                     (min(dec(amount), dec(0)), True))
 
 
 if __name__ == '__main__':
