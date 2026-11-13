@@ -57,7 +57,7 @@ def account_liabilities(cross,bitget):
     return result
 
 
-def remote_positions(gate_rows,bitget_rows):
+def remote_positions(gate_rows,bitget_rows,*,attributes=None):
     result={}
     for venue,rows in (('crossex',gate_rows),('bitget',bitget_rows)):
         if not isinstance(rows,list):
@@ -73,17 +73,67 @@ def remote_positions(gate_rows,bitget_rows):
                 if side not in ('LONG','SHORT'):
                     raise ValueError('position_direction_unknown')
                 side=side.lower()
-                if r.get('margin_mode','CROSS')!='CROSS':
-                    raise ValueError('isolated_position')
+                margin_mode=r.get('margin_mode','CROSS')
+                if margin_mode not in ('CROSS','ISOLATED'):
+                    raise ValueError('position_margin_mode_unknown')
             else:
                 side=r['posSide']
                 if side not in ('long','short') or quantity<0 or r['marginMode']!='crossed':
                     raise ValueError('position_direction_unknown')
+                margin_mode='CROSS'
             key='|'.join((venue,r['symbol'],side))
             if key in result:
                 raise ValueError('duplicate_remote_position')
             result[key]=abs(quantity)
+            if attributes is not None:
+                attributes[key]=dict(margin_mode=margin_mode)
     return result
+
+
+def position_attributes(snapshot):
+    attributes={}
+    raw=snapshot.get('raw_positions',{})
+    remote_positions(raw.get('crossex',[]),raw.get('bitget',[]),attributes=attributes)
+    return attributes
+
+
+def isolated_margin_coverage(snapshot,now):
+    """Lower bound only: locked collateral/positive PnL cannot back cross risk.
+
+    Keep the entire account maintenance denominator and never refund isolated
+    losses. Non-USD reserves require the existing public FX upper bound. Missing
+    evidence means UNKNOWN, while a known physical breach remains actionable.
+    """
+    from .position_values import position_identity, usd_value
+    rows=[r for r in snapshot.get('raw_positions',{}).get('crossex',[])
+          if dec(r['position_qty']) and r.get('margin_mode')=='ISOLATED']
+    if not rows:
+        return snapshot
+    margins=list(snapshot['margins'])
+    raw=snapshot['raw_accounts']['crossex']
+    original=gate_margin(raw,raw['position_mode'])
+    try:
+        reserve=dec(0)
+        currencies=set()
+        for row in rows:
+            collateral=dec(row['isolated_margin'])
+            if isinstance(row['isolated_margin'],bool) or collateral<0:
+                raise ValueError('isolated_collateral_unknown')
+            amount=collateral+max(dec(0),dec(row['upnl']))
+            coin=position_identity('crossex',row['symbol'],row)['quote']
+            currencies.add(coin)
+            reserve+=usd_value(amount,coin,snapshot.get('external_fx',{}),now,upper=True)
+        balance=max(dec(0),dec(raw['margin_balance'])-reserve)
+        maintenance=dec(raw['maintenance_margin'])
+        ratio=balance/maintenance if maintenance else (dec('1e30') if balance else dec(0))
+        margins[0]=str(min(original,ratio))
+        proof=dict(method='isolated_reserve_upper_bound',reserve_usd=str(reserve),
+                   cross_balance_lower_usd=str(balance),maintenance_usd=str(maintenance),
+                   currencies=sorted(currencies))
+    except (ValueError,KeyError,TypeError,ArithmeticError):
+        margins[0]=str(original) if original<2 else None
+        proof=dict(method='isolated_reserve_unknown')
+    return dict(snapshot,margins=margins,margin_coverage=proof)
 
 
 def local_positions(pairs):
@@ -176,7 +226,9 @@ class Accounts:
         # Recovery must not depend on balances, margin units, settings or fees.
         started=self.clock()
         gate,bitget=self.cross.positions(),self.bitget.positions()
-        result=dict(positions=remote_positions(gate,bitget),captured_at=started,
+        attributes={}
+        result=dict(positions=remote_positions(gate,bitget,attributes=attributes),captured_at=started,
+                    position_attributes=attributes,
                     raw_positions=dict(crossex=gate,bitget=bitget))
         floating={}
         try:
@@ -208,7 +260,8 @@ class Accounts:
         raw_positions=evidence['raw_positions']={}
         ga=raw_positions['crossex']=self.cross.positions()
         ba=raw_positions['bitget']=self.bitget.positions()
-        positions=remote_positions(ga,ba)
+        attributes={}
+        positions=remote_positions(ga,ba,attributes=attributes)
         upnl=sum((dec(r['upnl']) for r in ga),dec(0))+sum((dec(r['unrealisedPnl']) for r in ba),dec(0))
         notionals,upnl_by_position={},{}
         for venue,rows in (('crossex',ga),('bitget',ba)):
@@ -222,10 +275,12 @@ class Accounts:
                     upnl_by_position[key]=str(dec(row['upnl' if venue=='crossex' else 'unrealisedPnl']))
         equities=dict(crossex=str(dec(a['margin_balance'])),bitget=str(dec(b['usdtEquity'])))
         liabilities=account_liabilities(a,b)
-        return dict(margins=[str(m) if m is not None else None for m in margins],positions=positions,upnl=str(upnl),
+        snapshot=dict(margins=[str(m) if m is not None else None for m in margins],positions=positions,upnl=str(upnl),
+                    position_attributes=attributes,
                     equity=str(sum(map(dec,equities.values()))),equity_by_venue=equities,
                     notionals=notionals,liabilities=liabilities,upnl_by_position=upnl_by_position,
                     raw_positions=dict(crossex=ga,bitget=ba),raw_accounts=dict(crossex=a,bitget=b))
+        return isolated_margin_coverage(snapshot,self.clock())
 
     def activity(self,start_ms,end_ms):
         # No filters by ticker or active positions: closed external trades and

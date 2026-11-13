@@ -57,7 +57,7 @@ def remote_view(conn,budget,now):
             for key,qty in positions.items():
                 symbol,side=raw['symbol'],key.rsplit('|',1)[1]
                 try:
-                    identity=position_identity(route,symbol,raw)
+                    identity=position_identity(route,symbol,raw,expected=registered.get((route,symbol)))
                     identity_verified=True
                 except (ValueError,TypeError,KeyError):
                     # Retain unsupported raw identities; never drop an exposure
@@ -79,6 +79,7 @@ def remote_view(conn,budget,now):
                 except (ValueError,KeyError,TypeError,ArithmeticError):
                     pass
                 result['positions'].append(dict(identity,position_key=key,side=side,quantity=str(qty),
+                    margin_mode=raw.get('margin_mode','CROSS') if route=='crossex' else 'CROSS',
                     entry_price=entry,mark_price=mark,unrealized_pnl_native=native,unrealized_pnl_usd=usd,
                     valuation_verified=usd is not None,valuation_error=None if usd is not None else 'position_fx_unavailable',
                     valuation='public_spot_lower_bound' if identity['quote'] not in ('USD','USDT') else 'native_usd',

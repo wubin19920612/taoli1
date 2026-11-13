@@ -76,7 +76,8 @@ class EquityAdmin:
         started=self.clock()
         registry=ExternalRegistry(self.store,self.clock)
         try:
-            snapshot=(read_snapshot(self.accounts,self.store,self.clock) if self.program_scope else self.accounts.snapshot())
+            snapshot=(self.engine.read_account_snapshot() if self.program_scope and self.engine else
+                      read_snapshot(self.accounts,self.store,self.clock) if self.program_scope else self.accounts.snapshot())
         except Exception as error:
             if registry.records() and getattr(error,'account_snapshot',None) is not None:
                 self.store.set_meta('external_failed_snapshot',plain(error.account_snapshot))

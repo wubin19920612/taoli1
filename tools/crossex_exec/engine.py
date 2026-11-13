@@ -8,7 +8,7 @@ from decimal import ROUND_FLOOR, ROUND_CEILING
 from pathlib import Path
 from tools.fill_sim.core import Book, Market, dec, walk, closing, track_interval, day
 from tools.fill_sim.engine import trigger_reason
-from .accounts import local_positions
+from .accounts import local_positions, position_attributes
 from .policy import Instrument, review, exit_reason, risk_decision, limit_price, send_review
 from .execution import Executor, NONTERMINAL
 from .limits import HardLimits, DEFAULT_VAR
@@ -718,6 +718,21 @@ class Engine:
                 self.stops.discard(reason)
         return same
 
+    def observe_margin_modes(self,snapshot):
+        # Parsing is observational. Only verified registered contracts may be
+        # isolated; program and unregistered exposure retain an opening lock.
+        try:
+            projection=self.external.split(snapshot,pnl=False)
+        except ExternalUnverifiable:
+            projection=snapshot
+        isolated=any(v['margin_mode']=='ISOLATED' and k in projection['positions']
+                     for k,v in position_attributes(snapshot).items())
+        if isolated:
+            self.alert('isolated_position')
+        else:
+            self.stops.recovered('isolated_position','POSITION_MARGIN_MODE_RECOVERED',
+                                 dict(captured_at=snapshot['captured_at']))
+
     def reconcile(self):
         try:
             # On startup/tests a direct read seeds the cache. Once running, account
@@ -736,6 +751,7 @@ class Engine:
             equity_halt=self.limits.check_equity(self.snapshot)
             self.roll_daily_upnl(self.snapshot,self.snapshot['captured_at'])
             self.observe_account_snapshot(self.snapshot,self.snapshot['captured_at'])
+            self.observe_margin_modes(self.snapshot)
             if day(self.snapshot['captured_at'])!=day(self.clock()):
                 self.risk='STOP'
                 if equity_halt:

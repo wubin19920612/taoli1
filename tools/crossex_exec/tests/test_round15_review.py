@@ -45,7 +45,7 @@ class IdentityTests(ExternalFixture, unittest.TestCase):
         original = rule(); original['max_limit_size'] = None
         for field, value in (('tag', 'xyz'), ('exchange_type', 'BINANCE'),
                              ('business_type', 'SPOT'), ('state', 'suspend'),
-                             ('support_cross', 'false'), ('delist_time', '1'),
+                             ('support_cross', 'unknown'), ('delist_time', '1'),
                              ('min_size', None), ('lot_size', '0'), ('tick_size', 'NaN'),
                              ('max_limit_size', '-1'), ('max_limit_size', 'NaN')):
             with self.subTest(field=field, value=value):
@@ -56,6 +56,11 @@ class IdentityTests(ExternalFixture, unittest.TestCase):
         self.store.set_meta('external_catalog', dict(at=self.now, rules=[original, original]))
         with self.assertRaisesRegex(ValueError, 'external_identity_unverifiable'):
             self.change()
+        # Round 20 observed HIP-3 catalogs advertise false for isolated-only
+        # markets. Registration proves ownership, not program trading support.
+        self.store.set_meta('external_catalog',dict(at=self.now,rules=[dict(original,support_cross='false')]))
+        self.rows=[dict(position(),margin_mode='ISOLATED',leverage='5')]
+        self.assertEqual(self.change()['record']['rule']['support_cross'],'false')
 
     def test_register_rejects_raw_identity_conflict_in_either_direction(self):
         for field, value in (('exchange_type', 'BINANCE'), ('business_type', 'SPOT'),

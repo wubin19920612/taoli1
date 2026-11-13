@@ -11,7 +11,7 @@ import time
 from decimal import Decimal
 
 from tools.fill_sim.core import dec
-from .accounts import remote_positions
+from .accounts import remote_positions, position_attributes
 from .position_values import verify_external_rows
 
 
@@ -19,7 +19,8 @@ IDENTITY_FIELDS = frozenset(('route','exchange_type','business','symbol','quote'
 REFUSALS = frozenset(('program_ownership','program_ownership_unknown','external_remote_position',
     'external_remote_order','external_identity_unverifiable','external_catalog_unavailable',
     'account_snapshot_stale','external_read_unavailable','local_orders_pending',
-    'external_income_unverifiable','external_baseline_unverifiable'))
+    'external_income_unverifiable','external_baseline_unverifiable',
+    'external_identity_unverifiable_dex_catalog_mismatch'))
 
 
 class ExternalUnverifiable(ValueError):
@@ -70,6 +71,10 @@ def checked_identity(value):
     if not isinstance(value,dict) or set(value)!=IDENTITY_FIELDS:
         raise ValueError('invalid_external_identity')
     expected=symbol_identity(value.get('symbol'))
+    if expected['exchange_type']=='HYPERLIQUID' and not expected['dex']:
+        dex=value.get('dex')
+        if isinstance(dex,str) and (not dex or re.fullmatch(r'[A-Za-z0-9-]{1,64}',dex)):
+            expected['dex']=dex
     if value!=expected:
         raise ValueError('invalid_external_identity')
     return dict(expected)
@@ -123,9 +128,11 @@ class ExternalRegistry:
         if len(rows)!=1:
             raise ExternalUnverifiable('external_identity_unverifiable')
         row=rows[0]
+        if row.get('tag')!=identity['dex']:
+            raise ExternalUnverifiable('external_identity_unverifiable_dex_catalog_mismatch')
         try:
             if (row['exchange_type']!=identity['exchange_type'] or row['business_type']!=identity['business']
-                    or row['tag']!=identity['dex'] or row['state']!='live' or row['support_cross']!='true'
+                    or row['tag']!=identity['dex'] or row['state']!='live' or row['support_cross'] not in ('true','false')
                     or str(row['delist_time'])!='0'
                     or any(dec(row[k])<=0 for k in ('lot_size','min_size','tick_size'))
                     or (row['max_limit_size'] is not None and dec(row['max_limit_size'])<=0)):
@@ -251,6 +258,8 @@ class ExternalAdmin:
                 if not registered and (not old or not old['registered']):
                     raise ValueError('external_not_registered')
                 record=dict(identity=identity,raw_base=identity['symbol'].split('_',2)[2].rsplit('_',1)[0],
+                    position_attributes={k:v for k,v in position_attributes(snapshot).items()
+                                         if k.split('|')[:2]==[identity['route'],identity['symbol']]},
                     rule=rule,registered=registered,forbidden=True,revision=(old or {}).get('revision',0)+1,
                     registered_at=(old or {}).get('registered_at',self.clock()),updated_at=self.clock())
                 rows[key]=record

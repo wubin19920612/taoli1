@@ -19,7 +19,7 @@ def cash_identity(row, expected=None):
         exchange = identity['exchange_type']
     # Check all other explicit identity fields too; never mutate the raw row or
     # change the asset-domain key used by cash balance continuity.
-    checked = position_identity('crossex', row['symbol'], dict(row, exchange_type=exchange))
+    checked = position_identity('crossex', row['symbol'], dict(row, exchange_type=exchange),expected=expected)
     if row['coin'] != checked['quote'] or (expected is not None and checked != expected):
         raise ValueError('cash_identity')
     return checked

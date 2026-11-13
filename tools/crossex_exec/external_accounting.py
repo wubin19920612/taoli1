@@ -406,7 +406,9 @@ class ExternalAccounting:
         # distinct settlement currencies before converting their contribution.
         native=defaultdict(lambda:dec(0))
         cash_by_currency=defaultdict(lambda:dec(0))
-        required=set()
+        # Collateral valuation has a lifetime too, even when external PnL is
+        # zero. Admission rechecks these source clocks with the income proof.
+        required=set(snapshot.get('margin_coverage',{}).get('currencies',()))-NATIVE_USD
         for amounts,sign in ((projection['external_upnl_by_position'],1),
                              (anchor['external_upnl_by_position'],-1)):
             for key,value in amounts.items():

@@ -9,7 +9,7 @@ from tools.fill_sim.core import dec
 from .external_fx import NATIVE_USD, quote_band
 
 
-def position_identity(route,symbol,row=None):
+def position_identity(route,symbol,row=None,*,expected=None):
     row=row or {}
     if not isinstance(symbol,str) or len(symbol)>160:
         raise ValueError('position_identity_unknown')
@@ -19,10 +19,18 @@ def position_identity(route,symbol,row=None):
             raise ValueError('position_identity_unknown')
         exchange,base,quote=match.groups()
         dex=base.split(':')[0] if ':' in base else ''
+        if exchange=='HYPERLIQUID' and ':' not in base:
+            # Some exact CrossEx symbols omit the DEX prefix. Ownership callers
+            # supply the catalog-proven identity; explicit row tags must agree.
+            dex=(expected['dex'] if expected is not None else row.get('tag',row.get('dex','')))
+            if not isinstance(dex,str) or (dex and not re.fullmatch(r'[A-Za-z0-9-]{1,64}',dex)):
+                raise ValueError('position_identity_unknown')
         if (':' in base and (exchange!='HYPERLIQUID' or base.count(':')!=1 or not all(base.split(':')))
                 or any(ord(c)<32 for c in base)):
             raise ValueError('position_identity_unknown')
         result=dict(route=route,exchange_type=exchange,business='FUTURE',symbol=symbol,quote=quote,dex=dex)
+        if expected is not None and result!=expected:
+            raise ValueError('position_identity_unknown')
         for raw,field in (('exchange_type','exchange_type'),('business_type','business'),
                           ('tag','dex'),('dex','dex'),('quote','quote'),('business','business'),('route','route')):
             if raw in row and row[raw]!=result[field]:
@@ -55,7 +63,7 @@ def verify_external_rows(snapshot, identities):
     for route,rows in raw.items():
         for row in rows:
             target=(route,row['symbol'])
-            if target in expected and position_identity(route,row['symbol'],row)!=expected[target]:
+            if target in expected and position_identity(route,row['symbol'],row,expected=expected[target])!=expected[target]:
                 raise ValueError('position_identity_unknown')
 
 
@@ -89,6 +97,8 @@ def notional_values(snapshot,now):
 
 
 def value_snapshot(snapshot,now):
+    from .accounts import isolated_margin_coverage
+    snapshot=isolated_margin_coverage(snapshot,now)
     result=dict(snapshot,notionals_usd={},notional_valuation_verified=False)
     try:
         result['notionals_usd']=notional_values(snapshot,now)

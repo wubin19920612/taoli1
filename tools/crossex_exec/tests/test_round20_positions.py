@@ -115,6 +115,7 @@ class PositionTests(PositionFixture, unittest.TestCase):
             self.register()
 
     def test_unregistered_and_program_isolated_stop_without_invalidating_account(self):
+        self.engine.limits.initialize(self.accounts.snapshot())
         for symbol in (HL, 'BINANCE_FUTURE_BTC_USDT'):
             with self.subTest(symbol=symbol):
                 self.http.responses['/api/v4/crossex/positions'] = [unitree(symbol)]
@@ -126,6 +127,27 @@ class PositionTests(PositionFixture, unittest.TestCase):
                 self.assertEqual(self.engine.account_cache.read()['positions'],
                                  {'crossex|'+symbol+'|long':dec(2)})
         self.assertEqual(self.store.all_orders(), [])
+
+    def test_program_owned_isolated_mode_alone_blocks_even_matching_quantity(self):
+        order=dict(intent(),state='REJECTED',filled='0',accounting_pending=False)
+        self.store.save_order(order)
+        self.http.responses['/api/v4/crossex/positions'] = [unitree(order['instrument']['symbol'])]
+        snapshot=dict(self.accounts.snapshot(),captured_at=self.now)
+        self.engine.observe_margin_modes(snapshot)
+        self.assertIn('isolated_position',self.store.meta('stop_locks'))
+        self.assertEqual(snapshot['positions'],{'crossex|BINANCE_FUTURE_BTC_USDT|long':dec(2)})
+
+    def test_margin_fx_expiry_revokes_program_proof_even_with_zero_external_pnl(self):
+        self.register()
+        self.engine.limits.initialize(self.accounts.snapshot())
+        self.engine.rebaseline(confirm=True,reason='offline_epoch',source='cli')
+        self.market.spot_fx=lambda currencies:{c:quotes(self.now,coin=c,age=59) for c in currencies}
+        self.engine.reconcile()
+        self.assertTrue(self.store.meta('external_income')['verified'])
+        self.engine.require_external_income()
+        self.now+=2
+        with self.assertRaisesRegex(ValueError,'external_income_unverifiable'):
+            self.engine.require_external_income()
 
     def test_registered_isolated_is_never_sent_even_for_reduce_or_flatten(self):
         self.register()
