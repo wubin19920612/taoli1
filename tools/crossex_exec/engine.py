@@ -12,7 +12,7 @@ from .accounts import local_positions, position_attributes
 from .policy import Instrument, review, exit_reason, risk_decision, limit_price, send_review
 from .execution import Executor, NONTERMINAL
 from .limits import HardLimits, DEFAULT_VAR
-from .background import SnapshotCache, PeriodicWorker, account_failure_details
+from .background import SnapshotCache, PeriodicWorker, account_failure_details, exception_details
 from .stops import StopLocks
 from .baseline import Baseline
 from .admission import OpeningLimits, AdmissionError, BOOK_RETRIES, book_skew_ms, SKIP_REASONS
@@ -35,6 +35,18 @@ ACCOUNT_RECOVERY_SNAPSHOTS = 3
 
 class DailyBaselinePending(ValueError):
     """The UTC date changed while processing the previous day's snapshot."""
+
+
+import re as _re
+
+
+def review_failure_details(error):
+    """Type, innermost module:line and a snake_case local reason code only."""
+    details=exception_details(error)
+    if (type(error) in (ValueError,KeyError) and len(error.args)==1 and type(error.args[0]) is str
+            and _re.fullmatch(r'[a-z][a-z0-9_]{0,63}',error.args[0])):
+        details['cause']=error.args[0]
+    return details
 
 
 class Engine:
@@ -1045,7 +1057,8 @@ class Engine:
                     if isinstance(error,ValueError) and str(error) in SKIP_REASONS+(
                         'baseline_warming','structural_spread','pair_cooldown','mapping_unconfirmed','excluded',
                         'external_contract_forbidden') else 'review_failed_closed')
-            self.store.skip(identity,reason,stage='review')
+            self.store.skip(identity,reason,stage='review',
+                            **(review_failure_details(error) if reason=='review_failed_closed' else {}))
             return
         pair=dict(id=uuid.uuid4().hex,trigger_id=identity,base=base,state='OPENING',opened_at=self.clock(),
                   baseline_at_open=fill['baseline_bps'],excess_at_open=fill['excess_bps'],
