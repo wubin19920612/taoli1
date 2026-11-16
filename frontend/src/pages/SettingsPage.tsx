@@ -103,6 +103,7 @@ const defaultRiskSettings: RiskSettings = {
   big_spread_alert_pct: 3,
   big_spread_alert_hits: 2,
   big_spread_alert_cooldown_seconds: 600,
+  big_spread_alert_symbol_cooldown_seconds: 1800,
   big_spread_alert_auto_create: true,
   min_volume_24h_usdt: 1_000_000,
   stale_after_seconds: 30,
@@ -933,7 +934,8 @@ export function SettingsPage() {
                           <Typography.Title level={5}>大价差快速提醒</Typography.Title>
                           <Typography.Paragraph type="secondary">
                             按可成交开仓价差连续命中触发，不受普通规则的衰减检查和风险标签排除影响，风险仍会写入提醒。
-                            保留类型、黑名单、成交额、行情时效和市场身份限制。冷却期内价差较上次发送值增加至少 50% 时可再次提醒。
+                            保留类型、黑名单、成交额、行情时效和市场身份限制。路线冷却期内价差增加至少 50% 时可再次提醒；
+                            同币种冷却期内还需达到该币种上次发送价差的 2 倍。同币种冷却设为 0 可关闭币种节流。
                             自动建卡还需启用全局自动建卡并通过原有校验；创建的卡片始终关闭开仓，需手动开启。
                           </Typography.Paragraph>
                         </div>
@@ -947,6 +949,9 @@ export function SettingsPage() {
                           <InputNumber min={1} max={20} precision={0} className="wide-input" />
                         </Form.Item>
                         <Form.Item label="大价差提醒冷却秒数" name="big_spread_alert_cooldown_seconds" rules={[{ required: true }, { type: "integer", min: 0, max: 604800 }]}>
+                          <InputNumber min={0} max={604800} precision={0} step={60} className="wide-input" />
+                        </Form.Item>
+                        <Form.Item label="同币种提醒冷却秒数" name="big_spread_alert_symbol_cooldown_seconds" extra="0 表示关闭同币种节流；冷却期间价差翻倍可再次提醒。" rules={[{ required: true }, { type: "integer", min: 0, max: 604800 }]}>
                           <InputNumber min={0} max={604800} precision={0} step={60} className="wide-input" />
                         </Form.Item>
                         <Form.Item label="大价差提醒自动建卡（不开仓）" name="big_spread_alert_auto_create" valuePropName="checked">

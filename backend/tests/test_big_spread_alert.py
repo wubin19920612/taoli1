@@ -43,7 +43,8 @@ def test_defaults_old_data_and_validation():
     settings = RiskSettings.model_validate({"min_volume_24h_usdt": 10})
     assert (settings.big_spread_alert_enabled, settings.big_spread_alert_pct,
             settings.big_spread_alert_hits, settings.big_spread_alert_cooldown_seconds,
-            settings.big_spread_alert_auto_create) == (True, 3, 2, 600, True)
+            settings.big_spread_alert_symbol_cooldown_seconds,
+            settings.big_spread_alert_auto_create) == (True, 3, 2, 600, 1800, True)
     for updates in ({"big_spread_alert_hits": 0}, {"big_spread_alert_pct": float("nan")},
                     {"big_spread_alert_cooldown_seconds": -1}):
         with pytest.raises(ValidationError):
@@ -52,6 +53,7 @@ def test_defaults_old_data_and_validation():
 
 @pytest.mark.parametrize("field,low,high", [
     ("big_spread_alert_cooldown_seconds", 0, 604800),
+    ("big_spread_alert_symbol_cooldown_seconds", 0, 604800),
     ("big_spread_alert_pct", 0.1, 100),
     ("big_spread_alert_hits", 1, 20),
 ])
@@ -86,7 +88,7 @@ def test_two_hits_reset_missing_round_and_ignores_decay_and_labels():
 def test_cooldown_escalates_against_last_successful_send_and_retries():
     engine = BigSpreadAlertEngine()
     now = datetime.now(UTC)
-    settings = RiskSettings(big_spread_alert_hits=1)
+    settings = RiskSettings(big_spread_alert_hits=1, big_spread_alert_symbol_cooldown_seconds=0)
     def evaluate(spread, seconds):
         current = now + timedelta(seconds=seconds)
         return engine.evaluate([item(spread, current)], [], now=current, risk_settings=settings)
@@ -103,6 +105,149 @@ def test_cooldown_escalates_against_last_successful_send_and_retries():
     engine.record_delivery_result(match, "failed", now + timedelta(seconds=602))
     assert not evaluate(3, 603)
     assert evaluate(3, 662)
+
+
+def test_symbol_cooldown_normalizes_routes_and_expires_at_boundary():
+    engine = BigSpreadAlertEngine()
+    now = datetime.now(UTC)
+    settings = RiskSettings(big_spread_alert_hits=1)
+    routes = [item(id="first", symbol=" imx-usdt ", now=now),
+              item(id="other", symbol="IMX/USDT", sell_exchange="okx", now=now)]
+    matches = engine.evaluate(routes, [], now=now, risk_settings=settings)
+    assert [match.opportunity.id for match in matches] == ["first"]
+    # Evaluation alone must not consume the cooldown.
+    assert engine.evaluate(routes, [], now=now, risk_settings=settings)
+    engine.record_delivery_result(matches[0], "sent", now)
+    for seconds in (1, 600, 1799):
+        current = now + timedelta(seconds=seconds)
+        assert not engine.evaluate([route.model_copy(update={"last_seen_at": current}) for route in routes],
+                                   [], now=current, risk_settings=settings)
+    current = now + timedelta(seconds=1800)
+    assert engine.evaluate([item(id="other", symbol="IMX_USDT", now=current)], [],
+                           now=current, risk_settings=settings)
+
+
+@pytest.mark.parametrize("spread,allowed", [(5.99999999, False), (6 - 5e-10, True), (6, True)])
+def test_symbol_cooldown_double_spread_uses_epsilon_and_updates_sent_baseline(spread, allowed):
+    engine = BigSpreadAlertEngine()
+    now = datetime.now(UTC)
+    settings = RiskSettings(big_spread_alert_hits=1)
+    first = engine.evaluate([item(now=now)], [], now=now, risk_settings=settings)[0]
+    engine.record_delivery_result(first, "sent", now)
+    current = now + timedelta(seconds=1)
+    matches = engine.evaluate([item(spread, current, id="other")], [],
+                              now=current, risk_settings=settings)
+    assert bool(matches) is allowed
+    if allowed:
+        engine.record_delivery_result(matches[0], "sent", current)
+        assert not engine.evaluate([item(9, current, id="third")], [],
+                                   now=current, risk_settings=settings)
+        assert engine.evaluate([item(12, current, id="third")], [],
+                               now=current, risk_settings=settings)
+
+
+def test_symbol_and_route_cooldowns_must_both_allow_delivery():
+    engine = BigSpreadAlertEngine()
+    now = datetime.now(UTC)
+    settings = RiskSettings(big_spread_alert_hits=1, big_spread_alert_symbol_cooldown_seconds=10)
+    first = engine.evaluate([item(6, now)], [], now=now, risk_settings=settings)[0]
+    engine.record_delivery_result(first, "sent", now)
+    current = now + timedelta(seconds=10)
+    other = engine.evaluate([item(3, current, id="other")], [],
+                            now=current, risk_settings=settings)[0]
+    engine.record_delivery_result(other, "sent", current)
+    # Symbol doubling passes, but this route still needs 6 * 1.5.
+    assert not engine.evaluate([item(6, current)], [], now=current, risk_settings=settings)
+    match = engine.evaluate([item(9, current)], [], now=current, risk_settings=settings)[0]
+    engine.record_delivery_result(match, "sent", current)
+    # Route escalation passes, but the symbol now needs 9 * 2.
+    assert not engine.evaluate([item(13.5, current)], [], now=current, risk_settings=settings)
+
+
+def test_symbol_cooldown_zero_leaves_route_cooldown_intact():
+    engine = BigSpreadAlertEngine()
+    now = datetime.now(UTC)
+    settings = RiskSettings(big_spread_alert_hits=1, big_spread_alert_symbol_cooldown_seconds=0)
+    routes = [item(now=now), item(now=now, id="other")]
+    matches = engine.evaluate(routes, [], now=now, risk_settings=settings)
+    assert len(matches) == 2
+    for match in matches:
+        engine.record_delivery_result(match, "sent", now)
+    assert not engine.evaluate(routes, [], now=now, risk_settings=settings)
+    assert engine.evaluate([item(now=now, id="third")], [], now=now, risk_settings=settings)
+
+
+def test_symbol_cooldown_does_not_affect_different_symbols():
+    engine = BigSpreadAlertEngine()
+    now = datetime.now(UTC)
+    settings = RiskSettings(big_spread_alert_hits=1)
+    matches = engine.evaluate([item(now=now), item(now=now, id="eth", symbol="ETHUSDT")], [],
+                              now=now, risk_settings=settings)
+    assert len(matches) == 2
+    engine.record_delivery_result(matches[0], "sent", now)
+    assert engine.evaluate([item(now=now, id="eth", symbol="ETHUSDT")], [],
+                           now=now, risk_settings=settings)
+
+
+@pytest.mark.parametrize("status", ["failed", "muted"])
+def test_symbol_cooldown_only_consumed_by_sent_deliveries(status):
+    engine = BigSpreadAlertEngine()
+    now = datetime.now(UTC)
+    settings = RiskSettings(big_spread_alert_hits=1)
+    match = engine.evaluate([item(now=now)], [], now=now, risk_settings=settings)[0]
+    engine.record_delivery_result(match, status, now)
+    other = engine.evaluate([item(now=now, id="other")], [], now=now, risk_settings=settings)[0]
+    engine.record_delivery_result(other, "sent", now)
+    current = now + timedelta(seconds=1)
+    upgrade = engine.evaluate([item(6, current, id="upgrade")], [],
+                              now=current, risk_settings=settings)[0]
+    engine.record_delivery_result(upgrade, status, current)
+    # A failed escalation neither raises the baseline nor extends the timer.
+    assert engine.evaluate([item(6, current, id="retry-other")], [],
+                           now=current, risk_settings=settings)
+    current = now + timedelta(seconds=1800)
+    assert engine.evaluate([item(3, current, id="after-expiry")], [],
+                           now=current, risk_settings=settings)
+
+
+@pytest.mark.parametrize("pending", [False, True])
+def test_symbol_cooldown_restore_waits_without_baseline_for_other_routes(pending):
+    engine = BigSpreadAlertEngine()
+    now = datetime.now(UTC)
+    key = "big_spread:symbol:IMXUSDT"
+    state = AlertDeliveryState(key=key, pending_since=now) if pending else AlertDeliveryState(
+        key=key, last_sent_at=now,
+    )
+    unknown = engine.restore([state], now)
+    assert unknown == ([key] if pending else [])
+    assert engine.export_state(key).last_sent_at == now
+    settings = RiskSettings(big_spread_alert_hits=1)
+    for seconds in (0, 600, 1799):
+        current = now + timedelta(seconds=seconds)
+        assert not engine.evaluate([item(100, current, id="other")], [],
+                                   now=current, risk_settings=settings)
+    current = now + timedelta(seconds=1800)
+    assert engine.evaluate([item(3, current, id="other")], [], now=current, risk_settings=settings)
+
+
+def test_symbol_cooldown_state_is_bounded_and_pruned_on_expiry(monkeypatch):
+    monkeypatch.setattr("app.services.big_spread_alert.MAX_BIG_SPREAD_KEYS", 2)
+    engine = BigSpreadAlertEngine()
+    now = datetime.now(UTC)
+    settings = RiskSettings(big_spread_alert_hits=1, big_spread_alert_cooldown_seconds=0)
+    for index in range(2):
+        match = engine.evaluate([item(now=now, id=str(index), symbol=f"COIN{index}USDT")], [],
+                                now=now, risk_settings=settings)[0]
+        engine.record_delivery_result(match, "sent", now)
+    assert len(engine._symbol_last_sent) == len(engine._symbol_last_spread) == 2
+    current = now + timedelta(seconds=1)
+    assert not engine.evaluate([item(now=current, id="new", symbol="NEWUSDT")], [],
+                               now=current, risk_settings=settings)
+    current = now + timedelta(seconds=1800)
+    engine.evaluate([], [], now=current, risk_settings=settings)
+    assert not engine._symbol_last_sent and not engine._symbol_last_spread
+    assert engine.evaluate([item(now=current, id="new", symbol="NEWUSDT")], [],
+                           now=current, risk_settings=settings)
 
 
 @pytest.mark.parametrize("updates,settings,rules", [
@@ -143,7 +288,7 @@ def test_bounded_state_and_restored_cooldown(monkeypatch, caplog):
     monkeypatch.setattr("app.services.big_spread_alert.MAX_BIG_SPREAD_KEYS", 2)
     engine = BigSpreadAlertEngine()
     now = datetime.now(UTC)
-    settings = RiskSettings(big_spread_alert_hits=1)
+    settings = RiskSettings(big_spread_alert_hits=1, big_spread_alert_symbol_cooldown_seconds=0)
     for index in range(2):
         match = engine.evaluate([item(id=str(index), now=now)], [], now=now, risk_settings=settings)[0]
         engine.record_delivery_result(match, "sent", now)
@@ -164,7 +309,8 @@ def test_capacity_evicts_only_inactive_keys_after_cooldown(monkeypatch):
     monkeypatch.setattr("app.services.big_spread_alert.MAX_BIG_SPREAD_KEYS", 2)
     engine = BigSpreadAlertEngine()
     now = datetime.now(UTC)
-    settings = RiskSettings(big_spread_alert_hits=1, big_spread_alert_cooldown_seconds=10)
+    settings = RiskSettings(big_spread_alert_hits=1, big_spread_alert_cooldown_seconds=10,
+                            big_spread_alert_symbol_cooldown_seconds=0)
     for index in range(2):
         match = engine.evaluate([item(id=str(index), now=now)], [], now=now, risk_settings=settings)[0]
         engine.record_delivery_result(match, "sent", now)
@@ -332,6 +478,98 @@ def loop_app(candidate, rules=None, risk=None):
 
 
 @pytest.mark.asyncio
+async def test_big_spread_symbol_cooldown_persists_and_restores_without_schema_change():
+    from app.db.database import connect_database
+    from app.db.schema import initialize_schema
+
+    candidate = item()
+    app, stop = loop_app(candidate)
+    db = await connect_database(":memory:")
+    try:
+        await initialize_schema(db)
+        app.state.alert_delivery_store = AlertDeliveryStore(db)
+        app.state.alert_delivery_store.mark_pending = AsyncMock(
+            wraps=app.state.alert_delivery_store.mark_pending,
+        )
+        await asyncio.wait_for(main._run_alert_loop(app, .001, stop), 2)
+        states = await app.state.alert_delivery_store.load_all()
+        assert {state.key for state in states} == {"big_spread:opp-1", "big_spread:symbol:IMXUSDT"}
+        assert all(state.last_sent_at is not None and state.pending_since is None for state in states)
+        pending_keys = {call.args[0] for call in app.state.alert_delivery_store.mark_pending.await_args_list}
+        assert pending_keys == {state.key for state in states}
+        await main._restore_alert_delivery_state(app)
+        now = datetime.now(UTC)
+        assert not app.state.big_spread_alert_engine.evaluate(
+            [item(100, now, id="new-route")], [], now=now,
+            risk_settings=RiskSettings(big_spread_alert_hits=1),
+        )
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_big_spread_interrupted_symbol_checkpoint_is_restored_without_duplicate_audit():
+    now = datetime.now(UTC)
+    app, _ = loop_app(item(now=now))
+    keys = ["big_spread:symbol:IMXUSDT", "big_spread:opp-1"]
+    app.state.alert_delivery_store.load_all.return_value = [
+        AlertDeliveryState(key=key, pending_since=now) for key in keys
+    ]
+    await main._restore_alert_delivery_state(app)
+    assert len(app.state.alert_event_repo.events) == 1
+    assert app.state.alert_event_repo.events[0].opportunity_id == "opp-1"
+    assert app.state.alert_event_repo.events[0].status == "unknown"
+    assert app.state.alert_delivery_store.record.await_count == 2
+    assert not app.state.big_spread_alert_engine.evaluate(
+        [item(100, now, id="new-route")], [], now=now,
+        risk_settings=RiskSettings(big_spread_alert_hits=1),
+    )
+
+
+@pytest.mark.asyncio
+async def test_big_spread_same_round_normalized_routes_send_once():
+    first = item(symbol="IMX-USDT")
+    app, stop = loop_app(first)
+    app.state.snapshot_store.set_opportunities([
+        first, item(id="other", symbol="IMX/USDT", sell_exchange="okx"),
+    ])
+    await asyncio.wait_for(main._run_alert_loop(app, .001, stop), 2)
+    assert len(app.state.feishu_notifier.sent_texts) == 1
+    assert len(app.state.alert_event_repo.events) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("card_state,warn", [
+    ("missing", True), ("disabled", True), ("error", True), ("existing", False), ("created", False),
+])
+async def test_big_spread_sent_card_warning_prefix(card_state, warn):
+    from app.models.astro import AstroAlertActionResult
+
+    app, stop = loop_app(item())
+    if card_state == "disabled":
+        app.state.settings_repo.risk_settings.big_spread_alert_auto_create = False
+    if card_state in {"error", "existing", "created"}:
+        result = AstroAlertActionResult(
+            enabled=True,
+            status="created" if card_state == "created" else "skipped",
+            action="existing" if card_state == "existing" else "create",
+            message="已有卡片 IMX，当前开仓：关" if card_state == "existing" else "建卡完成",
+        )
+        service = Mock()
+        service.card_settings = AstroCardSettings()
+        service.handle_big_spread_alert = AsyncMock(
+            side_effect=RuntimeError("test failure") if card_state == "error" else None,
+            return_value=result,
+        )
+        app.state.astro_alert_service = service
+    await asyncio.wait_for(main._run_alert_loop(app, .001, stop), 2)
+    event = app.state.alert_event_repo.events[0]
+    assert event.status == "sent"
+    assert event.message.startswith("⚠️ 【大价差】") is warn
+    assert app.state.feishu_notifier.sent_texts == [event.message]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["evaluate", "delivery"])
 async def test_fast_channel_exception_does_not_block_normal_alerts(monkeypatch, caplog, stage):
     normal = item(id="normal", symbol="NORMALUSDT")
@@ -436,7 +674,7 @@ async def test_loop_deduplicates_only_actual_normal_sends(normal_result):
     if normal_result in {"sent", "event_write_failed"}:
         assert not app.state.feishu_notifier.sent_texts[0].startswith("【大价差】")
     else:
-        assert app.state.feishu_notifier.sent_texts[0].startswith("【大价差】")
+        assert app.state.feishu_notifier.sent_texts[0].startswith("⚠️ 【大价差】")
 
 
 @pytest.mark.asyncio
@@ -666,7 +904,7 @@ async def test_compact_diagnostic_failure_warns_both_unknown_legs(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_compact_failed_delivery_keeps_event_equal_to_attempted_text():
+async def test_compact_failed_delivery_keeps_unprefixed_event_and_warns_attempted_text():
     app, stop = loop_app(compact_example())
     attempted = []
 
@@ -678,7 +916,8 @@ async def test_compact_failed_delivery_keeps_event_equal_to_attempted_text():
     await asyncio.wait_for(main._run_alert_loop(app, .001, stop), 2)
     event = app.state.alert_event_repo.events[0]
     assert event.status == "failed"
-    assert event.message == attempted[0]
+    assert attempted[0] == f"⚠️ {event.message}"
+    assert not event.message.startswith("⚠️ ")
     assert len(event.message.splitlines()) == 6
 
 
@@ -690,6 +929,7 @@ async def test_compact_live_send_disabled_keeps_short_event():
     event = app.state.alert_event_repo.events[0]
     assert not app.state.feishu_notifier.sent_texts
     assert event.status == "muted"
+    assert not event.message.startswith("⚠️ ")
     assert event.message.endswith("；飞书实时发送未启用")
     assert len(event.message.splitlines()) == 6
 

@@ -55,18 +55,20 @@ describe("SettingsPage", () => {
     });
   }, 30000);
 
-  it("defaults and saves all five big spread settings for older stored data", async () => {
+  it("defaults and saves all six big spread settings for older stored data", async () => {
     window.localStorage.setItem("settings-active-tab", "risk");
     render(<SettingsPage />);
     const threshold = await screen.findByLabelText("大价差开仓阈值");
     await waitFor(() => expect(Number((threshold as HTMLInputElement).value)).toBe(3));
     expect((screen.getByLabelText("大价差连续命中次数") as HTMLInputElement).value).toBe("2");
     expect((screen.getByLabelText("大价差提醒冷却秒数") as HTMLInputElement).value).toBe("600");
+    expect((screen.getByLabelText("同币种提醒冷却秒数") as HTMLInputElement).value).toBe("1800");
     expect(screen.getByLabelText("启用大价差提醒").getAttribute("aria-checked")).toBe("true");
     expect(screen.getByLabelText("大价差提醒自动建卡（不开仓）").getAttribute("aria-checked")).toBe("true");
     fireEvent.change(threshold, { target: { value: "4" } });
     fireEvent.change(screen.getByLabelText("大价差连续命中次数"), { target: { value: "3" } });
     fireEvent.change(screen.getByLabelText("大价差提醒冷却秒数"), { target: { value: "900" } });
+    fireEvent.change(screen.getByLabelText("同币种提醒冷却秒数"), { target: { value: "3600" } });
     fireEvent.click(screen.getByLabelText("启用大价差提醒"));
     fireEvent.click(screen.getByLabelText("大价差提醒自动建卡（不开仓）"));
     fireEvent.click(screen.getByRole("button", { name: /保存风险参数/ }));
@@ -78,6 +80,7 @@ describe("SettingsPage", () => {
         big_spread_alert_pct: 4,
         big_spread_alert_hits: 3,
         big_spread_alert_cooldown_seconds: 900,
+        big_spread_alert_symbol_cooldown_seconds: 3600,
         big_spread_alert_auto_create: false
       });
     });
@@ -90,7 +93,8 @@ describe("SettingsPage", () => {
       if (String(input).includes("/settings/risk") && init?.method !== "PUT") {
         return Response.json({
           ...await response.json(),
-          big_spread_alert_pct: 101, big_spread_alert_hits: 21, big_spread_alert_cooldown_seconds: 604801
+          big_spread_alert_pct: 101, big_spread_alert_hits: 21, big_spread_alert_cooldown_seconds: 604801,
+          big_spread_alert_symbol_cooldown_seconds: 604801
         });
       }
       return response;
@@ -101,20 +105,21 @@ describe("SettingsPage", () => {
     await waitFor(() => expect(Number((threshold as HTMLInputElement).value)).toBe(101));
     const hits = screen.getByLabelText("大价差连续命中次数");
     const cooldown = screen.getByLabelText("大价差提醒冷却秒数");
-    for (const [control, low, high] of [[threshold, 0.1, 100], [hits, 1, 20], [cooldown, 0, 604800]] as const) {
+    const symbolCooldown = screen.getByLabelText("同币种提醒冷却秒数");
+    for (const [control, low, high] of [[threshold, 0.1, 100], [hits, 1, 20], [cooldown, 0, 604800], [symbolCooldown, 0, 604800]] as const) {
       expect(control.getAttribute("aria-valuemin")).toBe(String(low));
       expect(control.getAttribute("aria-valuemax")).toBe(String(high));
     }
     fireEvent.click(screen.getByRole("button", { name: /保存风险参数/ }));
     await waitFor(() => {
-      for (const control of [threshold, hits, cooldown]) {
+      for (const control of [threshold, hits, cooldown, symbolCooldown]) {
         expect(control.getAttribute("aria-invalid")).toBe("true");
       }
     });
     expect(vi.mocked(fetch).mock.calls.some(([input, init]) =>
       String(input).includes("/settings/risk") && init?.method === "PUT"
     )).toBe(false);
-    for (const [control, value] of [[threshold, 0.1], [hits, 1], [cooldown, 0]] as const) {
+    for (const [control, value] of [[threshold, 0.1], [hits, 1], [cooldown, 0], [symbolCooldown, 0]] as const) {
       fireEvent.change(control, { target: { value: String(value) } });
     }
     fireEvent.click(screen.getByRole("button", { name: /保存风险参数/ }));
@@ -124,7 +129,8 @@ describe("SettingsPage", () => {
       );
       expect(call).toBeTruthy();
       expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
-        big_spread_alert_pct: 0.1, big_spread_alert_hits: 1, big_spread_alert_cooldown_seconds: 0
+        big_spread_alert_pct: 0.1, big_spread_alert_hits: 1, big_spread_alert_cooldown_seconds: 0,
+        big_spread_alert_symbol_cooldown_seconds: 0
       });
     });
   }, 30000);

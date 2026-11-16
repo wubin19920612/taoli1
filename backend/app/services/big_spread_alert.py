@@ -7,14 +7,20 @@ from math import isfinite
 from app.models.alert import AlertRule
 from app.models.opportunity import Opportunity
 from app.models.settings import RiskSettings, normalize_mute_symbol
-from app.services.alert_engine import AlertEngine, AlertMatch, EPSILON
+from app.services.alert_delivery_store import AlertDeliveryState
+from app.services.alert_engine import EPSILON, AlertEngine, AlertMatch
 from app.services.alert_metrics import observe_alert_metrics
 from app.services.data_filters import ignored_exchange_set, symbol_is_excluded
 from app.services.risk_labels import known_volume_24h_usdt
 
 BIG_SPREAD_RULE_ID = "big_spread"
 MAX_BIG_SPREAD_KEYS = 5000
+SYMBOL_KEY_PREFIX = f"{BIG_SPREAD_RULE_ID}:symbol:"
 logger = logging.getLogger(__name__)
+
+
+def symbol_delivery_key(symbol: str) -> str:
+    return f"{SYMBOL_KEY_PREFIX}{normalize_mute_symbol(symbol)}"
 
 
 def delivery_rule(rules: list[AlertRule], settings: RiskSettings) -> AlertRule:
@@ -83,8 +89,18 @@ class BigSpreadAlertEngine(AlertEngine):
         self._seen: dict[str, datetime] = {}
         self._active: set[str] = set()
         self._capacity_warning_logged = False
+        self._symbol_last_sent: dict[str, datetime] = {}
+        self._symbol_last_spread: dict[str, float] = {}
+        self._symbol_cooldown_seconds = RiskSettings().big_spread_alert_symbol_cooldown_seconds
 
     def restore(self, states, now):
+        symbol_states = [state for state in states if state.key.startswith(SYMBOL_KEY_PREFIX)]
+        states = [state for state in states if not state.key.startswith(SYMBOL_KEY_PREFIX)]
+        self._symbol_last_sent = {
+            state.key: state.pending_since or state.last_sent_at
+            for state in symbol_states if state.pending_since or state.last_sent_at
+        }
+        self._symbol_last_spread.clear()
         self._last_spread.clear()
         self._active.clear()
         self._capacity_warning_logged = False
@@ -92,7 +108,20 @@ class BigSpreadAlertEngine(AlertEngine):
         unknown = super().restore(states, now)
         # Settings have not loaded yet: preserve the longest supported cooldown.
         self._prune(now, 604800)
+        self._prune_symbols(now, 604800)
+        unknown += [state.key for state in symbol_states if state.pending_since is not None]
         return unknown
+
+    def export_state(self, key: str) -> AlertDeliveryState:
+        if key.startswith(SYMBOL_KEY_PREFIX):
+            return AlertDeliveryState(key=key, last_sent_at=self._symbol_last_sent.get(key))
+        return super().export_state(key)
+
+    def _prune_symbols(self, now: datetime, cooldown: int) -> None:
+        for key, sent_at in list(self._symbol_last_sent.items()):
+            if (now - sent_at).total_seconds() >= cooldown:
+                self._symbol_last_sent.pop(key, None)
+                self._symbol_last_spread.pop(key, None)
 
     def _prune(self, now: datetime, cooldown: int, *, reserve: int = 0) -> None:
         cutoff = now - timedelta(seconds=max(cooldown, 3600))
@@ -115,6 +144,8 @@ class BigSpreadAlertEngine(AlertEngine):
     def evaluate(self, opportunities, rules, now=None, risk_settings=None) -> list[AlertMatch]:
         current = now or datetime.now(UTC)
         settings = risk_settings or RiskSettings()
+        self._symbol_cooldown_seconds = settings.big_spread_alert_symbol_cooldown_seconds
+        self._prune_symbols(current, self._symbol_cooldown_seconds)
         rule = delivery_rule(rules, settings)
         candidates = {}
         for item in opportunities:
@@ -124,6 +155,8 @@ class BigSpreadAlertEngine(AlertEngine):
         self._prune(current, rule.cooldown_seconds)
         active = set()
         matches = []
+        matched_symbols: set[str] = set()
+        reserved_symbols = set(self._symbol_last_sent)
         for key, item in candidates.items():
             if key not in self._seen:
                 if len(self._seen) >= MAX_BIG_SPREAD_KEYS:
@@ -150,6 +183,19 @@ class BigSpreadAlertEngine(AlertEngine):
             retry_after = self._retry_after.get(key)
             if retry_after is not None and current < retry_after:
                 continue
+            if self._symbol_cooldown_seconds > 0:
+                symbol_key = symbol_delivery_key(item.symbol)
+                if symbol_key in matched_symbols:
+                    continue
+                if symbol_key in self._symbol_last_sent:
+                    baseline = self._symbol_last_spread.get(symbol_key)
+                    if baseline is None or item.open_spread_pct + EPSILON < baseline * 2:
+                        continue
+                elif len(reserved_symbols) >= MAX_BIG_SPREAD_KEYS:
+                    # Preserve live cooldowns rather than evicting them to admit new symbols.
+                    continue
+                matched_symbols.add(symbol_key)
+                reserved_symbols.add(symbol_key)
             matches.append(AlertMatch(rule, item, [observe_alert_metrics(item, current)]))
         for key in list(self._hits):
             if key not in active:
@@ -164,4 +210,9 @@ class BigSpreadAlertEngine(AlertEngine):
         self._seen[key] = current
         if status == "sent":
             self._last_spread[key] = match.opportunity.open_spread_pct
+            if self._symbol_cooldown_seconds > 0:
+                symbol_key = symbol_delivery_key(match.opportunity.symbol)
+                self._symbol_last_sent[symbol_key] = current
+                self._symbol_last_spread[symbol_key] = match.opportunity.open_spread_pct
         self._prune(current, match.rule.cooldown_seconds)
+        self._prune_symbols(current, self._symbol_cooldown_seconds)

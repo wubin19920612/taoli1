@@ -87,6 +87,7 @@ from app.services.alert_messages import build_alert_message, build_alert_rating_
 from app.services.alert_reject import AlertRejectLogger
 from app.services.big_spread_alert import (
     BIG_SPREAD_RULE_ID, BigSpreadAlertEngine, big_spread_eligible, big_spread_is_muted,
+    SYMBOL_KEY_PREFIX, symbol_delivery_key,
 )
 from app.services.alert_metrics import observe_alert_metrics
 from app.services.announcements import (
@@ -372,6 +373,13 @@ async def _restore_alert_delivery_state(app: FastAPI) -> None:
             # The bounded fast engine may evict old keys, but their interrupted
             # delivery still needs an audit event and a durable cooldown.
             state = AlertDeliveryState(key=key, last_sent_at=loaded_by_key[key].pending_since)
+        if key.startswith(SYMBOL_KEY_PREFIX):
+            # The route checkpoint owns the audit event; this is only its shared cooldown.
+            try:
+                await store.record(key, state.last_sent_at, state.retry_after, state.retry_attempts)
+            except Exception:
+                logger.exception("recovered symbol cooldown write failed: %s", key)
+            continue
         rule_id, _, opportunity_id = key.partition(":")
         event = AlertEvent(
             # Stable across crashes between event insertion and clearing pending.
@@ -419,6 +427,9 @@ async def _process_alert_match(
     key = f"{match.rule.id}:{match.opportunity.id}"
     is_big_spread = match.rule.id == BIG_SPREAD_RULE_ID
     delivery_engine = app.state.big_spread_alert_engine if is_big_spread else app.state.alert_engine
+    delivery_keys = [key]
+    if is_big_spread and settings.big_spread_alert_symbol_cooldown_seconds > 0:
+        delivery_keys.append(symbol_delivery_key(match.opportunity.symbol))
     started = monotonic()
     durations: dict[str, float | None] = {
         "diag_ms": None, "orderbook_ms": None, "astro_ms": None, "feishu_ms": None,
@@ -648,12 +659,17 @@ async def _process_alert_match(
         else:
             try:
                 async with write_lock:
-                    await delivery_store.mark_pending(key, datetime.now(UTC))
+                    for delivery_key in delivery_keys:
+                        await delivery_store.mark_pending(delivery_key, datetime.now(UTC))
             except Exception:
                 logger.exception("alert delivery pending write failed: %s", key)
                 status = "pending_write_failed"
                 return False
             try:
+                delivery_message = (
+                    f"⚠️ {message}"
+                    if is_big_spread and card_summary.startswith("未创建") else message
+                )
                 # Feishu also has an HTTP timeout; do not cancel an in-flight send
                 # with a new stage deadline or hold the database lock across it.
                 with timed("feishu"):
@@ -662,8 +678,9 @@ async def _process_alert_match(
                         match.opportunity,
                         observations=match.observations,
                         template=alert_template,
-                        prebuilt_text=message,
+                        prebuilt_text=delivery_message,
                     )
+                message = delivery_message
                 if not is_big_spread:
                     sent_ids = getattr(app.state, "alert_round_sent_ids", None)
                     if sent_ids is not None:
@@ -683,13 +700,14 @@ async def _process_alert_match(
             created_at=datetime.now(UTC),
         )
         delivery_engine.record_delivery_result(match, status, now=event.created_at)
-        state = delivery_engine.export_state(key)
         state_write_ok = True
         try:
             async with write_lock:
-                await delivery_store.record(
-                    key, state.last_sent_at, state.retry_after, state.retry_attempts,
-                )
+                for delivery_key in delivery_keys:
+                    state = delivery_engine.export_state(delivery_key)
+                    await delivery_store.record(
+                        delivery_key, state.last_sent_at, state.retry_after, state.retry_attempts,
+                    )
         except Exception:
             # The send already happened; still keep its audit event.
             logger.exception("alert delivery state write failed: %s", key)
@@ -778,6 +796,7 @@ async def _run_alert_loop(app: FastAPI, interval_seconds: float, stop_event: asy
                 retention = max(
                     timedelta(days=7),
                     timedelta(seconds=max(settings.big_spread_alert_cooldown_seconds,
+                                          settings.big_spread_alert_symbol_cooldown_seconds,
                                           max((rule.cooldown_seconds for rule in rules), default=0)))
                     + timedelta(days=1),
                 )
