@@ -1,0 +1,35 @@
+.alert-switchboard {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.alert-switchboard-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 8px 0;
+  border-bottom: 1px solid #eef1ef;
+}
+
+.alert-switchboard-description {
+  display: flex;
+  flex: 1 1 240px;
+  flex-direction: column;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.alert-switchboard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  max-width: 100%;
+}
+
+.alert-switchboard-announcements {
+  min-width: 0;
+  margin-top: 12px;
+}

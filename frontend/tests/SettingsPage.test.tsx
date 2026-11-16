@@ -206,6 +206,14 @@ describe("SettingsPage", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
+        if (url.includes("/settings/announcements")) {
+          return Response.json({
+            enabled: true, listing_delisting_alerts_enabled: true, launchpool_alerts_enabled: true,
+            other_alerts_enabled: false, bootstrap_alerts_enabled: false, event_reminders_enabled: true,
+            poll_interval_seconds: 30, alert_max_age_minutes: 30, record_exchanges: ["binance"],
+            alert_exchanges: [], other_alerts_filter: "arbitrage_relevant", event_reminder_minutes_before: 30
+          });
+        }
         if (url.includes("/settings/risk") && init?.method === "PUT") {
           return Response.json(JSON.parse(String(init.body)));
         }
@@ -939,6 +947,57 @@ describe("SettingsPage", () => {
     expect(screen.getByRole("tab", { name: "告警规则" }).getAttribute("aria-selected")).toBe("true");
     await screen.findByRole("button", { name: "编辑规则 Existing FF" });
   });
+
+  it("shares switchboard risk fields with the existing form while preserving unsaved edits", async () => {
+    window.localStorage.setItem("settings-active-tab", "risk");
+    render(<SettingsPage />);
+    const board = screen.getByRole("region", { name: "告警总开关" });
+    await waitFor(() => expect(within(board).getByRole("switch", { name: "大价差提醒" }).hasAttribute("disabled")).toBe(false));
+    const notes = screen.getByLabelText("信号策略备注 / 后续自定义规则") as HTMLTextAreaElement;
+    fireEvent.change(notes, { target: { value: "保留未保存编辑" } });
+    const baseFetch = vi.mocked(fetch).getMockImplementation()!;
+    let latestRisk: Record<string, unknown>;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const response = await baseFetch(input, init);
+      if (String(input).includes("/settings/risk") && init?.method !== "PUT") {
+        latestRisk = { ...await response.json(), excluded_symbols: ["FRESHUSDT"] };
+        return Response.json(latestRisk);
+      }
+      return response;
+    });
+    fireEvent.click(within(board).getByRole("switch", { name: "大价差提醒" }));
+    await waitFor(() => {
+      const call = vi.mocked(fetch).mock.calls.find(([input, init]) => String(input).includes("/settings/risk") && init?.method === "PUT");
+      expect(call).toBeTruthy();
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({ ...latestRisk, big_spread_alert_enabled: false });
+    });
+    expect(screen.getByLabelText("启用大价差提醒").getAttribute("aria-checked")).toBe("false");
+    expect(notes.value).toBe("保留未保存编辑");
+    fireEvent.click(screen.getByLabelText("启用大价差提醒"));
+    await waitFor(() => expect(within(board).getByRole("switch", { name: "大价差提醒" }).getAttribute("aria-checked")).toBe("true"));
+    fireEvent.click(within(board).getByRole("button", { name: "普通告警规则去设置" }));
+    expect(screen.getByRole("tab", { name: "告警规则" }).getAttribute("aria-selected")).toBe("true");
+    expect(within(board).getByText("已启用 1 / 共 1 条")).toBeTruthy();
+  }, 15000);
+
+  it("rolls the switchboard and risk form back when the shared API rejects a toggle", async () => {
+    window.localStorage.setItem("settings-active-tab", "risk");
+    const baseFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).includes("/settings/risk") && init?.method === "PUT") {
+        return Response.json({ detail: "保存测试失败" }, { status: 503 });
+      }
+      return baseFetch(input, init);
+    });
+    render(<SettingsPage />);
+    const board = screen.getByRole("region", { name: "告警总开关" });
+    const toggle = within(board).getByRole("switch", { name: "大价差提醒" });
+    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(toggle);
+    expect(await within(board).findByText(/保存失败：.*保存测试失败/)).toBeTruthy();
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByLabelText("启用大价差提醒").getAttribute("aria-checked")).toBe("true");
+  }, 15000);
 
   it("allows tab changes when localStorage reads and writes throw", async () => {
     const read = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("storage blocked"); });

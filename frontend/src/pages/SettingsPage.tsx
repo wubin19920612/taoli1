@@ -56,6 +56,7 @@ import { PhonePriceAlertsPanel } from "./PhonePriceAlertsPanel";
 import { MarketIdentityPanel } from "../components/MarketIdentityPanel";
 import { AlertHistoryPage } from "./AlertHistoryPage";
 import { BigSpreadMutesPanel } from "../components/BigSpreadMutesPanel";
+import { AlertSwitchboard } from "../components/AlertSwitchboard";
 
 type AlertRuleFormValues = AlertRule & {
   min_volume_24h_k?: number;
@@ -667,6 +668,8 @@ export function SettingsPage() {
   return (
     <div className="page settings-page">
       {error ? <Alert type="error" message={error} showIcon /> : null}
+      <AlertSwitchboard riskForm={riskForm} rules={rules} loading={loading} error={error}
+        saveRisk={updateRiskSettings} onNavigate={setActiveTab} />
       <Tabs
         activeKey={activeTab}
         onChange={(key) => setActiveTab(key as SettingsTab)}
