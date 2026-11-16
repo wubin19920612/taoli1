@@ -15,7 +15,7 @@ export type LiveOpeningSkipReason = "book_skew" | "book_stale" | "funding_diff" 
   | "mapping_ratio_mismatch" | "volume_too_low" | "volume_unknown" | "category_unconfirmed";
 export interface LiveSummary {
   generated_at: Text; mode: "shadow" | "live" | null; halted: boolean | null; halt_reason: Text;
-  stop_file: boolean | null; opening_paused_reason: Text;
+  stop_file: boolean | null; opening_paused?: boolean | null; opening_paused_reason: Text;
   caps: { leg_max_usd: Num; total_max_usd: Num; total_open_usd: Num; equity_drop_max_usd: Num; max_pairs: Num; open_pairs: Num } | null;
   accounts: { crossex: LiveAccount | null; bitget: LiveAccount | null } | null;
   today: LivePeriod | null; total: LivePeriod | null;
@@ -177,7 +177,24 @@ export async function getLiveExecAdmin<K extends LiveAdminResource>(
   }
 }
 
+// Read access may use the development bypass; only this existing session-only
+// endpoint establishes that the browser can perform administrator writes.
+export async function hasLiveExecAdminSession(signal: AbortSignal): Promise<boolean> {
+  try {
+    // A missing admin session must not redirect visitors who can still read.
+    const response = await fetch(new URL("/api/auth/sessions", window.location.origin).toString(), {
+      signal, credentials: "same-origin", cache: "no-store",
+    });
+    if (!response.ok) return false;
+    const sessions: unknown = await response.json();
+    return Array.isArray(sessions) && sessions.some(row => isObject(row) && row.current === true);
+  } catch {
+    return false;
+  }
+}
+
 export type LiveAdminWrite =
+  | { resource: "opening"; action: "pause" | "resume"; expected_paused: boolean }
   | { resource: "config"; changes: Record<string, number>; expected_version: number }
   | { resource: "universe"; base: string; action: "exclude" | "unexclude"; expected_status: string }
   | { resource: "universe"; base: string; action: "classify"; expected_status: string; classification: {
@@ -204,9 +221,11 @@ export class LiveAdminConflictError extends Error {
 export async function writeLiveExecAdmin(update: LiveAdminWrite): Promise<void> {
   const path = update.resource === "config" ? "config" : update.resource === "universe"
     ? `universe/${encodeURIComponent(update.base)}/${update.action}`
+    : update.resource === "opening" ? `opening/${update.action}`
     : update.resource === "external-positions" ? `external-positions/${update.action}`
       : `mappings/${encodeURIComponent(update.id)}/${update.action}`;
   const body = update.resource === "config" ? { ...update.changes, expected_version: update.expected_version }
+    : update.resource === "opening" ? { expected_paused: update.expected_paused }
     : update.resource === "universe" ? {
       ...(update.action === "classify" ? update.classification : {}), expected_status: update.expected_status,
     } : update.resource === "external-positions"

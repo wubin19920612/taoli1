@@ -35,6 +35,8 @@ WRITES = [
     ("POST", f"mappings/{MAPPING}/reject", MAPPING_EXPECTED),
     ("POST", "external-positions/register", EXTERNAL_BODY),
     ("POST", "external-positions/unregister", EXTERNAL_BODY),
+    ("POST", "opening/pause", {"expected_paused": False}),
+    ("POST", "opening/resume", {"expected_paused": True}),
 ]
 CSRF = {"Origin": "https://radar.test", "X-Live-Exec-CSRF": "1"}
 REAL_CLIENT = httpx.AsyncClient
@@ -104,6 +106,7 @@ def test_write_requires_real_session(context, method, path, body, auth):
     assert not calls
 
 
+@pytest.mark.parametrize("method,path,body", [WRITES[0], *WRITES[-2:]])
 @pytest.mark.parametrize("headers", [
     {}, {"Origin": CSRF["Origin"]}, {"X-Live-Exec-CSRF": "1"},
     {**CSRF, "Origin": "https://evil.test"}, {**CSRF, "Origin": "null"},
@@ -114,10 +117,10 @@ def test_write_requires_real_session(context, method, path, body, auth):
     {**CSRF, "X-Live-Exec-CSRF": "wrong"},
     {**CSRF, "Origin": "https://evil.test", "X-Forwarded-Host": "evil.test"},
 ])
-def test_csrf_is_required(context, headers):
+def test_csrf_is_required(context, headers, method, path, body):
     app, _, calls, _ = context
     client = TestClient(app, base_url="https://radar.test", headers=session_headers("secret"))
-    response = client.put("/api/live-exec/config", headers=headers, json={"order_usd_max": 30, "expected_version": 2})
+    response = client.request(method, f"/api/live-exec/{path}", headers=headers, json=body)
     assert response.status_code == 403
     assert "来源" in response.json()["detail"]
     assert not calls
@@ -280,23 +283,25 @@ def test_no_arbitrary_write_routes(context, path):
     assert not calls
 
 
+@pytest.mark.parametrize("method,path,body", [WRITES[0], *WRITES[-2:]])
 @pytest.mark.parametrize("status,code,chinese", [
     (400, "invalid_update", "更新无效"), (401, "unauthorized", "认证失败"),
     (403, "admin_required", "管理权限"), (503, "temporarily_unavailable", "暂不可用"),
     (302, "unknown", "异常"),
 ])
-def test_upstream_errors_keep_status_and_translate_without_secrets(context, caplog, status, code, chinese):
+def test_upstream_errors_keep_status_and_translate_without_secrets(context, caplog, status, code, chinese, method, path, body):
     _, client, _, install = context
     install(lambda r: httpx.Response(status, json={"error": code, "detail": ADMIN_TOKEN, "token": READ_TOKEN}))
-    response = client.put("/api/live-exec/config", json={"order_usd_max": 30, "expected_version": 2})
+    response = client.request(method, f"/api/live-exec/{path}", json=body)
     assert response.status_code == (status if status != 302 else 502)
     assert chinese in response.json()["detail"]
     assert ADMIN_TOKEN not in response.text + caplog.text
     assert READ_TOKEN not in response.text + caplog.text
 
 
+@pytest.mark.parametrize("method,path,body", [WRITES[0], *WRITES[-2:]])
 @pytest.mark.parametrize("kind,status", [("timeout", 504), ("connect", 502), ("invalid_json", 502)])
-def test_write_transport_errors_are_safe_and_not_retried(context, caplog, kind, status):
+def test_write_transport_errors_are_safe_and_not_retried(context, caplog, kind, status, method, path, body):
     _, client, _, install = context
     requests = []
     def fail(request):
@@ -305,7 +310,7 @@ def test_write_transport_errors_are_safe_and_not_retried(context, caplog, kind, 
         if kind == "connect": raise httpx.ConnectError(ADMIN_TOKEN, request=request)
         return httpx.Response(200, text=ADMIN_TOKEN)
     install(fail)
-    response = client.put("/api/live-exec/config", json={"order_usd_max": 30, "expected_version": 2})
+    response = client.request(method, f"/api/live-exec/{path}", json=body)
     assert response.status_code == status
     assert len(requests) == 1
     assert "live_exec_admin" in caplog.text
@@ -363,7 +368,9 @@ def test_action_preconditions_required_and_conflicts_preserved(context, caplog, 
         missing = {key: value for key, value in body.items() if key != field}
         assert client.request(method, f"/api/live-exec/{path}", json=missing).status_code == 400
     assert not calls
-    if path.startswith("external-positions/"):
+    if path.startswith("opening/"):
+        payload = {"error": "status_conflict", "paused": not body["expected_paused"]}
+    elif path.startswith("external-positions/"):
         payload = {"error": "external_conflict", "current_status": "x1:" + "b" * 64}
     elif path.startswith("universe/"):
         payload = {"error": "status_conflict", "current_status": "u1:" + "b" * 64}
@@ -493,3 +500,58 @@ def test_external_duplicate_nested_keys_and_unsupported_routes(context, action):
     assert client.put(f"/api/live-exec/external-positions/{action}", json=EXTERNAL_BODY).status_code == 405
     assert client.post("/api/live-exec/external-positions/unlock", json=EXTERNAL_BODY).status_code in (400, 404)
     assert not calls
+
+
+@pytest.mark.parametrize("action", ["pause", "resume"])
+@pytest.mark.parametrize("body", [{}, {"paused": True}, {"expected_paused": False, "mode": "live"},
+    *({"expected_paused": value} for value in (None, 0, 1, 0.0, 1.0, "false", "true", [], {})),
+])
+def test_opening_requires_only_a_strict_boolean_precondition(context, action, body):
+    _, client, calls, _ = context
+    assert client.post(f"/api/live-exec/opening/{action}", json=body).status_code == 400
+    assert not calls
+
+
+@pytest.mark.parametrize("action", ["stop", "start", "PAUSE", "live", "shadow", "pause/extra"])
+def test_opening_action_whitelist(context, action):
+    _, client, calls, _ = context
+    assert client.post(f"/api/live-exec/opening/{action}", json={"expected_paused": False}).status_code in (404, 422)
+    assert not calls
+
+
+@pytest.mark.parametrize("action", ["pause", "resume"])
+@pytest.mark.parametrize("raw", [b'[]', b'null', b'{', b'{"expected_paused":NaN}',
+    b'{"expected_paused":true,"expected_paused":false}', b' ' * 8193])
+def test_opening_reuses_strict_json_validation(context, action, raw):
+    _, client, calls, _ = context
+    response = client.post(f"/api/live-exec/opening/{action}", content=raw,
+                           headers={"Content-Type": "application/json"})
+    assert response.status_code in (400, 413)
+    assert not calls
+
+
+@pytest.mark.parametrize("action", ["pause", "resume"])
+def test_opening_rejects_queries_and_other_methods(context, action):
+    _, client, calls, _ = context
+    body = {"expected_paused": False}
+    assert client.post(f"/api/live-exec/opening/{action}?mode=live", json=body).status_code == 422
+    assert client.put(f"/api/live-exec/opening/{action}", json=body).status_code == 405
+    assert not calls
+
+
+@pytest.mark.parametrize("action,paused", [("pause", True), ("resume", False)])
+def test_opening_conflict_preserves_paused_without_headers_or_retry(context, caplog, action, paused):
+    _, client, _, install = context
+    calls = []
+    payload = json.dumps({"error": "status_conflict", "paused": paused}, indent=2).encode()
+
+    def conflict(request):
+        calls.append(request)
+        return httpx.Response(409, content=payload, headers={"Set-Cookie": "unsafe=1", "X-Secret": ADMIN_TOKEN})
+
+    install(conflict)
+    response = client.post(f"/api/live-exec/opening/{action}", json={"expected_paused": not paused})
+    assert response.status_code == 409 and response.content == payload
+    assert "set-cookie" not in response.headers and "x-secret" not in response.headers
+    assert len(calls) == 1
+    assert "status=409" in caplog.text and ADMIN_TOKEN not in caplog.text

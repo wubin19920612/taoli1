@@ -261,6 +261,10 @@ async def _body(request: Request) -> dict:
 
 
 def _validate_update(resource: str, action: str, body: dict) -> None:
+    if resource == "opening":
+        if body.keys() != {"expected_paused"} or type(body.get("expected_paused")) is not bool:
+            raise HTTPException(400, "此操作仅接受布尔值 expected_paused")
+        return
     if resource == "external-positions":
         # Six-part raw identity, matching crossex-exec bfb2861 external.checked_identity.
         # Ownership, catalog freshness and remote positions remain upstream decisions.
@@ -339,7 +343,7 @@ def _audit_parameters(resource: str, identity: str, body: dict) -> str:
     # No arbitrary strings, request headers, session cookies, or upstream bodies enter logs.
     if resource == "external-positions":
         identity = json.dumps(body["identity"], sort_keys=True, separators=(",", ":"))
-    if resource == "config":
+    if resource in {"config", "opening"}:
         value = body
     else:
         value = {"target_sha256": hashlib.sha256(identity.encode()).hexdigest()[:16]}
@@ -434,3 +438,10 @@ async def post_external_positions(request: Request, action: str) -> dict | Respo
     if action not in {"register", "unregister"}:
         raise HTTPException(400, "外仓登记操作无效")
     return await admin_proxy(request, "external-positions", action=action)
+
+
+@router.post("/opening/{action}", dependencies=[Depends(require_admin_session)], response_model=None)
+async def post_opening(request: Request, action: str) -> dict | Response:
+    if action not in {"pause", "resume"}:
+        raise HTTPException(404, "开仓操作无效")
+    return await admin_proxy(request, "opening", action=action)

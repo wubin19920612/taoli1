@@ -6,6 +6,7 @@ import { isPageHidden } from "../utils/pageVisibility";
 import { ProfitHistogram } from "./liveExec/ProfitHistogram";
 import { useLiveExec } from "./liveExec/useLiveExec";
 import { LiveExecAdmin } from "./liveExec/LiveExecAdmin";
+import { LiveOpeningControl } from "./liveExec/LiveOpeningControl";
 import { useLiveExecAdmin } from "./liveExec/useLiveExecAdmin";
 import { LiveExternalPositions } from "./liveExec/LiveExternalPositions";
 import { LiveProgramRisk } from "./liveExec/LiveProgramRisk";
@@ -87,15 +88,15 @@ function Account({ name, data }: { name: string; data: LiveAccount | null }) {
     </>}
   </Card>;
 }
-function Summary({ data, flatten }: { data: LiveSummary | null; flatten?: LiveFlattenStatus | null }) {
+function Summary({ data, flatten, hasAdminSession, refreshSummary }: {
+  data: LiveSummary | null; flatten?: LiveFlattenStatus | null;
+  hasAdminSession: boolean; refreshSummary: () => Promise<LiveSummary | null>;
+}) {
   return <Card title="执行汇总">
+    <LiveOpeningControl data={data} hasAdminSession={hasAdminSession} refreshSummary={refreshSummary} />
     {!data ? <Empty description="暂无汇总数据" /> : <Space direction="vertical" style={{ width: "100%" }}>
       <Space wrap>
-        <Tag color={data.mode === "live" ? "volcano" : "blue"}>{data.mode === "live" ? "实盘模式" : data.mode === "shadow" ? "影子模式" : "模式未知"}</Tag>
         <Tag color={data.halted ? "red" : undefined}>{data.halted ? "熔断" : data.halted === false ? "未熔断" : "熔断状态未知"}{data.halt_reason ? `：${data.halt_reason}` : ""}</Tag>
-        <Tag color={data.stop_file || data.opening_paused_reason ? "orange" : undefined}>
-          {data.stop_file || data.opening_paused_reason ? `暂停开仓${data.opening_paused_reason ? `：${data.opening_paused_reason}` : "（停止文件）"}` : data.stop_file === false ? "开仓未暂停" : "开仓状态未知"}
-        </Tag>
         <Typography.Text type="secondary">数据时间：{date(data.generated_at)}</Typography.Text>
       </Space>
       <Row gutter={[12, 12]}>
@@ -171,7 +172,7 @@ function GroupTable({ title, rows, exitReason = false }: { title: string; rows: 
 }
 
 export function LiveExecPage() {
-  const { summary, positions, trades, stats, error, loadingMore, canLoadMore, loadMore } = useLiveExec();
+  const { summary, positions, trades, stats, error, loadingMore, canLoadMore, loadMore, refreshSummary } = useLiveExec();
   const management = useLiveExecAdmin();
   const [now, setNow] = useState(Date.now);
   const remote = management.data["remote-positions"];
@@ -200,7 +201,8 @@ export function LiveExecPage() {
   return <Space direction="vertical" size="middle" style={{ width: "100%", padding: 16 }}>
     <Typography.Title level={3}>实盘</Typography.Title>
     {error && <Alert type="warning" showIcon message={`实盘服务未连接（${failureLabel(error)}）`} />}
-    <Summary data={summary} flatten={management.data["external-positions"]?.flatten_status} />
+    <Summary data={summary} flatten={management.data["external-positions"]?.flatten_status}
+      hasAdminSession={management.hasAdminSession} refreshSummary={refreshSummary} />
     <LiveProgramRisk summary={summary} registry={management.data["external-positions"]} snapshot={remote} now={now} />
     <LiveExternalPositions registry={management.data["external-positions"]} rows={external.rows}
       snapshot={remote} now={now} cancellable={external.cancellable}

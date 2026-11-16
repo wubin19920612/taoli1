@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getLiveExecAdmin, type LiveAdminResource, type LiveAdminResources } from "../../api/liveExec";
+import { getLiveExecAdmin, hasLiveExecAdminSession, type LiveAdminResource, type LiveAdminResources } from "../../api/liveExec";
+import { AUTH_REQUIRED_EVENT } from "../../api/auth";
 import { isPageHidden } from "../../utils/pageVisibility";
 
 type Data = { [K in LiveAdminResource]: LiveAdminResources[K] | null };
@@ -9,6 +10,7 @@ export function useLiveExecAdmin() {
   const [data, setData] = useState<Data>({ config: null, universe: null, mappings: null, "config/audit": null,
     "external-positions": null, "remote-positions": null });
   const [errors, setErrors] = useState<Partial<Record<LiveAdminResource, string>>>({});
+  const [hasAdminSession, setHasAdminSession] = useState(false);
   const current = useRef<AbortController | null>(null);
   const mounted = useRef(false);
   const refresh = useCallback(async (force = false, keys = resources) => {
@@ -19,6 +21,9 @@ export function useLiveExecAdmin() {
     // An explicit post-write/conflict refresh must revoke old action evidence immediately.
     if (force) setData(old => ({ ...old, "external-positions": null, "remote-positions": null }));
     try {
+      const hasSession = await hasLiveExecAdminSession(controller.signal);
+      if (controller.signal.aborted || !mounted.current) return;
+      setHasAdminSession(hasSession);
       // The upstream has a bounded read slot; serialize the management reads.
       for (const resource of keys) {
         const result = await getLiveExecAdmin(resource, controller.signal);
@@ -33,9 +38,14 @@ export function useLiveExecAdmin() {
   useEffect(() => {
     mounted.current = true;
     const visible = () => {
-      if (isPageHidden()) { current.current?.abort(); current.current = null; }
+      if (isPageHidden()) { current.current?.abort(); current.current = null; setHasAdminSession(false); }
       else void refresh();
     };
+    const expired = () => {
+      setHasAdminSession(false);
+      current.current?.abort(); current.current = null;
+    };
+    window.addEventListener(AUTH_REQUIRED_EVENT, expired);
     visible();
     // Income is bound to the current ten-second snapshot. Read both every five
     // seconds in the same serial lane, with one copy of each at the 30s boundary.
@@ -48,7 +58,8 @@ export function useLiveExecAdmin() {
       mounted.current = false; current.current?.abort(); current.current = null;
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", visible);
+      window.removeEventListener(AUTH_REQUIRED_EVENT, expired);
     };
   }, [refresh]);
-  return { data, errors, refresh };
+  return { data, errors, refresh, hasAdminSession };
 }

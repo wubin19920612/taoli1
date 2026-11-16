@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { getLiveExec, type LiveExecResult, type LiveResource, type LiveResources, type LiveTrade } from "../../api/liveExec";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { getLiveExec, type LiveExecResult, type LiveResource, type LiveResources, type LiveSummary, type LiveTrade } from "../../api/liveExec";
 import { isPageHidden } from "../../utils/pageVisibility";
 
 type Results = { [K in LiveResource]?: LiveExecResult<LiveResources[K]> };
@@ -16,18 +16,22 @@ export function useLiveExec() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const loadMoreRef = useRef<(before: string) => void>(() => undefined);
+  const refreshSummaryRef = useRef<() => Promise<LiveSummary | null>>(async () => null);
+  const refreshSummary = useCallback(() => refreshSummaryRef.current(), []);
 
   useEffect(() => {
     let active = true;
     let paginated = false;
     const pending = new Map<LiveResource, AbortController>();
-    const load = async (resource: LiveResource, before?: string) => {
-      if (!active || isPageHidden() || pending.has(resource)) return;
+    const load = async <K extends LiveResource>(resource: K, before?: string, force = false): Promise<LiveResources[K] | null> => {
+      if (!active || isPageHidden() || (pending.has(resource) && !force)) return null;
+      pending.get(resource)?.abort();
       const controller = new AbortController();
       pending.set(resource, controller);
       if (before) { paginated = true; setLoadingMore(true); }
       const result = await getLiveExec(resource, controller.signal, before);
-      if (active && !controller.signal.aborted && !isPageHidden()) {
+      const accepted = active && !controller.signal.aborted && !isPageHidden();
+      if (accepted) {
         setResults(previous => {
           if (resource !== "trades" || !result.available) return { ...previous, [resource]: result };
           const incoming = (result.data ?? []) as LiveTrade[];
@@ -48,9 +52,11 @@ export function useLiveExec() {
         pending.delete(resource);
         if (active && before) setLoadingMore(false);
       }
+      return accepted && result.available ? result.data : null;
     };
     const refresh = (keys: LiveResource[]) => keys.forEach(key => { void load(key); });
     loadMoreRef.current = before => { void load("trades", before); };
+    refreshSummaryRef.current = () => load("summary", undefined, true);
     refresh(resources);
     const fast = window.setInterval(() => refresh(["summary", "positions"]), 5000);
     const slow = window.setInterval(() => refresh(["trades", "stats"]), 30000);
@@ -64,6 +70,7 @@ export function useLiveExec() {
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       active = false;
+      refreshSummaryRef.current = async () => null;
       window.clearInterval(fast); window.clearInterval(slow);
       pending.forEach(controller => controller.abort());
       document.removeEventListener("visibilitychange", onVisibility);
@@ -79,6 +86,6 @@ export function useLiveExec() {
   const trades = data("trades") ?? [];
   const cursor = trades[trades.length - 1]?.closed_at;
   return { summary: data("summary"), positions: data("positions") ?? [], trades, stats: data("stats"),
-    error, loadingMore, canLoadMore: hasMore && Boolean(cursor) && !error,
+    error, loadingMore, refreshSummary, canLoadMore: hasMore && Boolean(cursor) && !error,
     loadMore: () => { if (cursor) loadMoreRef.current(cursor); } };
 }

@@ -46,6 +46,7 @@ beforeEach(() => {
   fetchMock = vi.fn(async (input: string) => {
     const url = new URL(input);
     requests.push(url);
+    if (url.pathname === "/api/auth/sessions") return { ok: true, status: 200, json: async () => [{ current: true }] };
     const path = url.pathname.replace("/api/live-exec/", "");
     const data = adminFixtures[path as keyof typeof adminFixtures] ?? liveFixtures[path as keyof typeof liveFixtures];
     return { ok: true, status: 200, json: async () => ({ available: true, data }) };
@@ -149,7 +150,7 @@ describe("实盘契约页面", () => {
     const { unmount } = render(<LiveExecPage />);
     await flush();
     expect(screen.getByRole("heading", { name: "实盘" })).toBeTruthy();
-    for (const text of ["实盘模式", "熔断：权益保护", "暂停开仓：人工暂停", "最后一个错误：最近错误示例",
+    for (const text of ["实盘模式", "熔断：权益保护", "开仓：已暂停", "开仓限制：人工暂停", "最后一个错误：最近错误示例",
       "今日净利润", "累计净利润", "已开名义额", "持仓对数", "保证金倍数", "单腿处理中",
       "收敛止盈", "模拟净收益（bp）", "两腿发送 / 成交时间差（毫秒）",
       "按币种", "按交易对", "按平仓原因", "按开仓价差", "实盘与模拟对比", "结算前平仓"]) {
@@ -174,23 +175,26 @@ describe("实盘契约页面", () => {
 
   it("polls at 5/30 seconds, pauses when hidden and cleans up on unmount", async () => {
     const { unmount } = render(<LiveExecPage />); await flush();
-    expect(requests).toHaveLength(10);
+    expect(requests).toHaveLength(11);
+    expect(count("sessions")).toBe(1);
     expect(count("remote-positions")).toBe(1);
     expect(adminCounts()).toEqual([1, 1, 1, 1, 1]);
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     expect([count("summary"), count("positions"), count("trades"), count("stats")]).toEqual([2, 2, 1, 1]);
     expect(adminCounts()).toEqual([1, 1, 1, 1, 2]);
-    expect(requests).toHaveLength(14);
+    expect(requests).toHaveLength(16);
+    expect(count("sessions")).toBe(2);
     expect(count("remote-positions")).toBe(2);
     await act(async () => { await vi.advanceTimersByTimeAsync(25000); });
     expect([count("summary"), count("positions"), count("trades"), count("stats")]).toEqual([7, 7, 2, 2]);
     expect(adminCounts()).toEqual([2, 2, 2, 2, 7]);
-    expect(requests).toHaveLength(40);
+    expect(requests).toHaveLength(47);
+    expect(count("sessions")).toBe(7);
     expect(count("remote-positions")).toBe(7);
     visibility("hidden"); const hiddenCount = requests.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
     expect(requests).toHaveLength(hiddenCount);
-    visibility("visible"); await flush(); expect(requests.length).toBe(hiddenCount + 10);
+    visibility("visible"); await flush(); expect(requests.length).toBe(hiddenCount + 11);
     expect(count("remote-positions")).toBe(8);
     expect(adminCounts()).toEqual([3, 3, 3, 3, 8]);
     unmount(); const endCount = requests.length;
@@ -201,7 +205,7 @@ describe("实盘契约页面", () => {
   it("does not fetch on a hidden initial mount", async () => {
     visibility("hidden"); render(<LiveExecPage />); await flush();
     expect(requests).toHaveLength(0);
-    visibility("visible"); await flush(); expect(requests).toHaveLength(10);
+    visibility("visible"); await flush(); expect(requests).toHaveLength(11);
     expect(adminCounts()).toEqual([1, 1, 1, 1, 1]);
   });
 
