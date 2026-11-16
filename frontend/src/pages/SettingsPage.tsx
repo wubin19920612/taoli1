@@ -669,7 +669,11 @@ export function SettingsPage() {
     <div className="page settings-page">
       {error ? <Alert type="error" message={error} showIcon /> : null}
       <AlertSwitchboard riskForm={riskForm} rules={rules} loading={loading} error={error}
-        saveRisk={updateRiskSettings} onNavigate={setActiveTab} />
+        saveRisk={updateRiskSettings} onNavigate={(tab, anchor) => {
+          setActiveTab(tab);
+          window.setTimeout(() => document.getElementById(anchor ?? "settings-tabs")?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 80);
+        }} />
+      <div id="settings-tabs" />
       <Tabs
         activeKey={activeTab}
         onChange={(key) => setActiveTab(key as SettingsTab)}
@@ -939,7 +943,7 @@ export function SettingsPage() {
                     <section className="settings-section">
                       <div className="form-grid">
                         <div className="form-grid-heading">
-                          <Typography.Title level={5}>大价差快速提醒</Typography.Title>
+                          <Typography.Title level={5} id="anchor-big-spread">大价差快速提醒</Typography.Title>
                           <Typography.Paragraph type="secondary">
                             按可成交开仓价差连续命中触发，不受普通规则的衰减检查和风险标签排除影响，风险仍会写入提醒。
                             保留类型、黑名单、成交额、行情时效和市场身份限制。路线冷却期内价差增加至少 50% 时可再次提醒；
@@ -995,7 +999,7 @@ export function SettingsPage() {
                     <section className="settings-section">
                       <div className="form-grid">
                         <div className="form-grid-heading">
-                          <Typography.Title level={5}>多交易所实时溢价指数告警</Typography.Title>
+                          <Typography.Title level={5} id="anchor-premium">多交易所实时溢价指数告警</Typography.Title>
                           <Typography.Paragraph type="secondary">
                             同一已核验标的至少两个不同交易所的实时溢价指数绝对值严格超过阈值时，通过飞书告警。
                             正负方向均计入，同一交易所的多个市场只计一个交易所。官方 Premium Index 优先，

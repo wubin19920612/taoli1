@@ -25,7 +25,7 @@ interface Props {
   loading: boolean;
   error?: string;
   saveRisk: (settings: RiskSettings) => Promise<RiskSettings>;
-  onNavigate: (tab: "risk" | "rules") => void;
+  onNavigate: (tab: "risk" | "rules", anchor?: string) => void;
 }
 
 function Row({ label, status, control, onConfigure, href }: {
@@ -123,22 +123,26 @@ export function AlertSwitchboard({ riskForm, rules, loading, error, saveRisk, on
     }
   };
 
-  const riskRows: { field: RiskSwitch; label: string; status: string }[] = [
+  const riskRows: { field: RiskSwitch; label: string; status: string; anchor: string }[] = [
     {
       field: "big_spread_alert_enabled", label: "大价差提醒",
-      status: `阈值 ≥${risk?.big_spread_alert_pct ?? "—"}% / 连续 ${risk?.big_spread_alert_hits ?? "—"} 次 / 路线冷却 ${risk?.big_spread_alert_cooldown_seconds ?? "—"} 秒 / 同币种冷却 ${risk?.big_spread_alert_symbol_cooldown_seconds ?? "—"} 秒`
+      status: `阈值 ≥${risk?.big_spread_alert_pct ?? "—"}% / 连续 ${risk?.big_spread_alert_hits ?? "—"} 次 / 路线冷却 ${risk?.big_spread_alert_cooldown_seconds ?? "—"} 秒 / 同币种冷却 ${risk?.big_spread_alert_symbol_cooldown_seconds ?? "—"} 秒`,
+      anchor: "anchor-big-spread"
     },
     {
       field: "big_spread_alert_auto_create", label: "大价差自动建卡",
-      status: "自动创建卡片，开仓保持关闭；还需启用 Astro 全局自动建卡"
+      status: "自动创建卡片，开仓保持关闭；还需启用 Astro 全局自动建卡",
+      anchor: "anchor-big-spread"
     },
     {
       field: "big_spread_phone_enabled", label: "夜间电话加急",
-      status: `${risk?.big_spread_phone_start_hour ?? "—"}:00-${risk?.big_spread_phone_end_hour ?? "—"}:00 / ≥${risk?.big_spread_phone_min_spread_pct ?? "—"}% / 每晚≤${risk?.big_spread_phone_max_per_night ?? "—"} 次（北京时间）`
+      status: `${risk?.big_spread_phone_start_hour ?? "—"}:00-${risk?.big_spread_phone_end_hour ?? "—"}:00 / ≥${risk?.big_spread_phone_min_spread_pct ?? "—"}% / 每晚≤${risk?.big_spread_phone_max_per_night ?? "—"} 次（北京时间）`,
+      anchor: "anchor-big-spread"
     },
     {
       field: "multi_exchange_premium_alert_enabled", label: "多交易所溢价告警",
-      status: `绝对值 ≥${risk?.multi_exchange_premium_threshold_pct ?? "—"}% / 冷却 ${risk?.multi_exchange_premium_cooldown_seconds ?? "—"} 秒`
+      status: `绝对值 ≥${risk?.multi_exchange_premium_threshold_pct ?? "—"}% / 冷却 ${risk?.multi_exchange_premium_cooldown_seconds ?? "—"} 秒`,
+      anchor: "anchor-premium"
     }
   ];
 
@@ -146,9 +150,9 @@ export function AlertSwitchboard({ riskForm, rules, loading, error, saveRisk, on
     <section className="panel alert-switchboard" aria-label="告警总开关">
       <Typography.Title level={4}>告警总开关</Typography.Title>
       {saveError ? <Alert type="error" showIcon message={saveError} /> : null}
-      {riskRows.map(({ field, label, status }) => (
+      {riskRows.map(({ field, label, status, anchor }) => (
         <Row key={field} label={label} status={loading ? "加载中" : error ? "加载失败" : status}
-          onConfigure={() => onNavigate("risk")}
+          onConfigure={() => onNavigate("risk", anchor)}
           control={<Switch aria-label={label} checked={Boolean(risk?.[field])} loading={riskSaving === field}
             disabled={loading || Boolean(error) || !risk || riskSaving !== null}
             onChange={(checked) => void toggleRisk(field, checked)} />} />

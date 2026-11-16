@@ -163,7 +163,7 @@ describe("AlertSwitchboard", () => {
   it("navigates to the appropriate settings tab or announcements page", async () => {
     render(<Harness />);
     fireEvent.click(screen.getByRole("button", { name: "大价差提醒去设置" }));
-    expect(navigate).toHaveBeenLastCalledWith("risk");
+    expect(navigate).toHaveBeenLastCalledWith("risk", "anchor-big-spread");
     fireEvent.click(screen.getByRole("button", { name: "普通告警规则去设置" }));
     expect(navigate).toHaveBeenLastCalledWith("rules");
     fireEvent.click(screen.getByRole("button", { name: "手机价格提醒去设置" }));
