@@ -75,6 +75,25 @@ describe("AlertSwitchboard", () => {
     expect(getRiskSettings).not.toHaveBeenCalled();
   });
 
+  it.each([undefined, 7, 14, 0])("shows the new-symbol phone window for %s days", async (days) => {
+    function PhoneSummary() {
+      const [riskForm] = Form.useForm<RiskSettings>();
+      return <>
+        <AlertSwitchboard riskForm={riskForm} rules={[]} loading={false}
+          saveRisk={updateRiskSettings} onNavigate={navigate} />
+        <Form form={riskForm} initialValues={{ ...risk, big_spread_phone_new_symbol_days: days }} />
+      </>;
+    }
+    render(<PhoneSummary />);
+    const row = screen.getByRole("group", { name: "夜间电话加急" });
+    await within(row).findByText(/22:00-7:00/);
+    if (days === 0) {
+      expect(within(row).queryByText(/仅新标的/)).toBeNull();
+    } else {
+      expect(within(row).getByText(new RegExp(`仅新标的\\(${days ?? 7}天\\)`))).toBeTruthy();
+    }
+  });
+
   it("saves only the clicked risk field over fresh server values and preserves local edits", async () => {
     const latest = { ...risk, big_spread_alert_pct: 9, excluded_symbols: ["NEWUSDT"], signal_strategy_notes: "服务器备注" };
     vi.mocked(getRiskSettings).mockResolvedValue(latest);

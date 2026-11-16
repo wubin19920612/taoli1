@@ -136,7 +136,9 @@ export function AlertSwitchboard({ riskForm, rules, loading, error, saveRisk, on
     },
     {
       field: "big_spread_phone_enabled", label: "夜间电话加急",
-      status: `${risk?.big_spread_phone_start_hour ?? "—"}:00-${risk?.big_spread_phone_end_hour ?? "—"}:00 / ≥${risk?.big_spread_phone_min_spread_pct ?? "—"}% / 每晚≤${risk?.big_spread_phone_max_per_night ?? "—"} 次（北京时间）`,
+      status: `${risk?.big_spread_phone_start_hour ?? "—"}:00-${risk?.big_spread_phone_end_hour ?? "—"}:00 / ≥${risk?.big_spread_phone_min_spread_pct ?? "—"}% / 每晚≤${risk?.big_spread_phone_max_per_night ?? "—"} 次（北京时间）`
+        + ((risk?.big_spread_phone_new_symbol_days ?? 7) > 0
+          ? ` / 仅新标的(${risk?.big_spread_phone_new_symbol_days ?? 7}天)` : ""),
       anchor: "anchor-big-spread"
     },
     {

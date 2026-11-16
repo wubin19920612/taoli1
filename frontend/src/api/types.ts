@@ -529,6 +529,7 @@ export interface RiskSettings {
   big_spread_phone_end_hour?: number;
   big_spread_phone_min_spread_pct?: number;
   big_spread_phone_max_per_night?: number;
+  big_spread_phone_new_symbol_days?: number;
   min_volume_24h_usdt: number;
   min_volume_24h_k?: number;
   stale_after_seconds: number;
