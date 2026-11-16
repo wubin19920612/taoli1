@@ -12,7 +12,7 @@ from app.services.announcements import GateAnnouncementProvider
 
 NOW = datetime(2026, 10, 28, 8, tzinfo=UTC)
 CATEGORIES = ("newspotlistings", "newfutureslistings", "newconvertlistings", "delisted", "")
-CATEGORY_FAILURE = "failed to fetch gate announcement category: %s"
+CATEGORY_FAILURE = "failed to fetch gate announcement category: %s error=%s"
 LOGGER_NAME = "app.services.announcements"
 
 
@@ -97,9 +97,13 @@ async def test_all_categories_fail_then_back_off_and_keep_reader_results(
         assert feed.direct_requests == list(CATEGORIES)
         assert feed.reader_requests == ["", "dividenddistribution"]
         first_logs = category_logs(caplog)
-        assert [record.args for record in first_logs] == [(category,) for category in CATEGORIES]
-        assert all(record.levelno == logging.WARNING and record.exc_info for record in first_logs)
-        assert all(record.exc_info[1].response.status_code == 567 for record in first_logs)
+        assert [record.args for record in first_logs] == [
+            (category or "general", "HTTPStatusError") for category in CATEGORIES
+        ]
+        assert all(record.levelno == logging.WARNING for record in first_logs)
+        assert all(record.exc_info is None and record.exc_text is None for record in first_logs)
+        assert "Traceback" not in caplog.text
+        assert provider._category_failures == dict.fromkeys(CATEGORIES, "HTTPStatusError:567")
 
         # The next two polls skip all direct requests, including just before expiry.
         for now in (1030.0, 1299.999):
@@ -169,8 +173,11 @@ async def test_one_category_recovers_at_expiry_and_clears_backoff_and_failure(
         await provider.fetch_headlines()
         warnings = [record for record in category_logs(caplog) if record.levelno == logging.WARNING]
         assert len(warnings) == 1
-        assert warnings[0].args == ("newspotlistings",)
-        assert warnings[0].exc_info
+        assert warnings[0].args == ("newspotlistings", "HTTPStatusError")
+        assert warnings[0].exc_info is None
+        assert warnings[0].exc_text is None
+        assert "Traceback" not in caplog.text
+        assert provider._category_failures["newspotlistings"] == "HTTPStatusError:567"
 
 
 @pytest.mark.asyncio
@@ -189,12 +196,15 @@ async def test_failure_signature_changes_warn_again(
         await provider.fetch_headlines()
         warnings = [record for record in category_logs(caplog) if record.levelno == logging.WARNING]
         assert len(warnings) == 1
-        assert warnings[0].args == ("delisted",)
-        assert warnings[0].exc_info
+        expected_type = "HTTPStatusError" if changed_failure == 503 else "ConnectTimeout"
+        assert warnings[0].args == ("delisted", expected_type)
+        assert warnings[0].exc_info is None
+        assert warnings[0].exc_text is None
+        assert "Traceback" not in caplog.text
         if changed_failure == 503:
-            assert warnings[0].exc_info[1].response.status_code == 503
+            assert provider._category_failures["delisted"] == "HTTPStatusError:503"
         else:
-            assert isinstance(warnings[0].exc_info[1], httpx.ConnectTimeout)
+            assert provider._category_failures["delisted"] == "ConnectTimeout"
 
         caplog.clear()
         clock.now = 1600.0
@@ -236,9 +246,52 @@ async def test_partial_failure_preserves_results_and_request_order_without_backo
             assert feed.reader_requests == (["", "dividenddistribution"] if not failed_category else [])
             records = category_logs(caplog)
             assert len(records) == 1
-            assert records[0].args == (failed_category,)
+            assert records[0].args == (failed_category or "general", "HTTPStatusError")
             assert records[0].levelno == (logging.WARNING if poll == 0 else logging.DEBUG)
-            assert bool(records[0].exc_info) == (poll == 0)
+            assert records[0].exc_info is None
+            assert records[0].exc_text is None
+            assert "Traceback" not in caplog.text
+            assert provider._category_failures[failed_category] == "HTTPStatusError:567"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("category", ["", "dividenddistribution"])
+async def test_reader_failure_logs_without_traceback_and_preserves_recovery(caplog, category):
+    caplog.set_level(logging.DEBUG, logger=LOGGER_NAME)
+    outcomes = iter([567, 567, httpx.ConnectTimeout, 503, 200, 567])
+
+    def respond(request):
+        outcome = next(outcomes)
+        if outcome is httpx.ConnectTimeout:
+            raise httpx.ConnectTimeout("offline fixture", request=request)
+        return httpx.Response(outcome, text=gate_page(61001, "Gate general announcement"))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        provider = GateAnnouncementProvider(client=client, now_fn=lambda: NOW)
+        for expected_level, signature in (
+            (logging.WARNING, "HTTPStatusError:567"),
+            (logging.DEBUG, "HTTPStatusError:567"),
+            (logging.WARNING, "ConnectTimeout"),
+            (logging.WARNING, "HTTPStatusError:503"),
+            (logging.INFO, None),
+            (logging.WARNING, "HTTPStatusError:567"),
+        ):
+            caplog.clear()
+            rows = await provider._fetch_reader_page(category)
+            records = [record for record in caplog.records if record.name == LOGGER_NAME]
+            assert len(records) == 1
+            assert records[0].levelno == expected_level
+            assert records[0].exc_info is None
+            assert records[0].exc_text is None
+            assert (category or "general") in records[0].getMessage()
+            assert "Traceback" not in caplog.text
+            if signature is None:
+                assert [row.announcement_id for row in rows] == ["61001"]
+                assert ("reader", category) not in provider._category_failures
+            else:
+                assert rows == []
+                assert signature.split(":", 1)[0] in records[0].getMessage()
+                assert provider._category_failures[("reader", category)] == signature
 
 
 @pytest.mark.asyncio

@@ -70,7 +70,6 @@ async def run_announcement_sources(
             logger.warning(
                 "Announcement %s failed provider=%s error=%s consecutive_failures=%d",
                 stage, type(provider).__name__, type(exc).__name__, count,
-                exc_info=previous is None or previous[:2] != signature,
             )
 
         def log_recovery(stage: str) -> None:

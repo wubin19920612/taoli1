@@ -1699,7 +1699,16 @@ class TradeAvailabilityMonitor:
             except Exception as exc:
                 error = f"{exc.__class__.__name__}: {exc}"
                 if error != watch.last_error:
-                    logger.exception("trade availability watch failed id=%s", watch.id)
+                    if isinstance(exc, RuntimeError) and (
+                        str(exc) == "聚合行情中未找到指定原始市场"
+                        or str(exc).startswith("聚合行情中未找到指定原始市场；诊断：")
+                    ):
+                        logger.warning(
+                            "trade availability watch failed id=%s error=%s", watch.id,
+                            error.replace("\r", r"\r").replace("\n", r"\n"),
+                        )
+                    else:
+                        logger.exception("trade availability watch failed id=%s", watch.id)
                 else:
                     logger.debug(
                         "trade availability watch still failing id=%s error=%s", watch.id, error,

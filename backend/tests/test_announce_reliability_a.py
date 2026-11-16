@@ -146,14 +146,28 @@ async def test_gate_reader_failure_dedup_signature_and_recovery(caplog, changed)
             assert await provider._fetch_reader_page("") == []
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(warnings) == 1
-        assert warnings[0].exc_info
+        assert warnings[0].exc_info is None
+        assert warnings[0].exc_text is None
+        assert warnings[0].getMessage() == "failed to fetch gate reader fallback: general error=HTTPStatusError"
+        assert "Traceback" not in caplog.text
+        assert provider._category_failures[("reader", "")] == "HTTPStatusError:403"
         repeated = [r for r in caplog.records if r.levelno == logging.DEBUG]
         assert len(repeated) == 2 and all(r.exc_info is None for r in repeated)
+        assert all(r.exc_text is None and "error=HTTPStatusError" in r.getMessage() for r in repeated)
 
         caplog.clear()
         outcome = changed
         assert await provider._fetch_reader_page("") == []
-        assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert warnings[0].exc_info is None
+        assert warnings[0].exc_text is None
+        expected_type = "HTTPStatusError" if changed == 503 else "ReadTimeout"
+        assert warnings[0].getMessage() == f"failed to fetch gate reader fallback: general error={expected_type}"
+        assert "Traceback" not in caplog.text
+        assert provider._category_failures[("reader", "")] == (
+            "HTTPStatusError:503" if changed == 503 else "ReadTimeout"
+        )
 
         caplog.clear()
         outcome = 200
@@ -162,11 +176,17 @@ async def test_gate_reader_failure_dedup_signature_and_recovery(caplog, changed)
         infos = [r for r in caplog.records if r.levelno == logging.INFO]
         assert len(infos) == 1 and "recovered" in infos[0].getMessage()
         assert provider._category_failures[""] == "HTTPStatusError:403"
+        assert ("reader", "") not in provider._category_failures
 
         caplog.clear()
         outcome = 403
-        await provider._fetch_reader_page("")
-        assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+        assert await provider._fetch_reader_page("") == []
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert warnings[0].exc_info is None
+        assert warnings[0].exc_text is None
+        assert "error=HTTPStatusError" in warnings[0].getMessage()
+        assert "Traceback" not in caplog.text
 
 
 def source_labels(provider):

@@ -256,7 +256,7 @@ def stage_records(caplog, stage, text):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["poll", "localization"])
-async def test_repeated_provider_timeouts_log_one_traceback_and_recovery(monkeypatch, caplog, stage):
+async def test_repeated_provider_timeouts_log_single_lines_and_recovery(monkeypatch, caplog, stage):
     caplog.set_level(logging.INFO, logger=announcement_polling.__name__)
     provider = ScriptedProvider([
         httpx.ConnectTimeout("first"), httpx.ConnectTimeout("second"),
@@ -265,7 +265,13 @@ async def test_repeated_provider_timeouts_log_one_traceback_and_recovery(monkeyp
     observations, states, monitor = await run_scripted_polls(monkeypatch, [provider])
 
     failures = stage_records(caplog, stage, "failed")
-    assert [bool(record.exc_info) for record in failures] == [True, False, False, True]
+    assert len(failures) == 4
+    assert all(record.exc_info is None and record.exc_text is None for record in failures)
+    assert "Traceback" not in caplog.text
+    assert [record.getMessage() for record in failures] == [
+        f"Announcement {stage} failed provider=ScriptedProvider error=ConnectTimeout consecutive_failures={count}"
+        for count in (1, 2, 3, 1)
+    ]
     assert all(record.levelno == logging.WARNING for record in failures)
     assert re.search(r"\b2\b", failures[1].getMessage())
     assert re.search(r"\b3\b", failures[2].getMessage())
@@ -304,7 +310,14 @@ async def test_provider_signature_includes_http_status(monkeypatch, caplog, stag
     await run_scripted_polls(monkeypatch, [provider])
 
     failures = stage_records(caplog, stage, "failed")
-    assert [bool(record.exc_info) for record in failures] == [True, True, False, True, False]
+    assert len(failures) == 5
+    assert all(record.levelno == logging.WARNING for record in failures)
+    assert all(record.exc_info is None and record.exc_text is None for record in failures)
+    assert "Traceback" not in caplog.text
+    assert [record.getMessage() for record in failures] == [
+        f"Announcement {stage} failed provider=ScriptedProvider error={error} consecutive_failures={count}"
+        for count, error in enumerate(["ConnectTimeout"] + ["HTTPStatusError"] * 4, 1)
+    ]
     recovered = stage_records(caplog, stage, "recovered")
     assert len(recovered) == 1
     assert "recovered after 5 failures" in recovered[0].getMessage()
@@ -320,8 +333,13 @@ async def test_provider_failure_state_is_independent_per_provider(monkeypatch, c
     await run_scripted_polls(monkeypatch, providers)
 
     failures = stage_records(caplog, stage, "failed")
-    assert sum(bool(record.exc_info) for record in failures) == 2
-    assert sum(not record.exc_info for record in failures) == 2
+    assert len(failures) == 4
+    assert all(record.exc_info is None and record.exc_text is None for record in failures)
+    assert "Traceback" not in caplog.text
+    assert [record.getMessage() for record in failures] == [
+        f"Announcement {stage} failed provider=ScriptedProvider error=ConnectTimeout consecutive_failures={count}"
+        for count in (1, 1, 2, 2)
+    ]
     recovered = stage_records(caplog, stage, "recovered")
     assert len(recovered) == 2
     assert all("recovered after 2 failures" in record.getMessage() for record in recovered)

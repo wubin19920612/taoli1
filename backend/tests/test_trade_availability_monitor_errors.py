@@ -96,7 +96,7 @@ def monitor_records(caplog) -> list[logging.LogRecord]:
 
 
 @pytest.mark.parametrize("failure", ["missing_market", "fetch_exception"])
-async def test_same_error_logs_one_traceback_and_persists_every_poll(clock, caplog, failure):
+async def test_same_error_logs_once_and_persists_every_poll(clock, caplog, failure):
     watch = make_watch()
     repository = MemoryRepository(watch)
     service = AsyncMock()
@@ -125,15 +125,17 @@ async def test_same_error_logs_one_traceback_and_persists_every_poll(clock, capl
         records = monitor_records(caplog)
         assert len(records) == 1
         assert f"id={watch.id}" in records[0].getMessage()
-        if index == 0:
+        if index == 0 and failure == "fetch_exception":
             assert records[0].levelno == logging.ERROR
             assert records[0].exc_info is not None
-            expected_type = RuntimeError if failure == "missing_market" else ValueError
-            assert records[0].exc_info[0] is expected_type
+            assert records[0].exc_info[0] is ValueError
+            assert "Traceback" in caplog.text
         else:
-            assert records[0].levelno == logging.DEBUG
+            assert records[0].levelno == (logging.WARNING if index == 0 else logging.DEBUG)
             assert records[0].exc_info is None
             assert records[0].exc_text is None
+            assert error in records[0].getMessage()
+            assert "Traceback" not in caplog.text
 
 
 async def test_changed_error_logs_another_traceback(clock, caplog):
@@ -157,6 +159,36 @@ async def test_changed_error_logs_another_traceback(clock, caplog):
     assert [watch.last_error for watch in repository.saved] == [
         "RuntimeError: A", "RuntimeError: A", "RuntimeError: B", "RuntimeError: B", "ValueError: B",
     ]
+
+
+@pytest.mark.parametrize("error", [
+    RuntimeError("upstream not ready"),
+    ValueError("聚合行情中未找到指定原始市场"),
+    RuntimeError("聚合行情中未找到指定原始市场的未知故障"),
+])
+async def test_unexpected_errors_keep_tracebacks_and_persist_state(clock, caplog, error):
+    watch = make_watch()
+    repository = MemoryRepository(watch)
+    service = AsyncMock()
+    service.fetch_status.side_effect = error
+    sender = AsyncMock()
+    monitor = module.TradeAvailabilityMonitor(repository, service, sender)
+    caplog.set_level(logging.DEBUG, logger=LOGGER_NAME)
+
+    assert await monitor.check_once() == []
+    assert repository.saved == [watch.model_copy(update={
+        "last_checked_at": START,
+        "last_error": f"{type(error).__name__}: {error}",
+        "updated_at": START,
+    })]
+    records = monitor_records(caplog)
+    assert len(records) == 1
+    assert records[0].levelno == logging.ERROR
+    assert records[0].exc_info[0] is type(error)
+    assert records[0].exc_info[1] is error
+    assert "Traceback" in caplog.text
+    service.fetch_transfer_status.assert_not_awaited()
+    sender.assert_not_awaited()
 
 
 async def test_recovery_logs_once_and_preserves_events_notifications_and_transfers(clock, caplog):
@@ -228,10 +260,11 @@ async def test_recovery_logs_once_and_preserves_events_notifications_and_transfe
     ({}, ""),
     ({"k2": "x", "k1": DIAGNOSTIC}, f"；诊断：{DIAGNOSTIC}"),
     ({"k2": "x", "k1": ""}, "；诊断："),
+    ({"k1": "upstream\r\nnot ready"}, "；诊断：upstream\r\nnot ready"),
     ({"k1": "诊" * 199}, "；诊断：" + "诊" * 199),
     ({"k1": "诊" * 200}, "；诊断：" + "诊" * 200),
     ({"k1": "诊" * 200 + "末尾不应保留"}, "；诊断：" + "诊" * 200),
-], ids=["empty", "sorted_key", "empty_diagnostic", "199_chars", "200_chars", "truncated"])
+], ids=["empty", "sorted_key", "empty_diagnostic", "multiline", "199_chars", "200_chars", "truncated"])
 async def test_missing_market_preserves_first_sorted_diagnostic(clock, caplog, errors, suffix):
     watch = make_watch()
     repository = MemoryRepository(watch)
@@ -240,14 +273,19 @@ async def test_missing_market_preserves_first_sorted_diagnostic(clock, caplog, e
         query=watch.symbol, observed_at=START, errors=errors,
     )
     monitor = module.TradeAvailabilityMonitor(repository, service)
-    caplog.set_level(logging.ERROR, logger=LOGGER_NAME)
+    caplog.set_level(logging.WARNING, logger=LOGGER_NAME)
 
     assert await monitor.check_once() == []
     assert repository.watches[watch.id].last_error == MISSING_MARKET + suffix
     records = monitor_records(caplog)
     assert len(records) == 1
-    assert records[0].exc_info[0] is RuntimeError
-    assert str(records[0].exc_info[1]) == "聚合行情中未找到指定原始市场" + suffix
+    assert records[0].levelno == logging.WARNING
+    assert records[0].exc_info is None
+    assert records[0].exc_text is None
+    expected_log_error = (MISSING_MARKET + suffix).replace("\r", r"\r").replace("\n", r"\n")
+    assert expected_log_error in records[0].getMessage()
+    assert len(records[0].getMessage().splitlines()) == 1
+    assert "Traceback" not in caplog.text
     assert service.fetch_status.return_value.errors == errors
 
 
@@ -266,9 +304,11 @@ async def test_changed_diagnostic_logs_new_error(clock, caplog):
 
     records = monitor_records(caplog)
     assert [record.levelno for record in records] == [
-        logging.ERROR, logging.DEBUG, logging.ERROR, logging.DEBUG,
+        logging.WARNING, logging.DEBUG, logging.WARNING, logging.DEBUG,
     ]
-    assert [record.exc_info is not None for record in records] == [True, False, True, False]
+    assert all(record.exc_info is None and record.exc_text is None for record in records)
+    assert "Traceback" not in caplog.text
+    assert all("RuntimeError" in record.getMessage() for record in records)
     assert [watch.last_error for watch in repository.saved] == [
         MISSING_MARKET + "；诊断：" + reason for reason in ("A", "A", "B", "B")
     ]

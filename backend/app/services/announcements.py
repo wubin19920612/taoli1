@@ -1238,8 +1238,10 @@ class HttpAnnouncementProvider(AnnouncementProvider):
         # An unavailable general feed must not discard the dedicated listing feeds.
         try:
             return await self._get_json(url)
-        except Exception:
-            logger.warning("failed to fetch general announcements: %s", url, exc_info=True)
+        except Exception as exc:  # noqa: BLE001 - optional feed failure keeps dedicated feeds
+            logger.warning(
+                "failed to fetch general announcements: %s error=%s", url, type(exc).__name__,
+            )
             return {}
 
     async def aclose(self) -> None:
@@ -2102,14 +2104,16 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
                 response.raise_for_status()
                 if not self._has_article_payload(response.text):
                     raise ValueError("Gate returned no announcement list (possibly a challenge page)")
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - failed categories are skipped independently
                 signature = type(exc).__name__
                 if isinstance(exc, httpx.HTTPStatusError):
                     signature += f":{exc.response.status_code}"
                 if self._category_failures.get(category) != signature:
-                    logger.warning("failed to fetch gate announcement category: %s", category, exc_info=True)
+                    logger.warning("failed to fetch gate announcement category: %s error=%s",
+                                   category or "general", type(exc).__name__)
                 else:
-                    logger.debug("failed to fetch gate announcement category: %s", category)
+                    logger.debug("failed to fetch gate announcement category: %s error=%s",
+                                 category or "general", type(exc).__name__)
                 self._category_failures[category] = signature
                 continue
             direct_succeeded = True
@@ -2178,14 +2182,16 @@ class GateAnnouncementProvider(HttpAnnouncementProvider):
             if not self._has_article_payload(response.text):
                 raise ValueError("Gate reader returned no announcement list")
             rows = self._parse_page(response.text, category)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - reader failure returns an empty result
             signature = type(exc).__name__
             if isinstance(exc, httpx.HTTPStatusError):
                 signature += f":{exc.response.status_code}"
             if self._category_failures.get(failure_key) != signature:
-                logger.warning("failed to fetch gate reader fallback: %s", category or "general", exc_info=True)
+                logger.warning("failed to fetch gate reader fallback: %s error=%s",
+                               category or "general", type(exc).__name__)
             else:
-                logger.debug("failed to fetch gate reader fallback: %s", category or "general")
+                logger.debug("failed to fetch gate reader fallback: %s error=%s",
+                             category or "general", type(exc).__name__)
             self._category_failures[failure_key] = signature
             return []
         if self._category_failures.pop(failure_key, None) is not None:
@@ -2477,8 +2483,10 @@ class MultiAnnouncementProvider:
                 rows = await provider.fetch()
                 localize = getattr(provider, "localize", None)
                 announcements.extend(await localize(rows) if localize else rows)
-            except Exception:
-                logger.exception("announcement provider failed: %s", provider.exchange)
+            except Exception as exc:  # noqa: BLE001 - preserve results from other providers
+                logger.warning(
+                    "announcement provider failed: %s error=%s", provider.exchange, type(exc).__name__,
+                )
         return announcements
 
     async def fetch_batches(
@@ -2489,8 +2497,10 @@ class MultiAnnouncementProvider:
                 rows = await (provider.fetch_headlines() if headlines_only else provider.fetch())
                 localize = getattr(provider, "localize", None)
                 return await localize(rows) if localize else rows
-            except Exception:
-                logger.exception("announcement provider failed: %s", provider.exchange)
+            except Exception as exc:  # noqa: BLE001 - a failed provider returns an empty batch
+                logger.warning(
+                    "announcement provider failed: %s error=%s", provider.exchange, type(exc).__name__,
+                )
                 return []
 
         tasks = [

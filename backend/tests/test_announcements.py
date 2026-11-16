@@ -1,7 +1,9 @@
 import asyncio
 import json
+import logging
 import re
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -133,6 +135,78 @@ async def test_general_feed_failure_does_not_discard_listing_feed(provider_class
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         rows = await provider_class(client=client, now_fn=lambda: BASE_TIME).fetch_headlines()
     assert any(row.kind == AnnouncementKind.LISTING for row in rows)
+
+
+@pytest.mark.parametrize("error_type", [httpx.ConnectTimeout, ValueError])
+async def test_additional_json_failure_warns_without_traceback_and_returns_empty(
+    monkeypatch, caplog, error_type,
+):
+    url = "https://source.test/general"
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200))) as client:
+        provider = BybitAnnouncementProvider(client=client)
+        get_json = AsyncMock(side_effect=error_type("offline fixture"))
+        monkeypatch.setattr(provider, "_get_json", get_json)
+        caplog.set_level(logging.WARNING, logger=announcement_service.__name__)
+
+        assert await provider._get_additional_json(url) == {}
+
+    get_json.assert_awaited_once_with(url)
+    records = [record for record in caplog.records if record.name == announcement_service.__name__]
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
+    assert records[0].exc_info is None
+    assert records[0].exc_text is None
+    assert url in records[0].getMessage()
+    assert error_type.__name__ in records[0].getMessage()
+    assert "Traceback" not in caplog.text
+
+
+@pytest.mark.parametrize("method", ["fetch", "batches", "headlines"])
+@pytest.mark.parametrize("stage", ["fetch", "localize"])
+async def test_multi_provider_failure_warns_and_preserves_successful_results(caplog, method, stage):
+    good_rows = [announcement()]
+
+    class StubProvider:
+        def __init__(self, exchange):
+            self.exchange = exchange
+
+        async def fetch(self):
+            if self.exchange == "gate" and stage == "fetch":
+                raise httpx.ConnectTimeout("offline fixture")
+            return good_rows
+
+        async def fetch_headlines(self):
+            return await self.fetch()
+
+        async def localize(self, rows):
+            if self.exchange == "gate" and stage == "localize":
+                raise httpx.ConnectTimeout("offline fixture")
+            return rows
+
+    caplog.set_level(logging.WARNING, logger=announcement_service.__name__)
+    for providers, expected in (
+        ([StubProvider("gate")], []),
+        ([StubProvider("gate"), StubProvider("okx")], good_rows),
+    ):
+        caplog.clear()
+        provider = MultiAnnouncementProvider(providers)
+        if method == "fetch":
+            rows = await provider.fetch({"gate", "okx"})
+        else:
+            batches = [batch async for batch in provider.fetch_batches(
+                {"gate", "okx"}, headlines_only=method == "headlines",
+            )]
+            assert batches == ([good_rows] if expected else [])
+            rows = [row for batch in batches for row in batch]
+        assert rows == expected
+        records = [record for record in caplog.records if record.name == announcement_service.__name__]
+        assert len(records) == 1
+        assert records[0].levelno == logging.WARNING
+        assert records[0].exc_info is None
+        assert records[0].exc_text is None
+        assert "gate" in records[0].getMessage()
+        assert "ConnectTimeout" in records[0].getMessage()
+        assert "Traceback" not in caplog.text
 
 
 def test_latest_html_sources_keep_other_announcements():

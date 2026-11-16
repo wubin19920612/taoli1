@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -398,12 +399,21 @@ async def test_runtime_error_read_only_reproduction(
     monitor = module.TradeAvailabilityMonitor(repository, service)
     assert await monitor.check_once() == []
     assert len(saved) == 1
+    records = [record for record in caplog.records if record.name == module.__name__]
     # The monitor may append "；诊断：<result.errors>" after the generic reason.
     if expected_error:
-        assert saved[0].last_error.startswith("RuntimeError: 聚合行情中未找到指定原始市场")
-        assert any(
-            record.exc_info and str(record.exc_info[1]).startswith("聚合行情中未找到指定原始市场")
-            for record in caplog.records
+        expected_error_text = "RuntimeError: 聚合行情中未找到指定原始市场"
+        if result.errors:
+            expected_error_text += f"；诊断：{result.errors[min(result.errors)][:200]}"
+        assert saved[0].last_error == expected_error_text
+        assert len(records) == 1
+        assert records[0].levelno == logging.WARNING
+        assert records[0].exc_info is None
+        assert records[0].exc_text is None
+        assert records[0].getMessage() == (
+            f"trade availability watch failed id={watch.id} error={expected_error_text}"
         )
+        assert "Traceback" not in caplog.text
     else:
         assert saved[0].last_error is None
+        assert records == []
