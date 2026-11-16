@@ -167,6 +167,18 @@ class EngineTests(unittest.TestCase):
             bitget_place.assert_not_called()
         self.assertEqual(self.store.meta('state'),'HALTED')
 
+    def test_unmapped_market_is_its_own_skip_reason(self):
+        t=trigger('unmapped-1')
+        t['sell_market_key']=dict(t['sell_market_key'],raw_symbol='NOPEUSDT')
+        with (patch.object(self.cross,'place') as cross_place,
+              patch.object(self.bitget,'place') as bitget_place):
+            self.engine.ingest(t)
+            cross_place.assert_not_called(); bitget_place.assert_not_called()
+        skips=[json.loads(v) for (v,) in self.store.db.execute("SELECT value FROM events WHERE kind='SKIP'")]
+        self.assertEqual([s['reason'] for s in skips],['market_unmapped'])
+        self.assertEqual(len(skips[0]['markets']),1)
+        self.assertIn('NOPEUSDT',skips[0]['markets'][0])
+
     def test_restart_equity_halt_flattens_before_catalog_bootstrap(self):
         self.engine.ingest(trigger())
         self.accounts.data['equity_by_venue']['bitget']='29850'

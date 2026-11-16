@@ -1014,6 +1014,10 @@ class Engine:
             return
         try:
             markets=[Market.from_payload(payload[k]) for k in ('buy_market_key','sell_market_key')]
+            unmapped=[str(m.key) for m in markets if m.key not in self.market.mapping]
+            if unmapped:
+                self.store.skip(identity,'market_unmapped',stage='review',markets=unmapped)
+                return
             instruments=[self.market.mapping[m.key] for m in markets]
             for i in instruments:
                 self.external.check_order(dict(instrument=i.dump()))
