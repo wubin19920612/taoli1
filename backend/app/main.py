@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from time import monotonic
 from typing import AsyncIterator, Iterator
 from uuid import NAMESPACE_URL, uuid5
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -71,7 +72,7 @@ from app.services.market_identity_catalog import OfficialMarketIdentityCatalog
 from app.models.alert import AlertEvent
 from app.models.orderbook import DepthValidationResult
 from app.models.phone_alert import PhonePriceAlertEvent
-from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, RiskSettings
+from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, RiskSettings, normalize_mute_symbol
 from app.services.account_positions import AccountPositionService, GateAccountPositionProvider
 from app.services.account_connections import AccountConnectionService
 from app.services.alert_delivery_store import AlertDeliveryState, AlertDeliveryStore
@@ -146,6 +147,7 @@ from app.services.trade_availability import (
 )
 
 logger = logging.getLogger(__name__)
+BIG_SPREAD_PHONE_KEY_PREFIX = "big_spread:phone:"
 alert_timing_logger = logging.getLogger("alert_timing")
 alert_timing_logger.setLevel(logging.INFO)
 alert_timing_logger.propagate = False
@@ -362,6 +364,8 @@ async def _restore_alert_delivery_state(app: FastAPI) -> None:
     now = datetime.now(UTC)
     # Failure to load must prevent the loop from starting with empty cooldowns.
     states = await store.load_all()
+    # Phone receipts belong to a separate nightly quota, never route cooldowns.
+    states = [state for state in states if not state.key.startswith(BIG_SPREAD_PHONE_KEY_PREFIX)]
     big_engine = app.state.big_spread_alert_engine = BigSpreadAlertEngine()
     unknown_keys = engine.restore([s for s in states if not s.key.startswith("big_spread:")], now)
     unknown_keys += big_engine.restore([s for s in states if s.key.startswith("big_spread:")], now)
@@ -411,6 +415,63 @@ async def _restore_alert_delivery_state(app: FastAPI) -> None:
             await store.record(key, state.last_sent_at, state.retry_after, state.retry_attempts)
         except Exception:
             logger.exception("recovered alert delivery state write failed: %s", key)
+
+
+def _big_spread_phone_night(settings: RiskSettings, now: datetime) -> str | None:
+    local = now.astimezone(ZoneInfo("Asia/Shanghai"))
+    start, end = settings.big_spread_phone_start_hour, settings.big_spread_phone_end_hour
+    if start < end and not start <= local.hour < end:
+        return None
+    if start > end and not (local.hour >= start or local.hour < end):
+        return None
+    # Equal hours mean 24 hours starting at that hour, also across midnight.
+    night = local.date() - timedelta(days=local.hour < start)
+    return night.isoformat()
+
+
+async def _maybe_send_big_spread_phone(
+    app: FastAPI,
+    match: AlertMatch,
+    settings: RiskSettings,
+    message: str,
+    delivery_store: AlertDeliveryStore,
+    write_lock: asyncio.Lock,
+) -> None:
+    if (not settings.big_spread_phone_enabled or settings.big_spread_phone_max_per_night == 0
+            or not match.opportunity.open_spread_pct >= settings.big_spread_phone_min_spread_pct):
+        return
+    # Different symbols run concurrently. Hold this dedicated lock across quota
+    # checking, sending and recording, without holding the shared DB write lock over I/O.
+    if not hasattr(app.state, "big_spread_phone_lock"):
+        app.state.big_spread_phone_lock = asyncio.Lock()
+    async with app.state.big_spread_phone_lock:
+        now = datetime.now(UTC)
+        night = _big_spread_phone_night(settings, now)
+        if night is None:
+            return
+        prefix = f"{BIG_SPREAD_PHONE_KEY_PREFIX}{night}:"
+        key = f"{prefix}{normalize_mute_symbol(match.opportunity.symbol)}"
+        async with write_lock:
+            states = await delivery_store.load_all()
+        # One successful symbol receipt is one call; deriving the count avoids
+        # a second checkpoint that could disagree after an interrupted write.
+        sent_keys = {
+            state.key for state in states
+            if state.key.startswith(prefix) and state.last_sent_at is not None
+        }
+        sent_keys.update(
+            saved for saved in getattr(app.state, "big_spread_phone_sent_keys", set())
+            if saved.startswith(prefix)
+        )
+        app.state.big_spread_phone_sent_keys = sent_keys
+        if key in sent_keys or len(sent_keys) >= settings.big_spread_phone_max_per_night:
+            return
+        lines = message.splitlines()
+        await app.state.feishu_notifier.send_phone_urgent_text("\n".join([lines[0], lines[1], lines[-1]]))
+        # Keep the successful call in memory even if its durable write fails.
+        sent_keys.add(key)
+        async with write_lock:
+            await delivery_store.record(key, now, None, 0)
 
 
 async def _process_alert_match(
@@ -713,6 +774,16 @@ async def _process_alert_match(
             logger.exception("alert delivery state write failed: %s", key)
             status = "state_write_failed"
             state_write_ok = False
+        if is_big_spread and status == "sent":
+            try:
+                await _maybe_send_big_spread_phone(
+                    app, match, settings, message, delivery_store, write_lock,
+                )
+            except Exception as exc:
+                # The text/card have already succeeded. Phone failures must never
+                # change their status or leak multi-line SDK details/tracebacks.
+                logger.warning("big spread phone urgent failed (%s)", type(exc).__name__)
+                event.message += "；电话加急失败"
         try:
             async with write_lock:
                 await event_repo.create(event)

@@ -524,6 +524,11 @@ export interface RiskSettings {
   big_spread_alert_cooldown_seconds?: number;
   big_spread_alert_symbol_cooldown_seconds?: number;
   big_spread_alert_auto_create?: boolean;
+  big_spread_phone_enabled?: boolean;
+  big_spread_phone_start_hour?: number;
+  big_spread_phone_end_hour?: number;
+  big_spread_phone_min_spread_pct?: number;
+  big_spread_phone_max_per_night?: number;
   min_volume_24h_usdt: number;
   min_volume_24h_k?: number;
   stale_after_seconds: number;

@@ -238,6 +238,11 @@ class RiskSettings(BaseModel):
     big_spread_alert_cooldown_seconds: int = Field(default=600, ge=0, le=604800)
     big_spread_alert_symbol_cooldown_seconds: int = Field(default=1800, ge=0, le=604800)
     big_spread_alert_auto_create: bool = True
+    big_spread_phone_enabled: bool = False
+    big_spread_phone_start_hour: int = Field(default=0, ge=0, le=23)
+    big_spread_phone_end_hour: int = Field(default=7, ge=0, le=23)
+    big_spread_phone_min_spread_pct: float = Field(default=5.0, gt=0, le=100, allow_inf_nan=False)
+    big_spread_phone_max_per_night: int = Field(default=3, ge=0, le=20)
     big_spread_alert_mutes: list[BigSpreadMute] = Field(default_factory=list, max_length=500)
     min_volume_24h_usdt: float = Field(default=1_000_000, ge=0)
     stale_after_seconds: int = Field(default=30, ge=5)

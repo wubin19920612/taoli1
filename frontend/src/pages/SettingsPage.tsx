@@ -105,6 +105,11 @@ const defaultRiskSettings: RiskSettings = {
   big_spread_alert_cooldown_seconds: 600,
   big_spread_alert_symbol_cooldown_seconds: 1800,
   big_spread_alert_auto_create: true,
+  big_spread_phone_enabled: false,
+  big_spread_phone_start_hour: 0,
+  big_spread_phone_end_hour: 7,
+  big_spread_phone_min_spread_pct: 5,
+  big_spread_phone_max_per_night: 3,
   min_volume_24h_usdt: 1_000_000,
   stale_after_seconds: 30,
   huge_spread_pct: 10,
@@ -956,6 +961,30 @@ export function SettingsPage() {
                         </Form.Item>
                         <Form.Item label="大价差提醒自动建卡（不开仓）" name="big_spread_alert_auto_create" valuePropName="checked">
                           <Switch />
+                        </Form.Item>
+                        <div className="form-grid-heading">
+                          <Typography.Paragraph type="secondary">
+                            北京时间；电话走飞书加急；同一币种每晚最多一次。仅在大价差文字提醒发送成功后加急。
+                            起止小时相同表示全天，开始小时大于结束小时表示跨零点，跨零点归开始日期；每晚上限为 0 时不拨打。
+                          </Typography.Paragraph>
+                        </div>
+                        <Form.Item label="启用大价差电话加急" name="big_spread_phone_enabled" valuePropName="checked">
+                          <Switch />
+                        </Form.Item>
+                        <Form.Item label="电话加急开始小时" name="big_spread_phone_start_hour" rules={[{ required: true }, { type: "integer", min: 0, max: 23 }]}>
+                          <InputNumber min={0} max={23} precision={0} className="wide-input" />
+                        </Form.Item>
+                        <Form.Item label="电话加急结束小时" name="big_spread_phone_end_hour" rules={[{ required: true }, { type: "integer", min: 0, max: 23 }]}>
+                          <InputNumber min={0} max={23} precision={0} className="wide-input" />
+                        </Form.Item>
+                        <Form.Item label="电话加急开仓价差阈值" name="big_spread_phone_min_spread_pct" rules={[{ required: true }, { type: "number", max: 100 }, {
+                          validator: (_, value) => typeof value === "number" && Number.isFinite(value) && value > 0
+                            ? Promise.resolve() : Promise.reject(new Error("价差阈值必须大于 0"))
+                        }]}>
+                          <InputNumber min={0} max={100} step={0.1} suffix="%" className="wide-input" />
+                        </Form.Item>
+                        <Form.Item label="电话加急每晚上限" name="big_spread_phone_max_per_night" rules={[{ required: true }, { type: "integer", min: 0, max: 20 }]}>
+                          <InputNumber min={0} max={20} precision={0} className="wide-input" />
                         </Form.Item>
                       </div>
                       <BigSpreadMutesPanel active={activeTab === "risk"} />
