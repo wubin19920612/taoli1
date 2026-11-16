@@ -434,6 +434,7 @@ async def _maybe_send_big_spread_phone(
     match: AlertMatch,
     settings: RiskSettings,
     message: str,
+    event: AlertEvent,
     delivery_store: AlertDeliveryStore,
     write_lock: asyncio.Lock,
 ) -> None:
@@ -449,6 +450,25 @@ async def _maybe_send_big_spread_phone(
         night = _big_spread_phone_night(settings, now)
         if night is None:
             return
+        if settings.big_spread_phone_new_symbol_days > 0:
+            try:
+                async with delivery_store.db.execute(
+                    """
+                    SELECT 1 FROM alert_events
+                    WHERE rule_id = ? AND symbol = ? AND status IN ('sent', 'muted')
+                      AND created_at >= ? AND created_at <= ? AND id != ?
+                    LIMIT 1
+                    """,
+                    (BIG_SPREAD_RULE_ID, event.symbol,
+                     (now - timedelta(days=settings.big_spread_phone_new_symbol_days)).isoformat(),
+                     now.isoformat(), event.id),
+                ) as cursor:
+                    if await cursor.fetchone() is not None:
+                        return
+            except Exception as exc:
+                # History must be known before waking anyone; never log DB details.
+                logger.warning("%s", type(exc).__name__)
+                return
         prefix = f"{BIG_SPREAD_PHONE_KEY_PREFIX}{night}:"
         key = f"{prefix}{normalize_mute_symbol(match.opportunity.symbol)}"
         async with write_lock:
@@ -777,7 +797,7 @@ async def _process_alert_match(
         if is_big_spread and status == "sent":
             try:
                 await _maybe_send_big_spread_phone(
-                    app, match, settings, message, delivery_store, write_lock,
+                    app, match, settings, message, event, delivery_store, write_lock,
                 )
             except Exception as exc:
                 # The text/card have already succeeded. Phone failures must never

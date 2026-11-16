@@ -9,8 +9,9 @@ from pydantic import ValidationError
 from app import main
 from app.core.config import Settings
 from app.db.database import connect_database
+from app.db.repositories import AlertEventRepository
 from app.db.schema import initialize_schema
-from app.models.alert import AlertRule
+from app.models.alert import AlertEvent, AlertRule
 from app.models.astro import AstroAlertActionResult
 from app.models.settings import AlertMessageTemplateSettings, AstroCardSettings, RiskSettings
 from app.services.alert_delivery_store import AlertDeliveryStore
@@ -43,6 +44,7 @@ def test_big_spread_phone_defaults_for_old_settings():
     assert (settings.big_spread_phone_enabled, settings.big_spread_phone_start_hour,
             settings.big_spread_phone_end_hour, settings.big_spread_phone_min_spread_pct,
             settings.big_spread_phone_max_per_night) == (False, 0, 7, 5.0, 3)
+    assert settings.big_spread_phone_new_symbol_days == 7
 
 
 @pytest.mark.parametrize("field,valid,invalid", [
@@ -50,6 +52,7 @@ def test_big_spread_phone_defaults_for_old_settings():
     ("big_spread_phone_end_hour", [0, 23], [-1, 24, 1.5]),
     ("big_spread_phone_min_spread_pct", [0.000001, 100], [0, -1, 100.1, float("nan"), float("inf")]),
     ("big_spread_phone_max_per_night", [0, 20], [-1, 21, 1.5]),
+    ("big_spread_phone_new_symbol_days", [0, 7, 90], [-1, 91, 1.5]),
 ])
 def test_big_spread_phone_setting_bounds(field, valid, invalid):
     for value in valid:
@@ -257,3 +260,131 @@ async def test_big_spread_phone_storage_failure_is_isolated(phone_app, caplog):
     assert event.status == "sent" and event.message.endswith("；电话加急失败")
     app.state.feishu_notifier.send_phone_urgent_text.assert_not_awaited()
     assert caplog.records[-1].exc_info is None
+
+
+async def seed_alert_event(app, now, **updates):
+    event = AlertEvent(**{
+        "rule_id": "big_spread", "opportunity_id": "history", "symbol": "IMXUSDT",
+        "status": "sent", "message": "historical big spread", "created_at": now,
+        **updates,
+    })
+    return await AlertEventRepository(app.state.alert_delivery_store.db).create(event)
+
+
+@pytest.mark.parametrize("status", ["sent", "muted"])
+@pytest.mark.parametrize("days", [1, 7, 90])
+async def test_big_spread_phone_recent_history_skips_before_quota(phone_app, status, days):
+    app, settings, now, process, _ = phone_app
+    settings.big_spread_phone_new_symbol_days = days
+    settings.big_spread_phone_max_per_night = 1
+    # The inclusive lower boundary belongs to the history window.
+    await seed_alert_event(app, now - timedelta(days=days), status=status)
+    store = app.state.alert_delivery_store
+    store.load_all = AsyncMock(wraps=store.load_all)
+    assert await process()
+    app.state.feishu_notifier.send_phone_urgent_text.assert_not_awaited()
+    store.load_all.assert_not_awaited()
+    assert not any(state.key.startswith("big_spread:phone:") for state in await store.load_all())
+    event, = app.state.alert_event_repo.events
+    assert event.status == "sent" and event.message == app.state.feishu_notifier.sent_texts[0]
+    # A different, unseen symbol can still use the only nightly slot.
+    assert await process(item(5, now, id="eth", symbol="ETHUSDT"))
+    app.state.feishu_notifier.send_phone_urgent_text.assert_awaited_once()
+    states = await store.load_all()
+    assert {state.key for state in states if state.key.startswith("big_spread:phone:")} == {
+        "big_spread:phone:2026-11-16:ETHUSDT",
+    }
+
+
+@pytest.mark.parametrize("history", [
+    None, {"seconds_ago": 7 * 86400 + 1}, {"seconds_ago": -1},
+    {"rule_id": "ordinary"}, {"rule_id": "big_spread:other"}, {"symbol": "ETHUSDT"},
+    {"status": "failed"}, {"status": "unknown"}, {"status": "state_write_failed"},
+])
+async def test_big_spread_phone_only_matching_history_in_window_blocks(phone_app, history):
+    app, _, now, process, _ = phone_app
+    if history is not None:
+        updates = dict(history)
+        created_at = now - timedelta(seconds=updates.pop("seconds_ago", 60))
+        await seed_alert_event(app, created_at, **updates)
+    assert await process()
+    app.state.feishu_notifier.send_phone_urgent_text.assert_awaited_once()
+
+
+async def test_big_spread_phone_zero_days_bypasses_history_query(phone_app, monkeypatch):
+    app, settings, now, process, _ = phone_app
+    settings.big_spread_phone_new_symbol_days = 0
+    await seed_alert_event(app, now - timedelta(seconds=1))
+    db = app.state.alert_delivery_store.db
+    original_execute = db.execute
+
+    def execute(sql, *args, **kwargs):
+        if "FROM alert_events" in sql:
+            pytest.fail("Disabled new-symbol gate must not query history")
+        return original_execute(sql, *args, **kwargs)
+
+    monkeypatch.setattr(db, "execute", execute)
+    assert await process()
+    app.state.feishu_notifier.send_phone_urgent_text.assert_awaited_once()
+
+
+async def test_big_spread_phone_history_query_failure_skips_without_quota(
+    phone_app, monkeypatch, caplog,
+):
+    app, _, _, process, _ = phone_app
+    store = app.state.alert_delivery_store
+    original_execute = store.db.execute
+    store.load_all = AsyncMock(wraps=store.load_all)
+
+    def execute(sql, *args, **kwargs):
+        if "FROM alert_events" in sql:
+            raise RuntimeError("private database detail\nsecond line")
+        return original_execute(sql, *args, **kwargs)
+
+    monkeypatch.setattr(store.db, "execute", execute)
+    with caplog.at_level(logging.WARNING, logger="app.main"):
+        assert await process()
+    app.state.feishu_notifier.send_phone_urgent_text.assert_not_awaited()
+    store.load_all.assert_not_awaited()
+    assert not any(state.key.startswith("big_spread:phone:") for state in await store.load_all())
+    event, = app.state.alert_event_repo.events
+    assert event.status == "sent" and event.message == app.state.feishu_notifier.sent_texts[0]
+    warnings = [record for record in caplog.records if record.name == "app.main"]
+    assert len(warnings) == 1
+    assert warnings[0].levelno == logging.WARNING
+    assert warnings[0].message == "RuntimeError" and warnings[0].exc_info is None
+
+
+async def test_big_spread_phone_excludes_current_event_by_id(phone_app):
+    app, settings, now, _, _ = phone_app
+    current = await seed_alert_event(app, now)
+    match = AlertMatch(delivery_rule([], settings), item(5, now), [])
+    await main._maybe_send_big_spread_phone(
+        app, match, settings, "heading\nroute\ncard", current,
+        app.state.alert_delivery_store, asyncio.Lock(),
+    )
+    app.state.feishu_notifier.send_phone_urgent_text.assert_awaited_once()
+
+
+@pytest.mark.parametrize("live_send", [True, False])
+async def test_big_spread_phone_uses_persisted_text_history_next_night(
+    phone_app, monkeypatch, live_send,
+):
+    app, _, now, process, _ = phone_app
+    repo = AlertEventRepository(app.state.alert_delivery_store.db)
+    app.state.alert_event_repo = repo
+    app.state.feishu_live_send_enabled = live_send
+    # Even a text alert below the phone threshold establishes symbol history.
+    assert await process(item(3, now))
+    first, = await repo.list()
+    assert first.rule_id == "big_spread" and first.status == ("sent" if live_send else "muted")
+    app.state.feishu_notifier.send_phone_urgent_text.assert_not_awaited()
+    app.state.feishu_live_send_enabled = True
+    tomorrow = now + timedelta(days=1)
+    freeze_time(monkeypatch, tomorrow)
+    assert await process(item(5, tomorrow, id="next-night"))
+    app.state.feishu_notifier.send_phone_urgent_text.assert_not_awaited()
+    latest, _ = await repo.list()
+    assert latest.status == "sent" and latest.message == app.state.feishu_notifier.sent_texts[-1]
+    states = await app.state.alert_delivery_store.load_all()
+    assert not any(state.key.startswith("big_spread:phone:") for state in states)

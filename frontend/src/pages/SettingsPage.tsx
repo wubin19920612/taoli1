@@ -111,6 +111,7 @@ const defaultRiskSettings: RiskSettings = {
   big_spread_phone_end_hour: 7,
   big_spread_phone_min_spread_pct: 5,
   big_spread_phone_max_per_night: 3,
+  big_spread_phone_new_symbol_days: 7,
   min_volume_24h_usdt: 1_000_000,
   stale_after_seconds: 30,
   huge_spread_pct: 10,
@@ -992,6 +993,11 @@ export function SettingsPage() {
                         </Form.Item>
                         <Form.Item label="电话加急每晚上限" name="big_spread_phone_max_per_night" rules={[{ required: true }, { type: "integer", min: 0, max: 20 }]}>
                           <InputNumber min={0} max={20} precision={0} className="wide-input" />
+                        </Form.Item>
+                        <Form.Item label="新标的窗口(天)" name="big_spread_phone_new_symbol_days"
+                          extra="仅对 N 天内未出现过大价差的币种打电话,0 为不限制"
+                          rules={[{ required: true }, { type: "integer", min: 0, max: 90 }]}>
+                          <InputNumber min={0} max={90} precision={0} className="wide-input" />
                         </Form.Item>
                       </div>
                       <BigSpreadMutesPanel active={activeTab === "risk"} />

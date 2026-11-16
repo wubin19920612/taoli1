@@ -14,10 +14,12 @@ describe("SettingsPage", () => {
     expect((screen.getByLabelText("电话加急开始小时") as HTMLInputElement).value).toBe("0");
     expect((screen.getByLabelText("电话加急结束小时") as HTMLInputElement).value).toBe("7");
     expect((screen.getByLabelText("电话加急每晚上限") as HTMLInputElement).value).toBe("3");
+    expect((screen.getByLabelText("新标的窗口(天)") as HTMLInputElement).value).toBe("7");
+    expect(screen.getByText("仅对 N 天内未出现过大价差的币种打电话,0 为不限制")).toBeTruthy();
     expect(screen.getByText(/北京时间；电话走飞书加急；同一币种每晚最多一次/)).toBeTruthy();
     fireEvent.click(enabled);
     for (const [label, value] of [["电话加急开始小时", "22"], ["电话加急结束小时", "6"],
-      ["电话加急开仓价差阈值", "6.5"], ["电话加急每晚上限", "2"]]) {
+      ["电话加急开仓价差阈值", "6.5"], ["电话加急每晚上限", "2"], ["新标的窗口(天)", "14"]]) {
       fireEvent.change(screen.getByLabelText(label), { target: { value } });
     }
     fireEvent.click(screen.getByRole("button", { name: /保存风险参数/ }));
@@ -27,7 +29,7 @@ describe("SettingsPage", () => {
       expect(JSON.parse(String(save?.[1]?.body))).toMatchObject({
         big_spread_phone_enabled: true, big_spread_phone_start_hour: 22,
         big_spread_phone_end_hour: 6, big_spread_phone_min_spread_pct: 6.5,
-        big_spread_phone_max_per_night: 2
+        big_spread_phone_max_per_night: 2, big_spread_phone_new_symbol_days: 14
       });
     });
   }, 30000);
@@ -39,7 +41,7 @@ describe("SettingsPage", () => {
       return String(input).includes("/settings/risk") && init?.method !== "PUT"
         ? Response.json({ ...await response.json(), big_spread_phone_start_hour: -1,
           big_spread_phone_end_hour: 24, big_spread_phone_min_spread_pct: 0,
-          big_spread_phone_max_per_night: 21 }) : response;
+          big_spread_phone_max_per_night: 21, big_spread_phone_new_symbol_days: 91 }) : response;
     });
     window.localStorage.setItem("settings-active-tab", "risk");
     render(<SettingsPage />);
@@ -48,16 +50,17 @@ describe("SettingsPage", () => {
     const end = screen.getByLabelText("电话加急结束小时");
     const spread = screen.getByLabelText("电话加急开仓价差阈值");
     const quota = screen.getByLabelText("电话加急每晚上限");
-    for (const [control, min, max] of [[start, 0, 23], [end, 0, 23], [spread, 0, 100], [quota, 0, 20]] as const) {
+    const days = screen.getByLabelText("新标的窗口(天)");
+    for (const [control, min, max] of [[start, 0, 23], [end, 0, 23], [spread, 0, 100], [quota, 0, 20], [days, 0, 90]] as const) {
       expect(control.getAttribute("aria-valuemin")).toBe(String(min));
       expect(control.getAttribute("aria-valuemax")).toBe(String(max));
     }
     fireEvent.click(screen.getByRole("button", { name: /保存风险参数/ }));
     await waitFor(() => {
-      for (const control of [start, end, spread, quota]) expect(control.getAttribute("aria-invalid")).toBe("true");
+      for (const control of [start, end, spread, quota, days]) expect(control.getAttribute("aria-invalid")).toBe("true");
     });
     expect(vi.mocked(fetch).mock.calls.some(([input, init]) => String(input).includes("/settings/risk") && init?.method === "PUT")).toBe(false);
-    for (const [control, value] of [[start, "0"], [end, "0"], [spread, "100"], [quota, "0"]] as const) {
+    for (const [control, value] of [[start, "0"], [end, "0"], [spread, "100"], [quota, "0"], [days, "0"]] as const) {
       fireEvent.change(control, { target: { value } });
     }
     fireEvent.click(screen.getByRole("button", { name: /保存风险参数/ }));
@@ -65,7 +68,8 @@ describe("SettingsPage", () => {
       const save = vi.mocked(fetch).mock.calls.find(([input, init]) => String(input).includes("/settings/risk") && init?.method === "PUT");
       expect(save).toBeTruthy();
       expect(JSON.parse(String(save?.[1]?.body))).toMatchObject({ big_spread_phone_start_hour: 0,
-        big_spread_phone_end_hour: 0, big_spread_phone_min_spread_pct: 100, big_spread_phone_max_per_night: 0 });
+        big_spread_phone_end_hour: 0, big_spread_phone_min_spread_pct: 100, big_spread_phone_max_per_night: 0,
+        big_spread_phone_new_symbol_days: 0 });
     });
   }, 30000);
 
