@@ -212,7 +212,7 @@ class APIService:
             raise ValueError('admin_token_must_differ')
         self.bind = parse_bind(config.get('CROSSEX_EXEC_API_BIND'))
         self.view = JournalView(path, config)
-        self.management = Management(path,equity_admin,external_admin)
+        self.management = Management(path,equity_admin,external_admin,stop_file=self.view.stop_file)
         self.logger = logger
         self.redactor = Redactor()
         self.redactor.register(*(v for k, v in config.items()

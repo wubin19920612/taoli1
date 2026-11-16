@@ -1,6 +1,9 @@
 """Bounded read projections and separately authenticated local administration."""
+import json
+import os
 from pathlib import Path
 import re
+import tempfile
 import time
 
 from tools.fill_sim.core import dec
@@ -71,6 +74,8 @@ def write_route(method, path):
     if method == 'PUT' and path == '/api/v1/config':
         return ('config',)
     if method == 'POST':
+        if path in ('/api/v1/opening/pause', '/api/v1/opening/resume'):
+            return ('opening', path.rsplit('/', 1)[1])
         if path in ('/api/v1/external-positions/register','/api/v1/external-positions/unregister'):
             return ('external-positions',path.rsplit('/',1)[1])
         if path == '/api/v1/equity/rebaseline':
@@ -103,8 +108,9 @@ class ReadStore:
 
 
 class Management:
-    def __init__(self, path, equity_admin=None, external_admin=None):
+    def __init__(self, path, equity_admin=None, external_admin=None, *, stop_file=None):
         self.path = Path(path)
+        self.stop_file = Path(stop_file) if stop_file is not None else None
         self.equity_admin=equity_admin
         self.external_admin=external_admin
 
@@ -152,11 +158,12 @@ class Management:
             if self.equity_admin is None:
                 raise OSError('running_executor_required')
             return equity_view(self.equity_admin(confirm=True,reason=reason,source='admin_api'))
-        with Store(self.path) as store:
+        # Keep in-process managers serialized through commit and the resume unlink.
+        with Store(self.path) as store, store.lock:
             conflict = None
             with store.transaction():
                 try:
-                    return self._update(store, route, body)
+                    result = self._update(store, route, body)
                 except WriteConflict as error:
                     # Commit the conflict event, but no mutation. Raising inside
                     # this transaction would incorrectly roll the audit back.
@@ -164,10 +171,54 @@ class Management:
                     conflict = error
             if conflict is not None:
                 raise conflict
-        raise ValueError('unknown_route')
+            if route == ('opening', 'resume'):
+                # Only a successfully committed audit may release the STOP gate.
+                try:
+                    self.stop_file.unlink()
+                except OSError:
+                    try:
+                        with store.transaction():
+                            store.event('OPENING_RESUME_FAILED', dict(at=time.time(), source='admin_api',
+                                        paused=True, error='stop_file_unlink_failed'))
+                    except Exception:
+                        # Best effort: preserve the original filesystem error.
+                        pass
+                    raise
+            return result
 
-    @staticmethod
-    def _update(store, route, body):
+    def _opening(self, store, action, body):
+        expected = body.get('expected_paused')
+        if set(body) != {'expected_paused'} or type(expected) is not bool or action not in ('pause', 'resume'):
+            raise ValueError('invalid_body')
+        if self.stop_file is None:
+            raise OSError('stop_file_unavailable')
+        current, paused = self.stop_file.exists(), action == 'pause'
+        if expected != current or paused == current:
+            raise WriteConflict('OPENING_CONFLICT', dict(error='opening_conflict', paused=current),
+                                dict(expected_paused=expected), action=action)
+        payload = dict(at=time.time(), source='admin_api')
+        # Pause publishes STOP before commit, so a failed commit stays safe.
+        # Resume only removes STOP in write() after this audit is committed.
+        store.event('OPENING_PAUSED' if paused else 'OPENING_RESUMED', dict(payload, paused=paused))
+        if paused:
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=self.stop_file.parent,
+                                                 prefix='.'+self.stop_file.name+'.', suffix='.tmp', delete=False) as stream:
+                    temporary = Path(stream.name)
+                    os.chmod(temporary, 0o600)
+                    json.dump(payload, stream)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, self.stop_file)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+        return dict(paused=paused)
+
+    def _update(self, store, route, body):
+        if route[0] == 'opening':
+            return self._opening(store, route[1], body)
         if route == ('config',):
             expected = body.get('expected_version')
             if type(expected) is not int or expected < 0:

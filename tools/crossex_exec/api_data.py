@@ -550,7 +550,7 @@ class JournalView:
                 ('funding_daily_usd','program_funding'),('funding_total_usd','program_funding_total'))})
         return dict(generated_at=utc(now), mode=('live' if meta['live_mode'] else 'shadow')
                     if isinstance(meta.get('live_mode'), bool) else self.mode,
-                    halted=halted, halt_reason=halt_reason, stop_file=stop, opening_paused_reason=paused,
+                    halted=halted, halt_reason=halt_reason, stop_file=stop, opening_paused=stop, opening_paused_reason=paused,
                     caps=dict(self.caps, max_pairs=3, open_pairs=len(active),
                               total_open_usd=complete_sum(l['notional_usd'] for p in active for l in p['legs'])),
                     config_version=(meta.get('runtime_config') or {}).get('version',0),

@@ -24,7 +24,7 @@ from test_exec import instrument, setUpModule, tearDownModule
 
 NOW = 1794384000.0
 TOKEN = 'fictional-api-token-7bfaf9'
-SUMMARY = {'generated_at', 'mode', 'halted', 'halt_reason', 'stop_file',
+SUMMARY = {'generated_at', 'mode', 'halted', 'halt_reason', 'stop_file', 'opening_paused',
            'opening_paused_reason', 'caps', 'accounts', 'today', 'total', 'fees', 'last_error',
            'baseline_ready_pairs', 'structural_spread_pairs', 'cooldown_pairs', 'opening_skip_counts'}
 POSITION = {'id', 'symbol', 'opened_at', 'held_seconds', 'legs', 'entry_spread_bps',
