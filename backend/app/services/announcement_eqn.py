@@ -28,6 +28,7 @@ from app.services.announcements import (
 
 logger = logging.getLogger(__name__)
 CHANNELS = ("binance", "korea", "alpha", "tier2", "tier3")
+CHANNEL_TIMEOUT_SECONDS = 3.0
 SOURCE_EXCHANGES = {
     "binance en": "binance",
     "binance alpha": "binance",
@@ -217,7 +218,11 @@ class EqnAnnouncementProvider(AnnouncementProvider):
         skipped: Counter[str] = Counter()
         for channel in CHANNELS:
             try:
-                items = await self.client.list_news(channel, limit=20)
+                async with asyncio.timeout(CHANNEL_TIMEOUT_SECONDS):
+                    items = await self.client.list_news(channel, limit=20)
+            except TimeoutError:
+                self.last_source_errors[channel] = "TimeoutError"
+                continue
             except Exception as exc:  # noqa: BLE001 - retain other channels' discoveries
                 self.last_source_errors[channel] = _announcement_source_error(exc)
                 continue

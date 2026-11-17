@@ -16,7 +16,7 @@ from app.db.database import connect_database
 from app.db.repositories import AnnouncementRepository, SettingsRepository
 from app.db.schema import initialize_schema
 from app.models.announcement import AnnouncementSettings, ExchangeAnnouncement
-from app.services import announcement_polling
+from app.services import announcement_eqn, announcement_polling
 from app.services.announcement_eqn import EqnAnnouncementProvider, EqnNewsClient
 from app.services.announcements import (
     AnnouncementMonitor,
@@ -410,6 +410,52 @@ async def test_partial_channel_failure_keeps_other_announcements(all_failed):
         assert rows and {row.exchange for row in rows} == {"upbit", "bithumb"}
         assert set(provider.last_source_articles) == {"korea"}
     assert len(provider.last_source_errors) == (5 if all_failed else 4)
+
+
+@pytest.mark.parametrize("hanging_channel", announcement_eqn.CHANNELS)
+async def test_channel_timeout_keeps_other_announcements(monkeypatch, hanging_channel):
+    monkeypatch.setattr(announcement_eqn, "CHANNEL_TIMEOUT_SECONDS", 0.01)
+    client = AsyncMock()
+    item = json.loads(fixture("list_news_korea")["result"]["content"][0]["text"])["items"][0]
+
+    async def list_news(channel, **kwargs):
+        if channel == hanging_channel:
+            await asyncio.Event().wait()
+        return [dict(item, no=announcement_eqn.CHANNELS.index(channel))]
+
+    client.list_news.side_effect = list_news
+    provider = EqnAnnouncementProvider(client=client)
+    rows = await asyncio.wait_for(provider.fetch(), timeout=1.0)
+
+    successful_channels = set(announcement_eqn.CHANNELS) - {hanging_channel}
+    assert len(rows) == len(successful_channels)
+    assert {row.category for row in rows} == successful_channels
+    assert set(provider.last_source_articles) == successful_channels
+    assert provider.last_source_errors == {hanging_channel: "TimeoutError"}
+    assert [call.args[0] for call in client.list_news.await_args_list] == list(
+        announcement_eqn.CHANNELS
+    )
+
+
+async def test_fetch_propagates_outer_cancellation():
+    client = AsyncMock()
+    started = asyncio.Event()
+
+    async def list_news(channel, **kwargs):
+        started.set()
+        await asyncio.Event().wait()
+
+    client.list_news.side_effect = list_news
+    provider = EqnAnnouncementProvider(client=client)
+    async with asyncio.TaskGroup() as tasks:
+        task = tasks.create_task(provider.fetch())
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert client.list_news.await_count == 1
+    assert provider.last_source_errors == {}
 
 
 async def test_only_unknown_sources_are_empty_success(caplog):
