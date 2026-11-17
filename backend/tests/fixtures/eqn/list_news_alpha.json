@@ -1,0 +1,763 @@
+{
+ "jsonrpc": "2.0",
+ "id": 2,
+ "result": {
+  "content": [
+   {
+    "text": "{\n  \"items\": [\n    {\n      \"no\": 14876,\n      \"time\": \"2026-11-14T16:07:11.272Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Perp Listing\",\n      \"zh\": \"Aster 永续合约上线：SOPHUSDT\",\n      \"en\": \"Aster Perp Listing: SOPHUSDT\",\n      \"coins\": [\n        \"ASTER\",\n        \"SOPH\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14876\",\n      \"source_url\": \"https://www.asterdex.com/en/futures/v1/SOPHUSDT\"\n    },\n    {\n      \"no\": 14403,\n      \"time\": \"2026-11-13T11:00:24.157Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"币安Alpha第二轮RaveDAO (RAVE)空投奖励现已开启！\\n\\n拥有至少256点币安Alpha积分的用户即可领取270枚RAVE代币空投，先到先得。如果奖励池未全部发放完毕，积分门槛将每5分钟自动降低5点。\\n\\n请注意，领取空投将消耗15点币安Alpha积分。用户必须在24小时内于Alpha活动页面确认领取，否则将被视为放弃领取。\",\n      \"en\": \"Binance Alpha's second wave of RaveDAO (RAVE) airdrop rewards are here!\\n\\nUsers with at least 256 Binance Alpha Points can claim an airdrop of 270 RAVE tokens on a first-come, first-served basis. If the reward pool is not fully distributed, the score threshold will automatically decrease by 5 points every 5 minutes.\\n\\nPlease note that claiming the airdrop will consume 15 Binance Alpha Points. Users must confirm their claim on the Alpha Events page within 24 hours; otherwise, it will be deemed that users have given up claiming the airdrop.\",\n      \"coins\": [\n        \"RAVE\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14403\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2121196465389486181\"\n    },\n    {\n      \"no\": 14352,\n      \"time\": \"2026-11-13T07:32:13.536Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"请准备好领取币安 Alpha 空投，并于今日 11:00 (UTC) 开始交易。\\n\\n拥有至少 256 点币安 Alpha 积分的用户即可按先到先得的方式领取代币，直至空投池全部发放完毕或空投活动结束。更多详情即将公布。\\n\\n请密切关注币安官方渠道，了解具体的空投代币及最新动态。\",\n      \"en\": \"Please get ready to claim the Binance Alpha airdrop and trade today at 11:00 (UTC).\\n\\nUsers with at least 256 Binance Alpha Points can claim the token in a first-come, first-served basis until the airdrop pool is fully distributed or the airdrop event expires. Further details will be announced soon.\\n\\nPlease stay tuned to Binance's official channels for the specific airdrop tokens and the latest updates.\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14352\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2121144076141760957\"\n    },\n    {\n      \"no\": 14057,\n      \"time\": \"2026-11-12T11:00:18.374Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"币安Alpha第三波BSquared Network (B2)空投奖励现已开启！\\n\\n拥有至少250点币安Alpha积分的用户即可按先到先得的方式领取72枚B2代币空投。如果奖励池未全部发放完毕，积分门槛将每5分钟自动降低5点。\\n\\n请注意，领取空投将消耗15点币安Alpha积分。用户必须在24小时内于Alpha活动页面确认领取，否则将被视为放弃领取。\",\n      \"en\": \"Binance Alpha's third wave of BSquared Network (B2) airdrop rewards are here!\\n\\nUsers with at least 250 Binance Alpha Points can claim an airdrop of 72 B2 tokens on a first-come, first-served basis. If the reward pool is not fully distributed, the score threshold will automatically decrease by 5 points every 5 minutes.\\n\\nPlease note that claiming the airdrop will consume 15 Binance Alpha Points. Users must confirm their claim on the Alpha Events page within 24 hours; otherwise, it will be deemed that users have given up claiming the airdrop.\",\n      \"coins\": [\n        \"B2\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14057\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2120834053586973070\"\n    },\n    {\n      \"no\": 14039,\n      \"time\": \"2026-11-12T10:00:38.646Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"🎮惊喜空投：英雄联盟试玩券！\\n\\n🎁 我们将随机空投价值 5,000 USDT 的试玩券，助您体验英雄联盟预测市场。\\n\\n🗓 活动时间：11 月 12 日上午 10:00（UTC）至 11 月 15 日上午 10:00（UTC）\\n\\n• 我们将随机抽取 5,000 名符合条件的用户，每人获得 1 张试玩券（1 USDT）\\n\\n• 仅限之前未进行过英雄联盟预测市场交易的用户参与\\n\\n• 仅限英雄联盟比赛市场使用\\n\\n• 请在活动结束前（11 月 15 日上午 10:00（UTC））使用您的试玩券\",\n      \"en\": \"🎮 Surprise Airdrop: League of Legends Trial Vouchers!\\n\\n🎁 We’re randomly airdropping 5,000 USDT in Trial Vouchers to help you experience League of Legends Prediction Markets.\\n\\n🗓 Campaign: Nov 12, 10:00 AM UTC to Nov 15, 10:00 AM UTC\\n\\n• 5,000 eligible users will be randomly selected to receive 1 Trial Voucher (1 USDT)\\n• Available to users with no previous League of Legends Prediction Market trades\\n• Valid on League of Legends match markets only\\n• Use your voucher before Nov 15, 10:00 AM UTC when the campaign ends\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14039\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2120819039446663485\"\n    },\n    {\n      \"no\": 14034,\n      \"time\": \"2026-11-12T09:31:23.297Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"请准备好领取币安 Alpha 空投，并于今日 11:00 (UTC) 开始交易。\\n\\n拥有至少 250 点币安 Alpha 积分的用户即可按先到先得的方式领取代币，直至空投池全部发放完毕或空投活动结束。更多详情即将公布。\\n\\n请密切关注币安官方渠道，了解具体的空投代币及最新动态。\",\n      \"en\": \"Please get ready to claim the Binance Alpha airdrop and trade today at 11:00 (UTC).\\n\\nUsers with at least 250 Binance Alpha Points can claim the token on a first-come, first-served basis until the airdrop pool is fully distributed or the airdrop event expires. Further details will be announced soon.\\n\\nPlease stay tuned to Binance's official channels for the specific airdrop tokens and the latest updates.\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14034\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2120811676190838837\"\n    },\n    {\n      \"no\": 14022,\n      \"time\": \"2026-11-12T08:50:52.144Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"币安 Alpha 增值空投及服务更新\\n\\n价值 35 万美元的增值空投奖励将发放至符合条件的币安 Alpha 账户或币安钱包。\\n\\n无需领取，也不会扣除 Alpha 积分。每位符合条件的用户将获得以下代币之一的奖励：\\n\\n🔸 KGeN (KGEN)\\n\\n🔸 Velo (VELO)\\n\\n🔸 Velvet (VELVET)\\n\\n最新服务更新\\n\\n🔸 Alpha 2.0 即时下单：现已在所有支持的区块链上线。\\n\\n🔸 Alpha 充值提现：现已在 BSC、ETH、BASE 和 ARBITRUM 网络上线，其他网络预计很快也将支持。\\n\\n🔸 Alpha 活动：空投和交易竞赛将于今日恢复。敬请关注后续公告。\\n\\n感谢您的耐心和持续支持。我们期待很快为您带来更多精彩活动！\",\n      \"en\": \"Binance Alpha Appreciation Airdrop & Service Updates\\n\\nRewards from the $350,000 Appreciation Airdrop will be available in eligible users’ Binance Alpha accounts or Binance Wallets.\\n\\nNo claiming or Alpha Points deduction is required. Each eligible user will receive rewards in one of the following tokens:\\n\\n🔸 KGeN (KGEN)\\n🔸 Velo (VELO)\\n🔸 Velvet (VELVET)\\n\\nLatest Service Updates\\n\\n🔸 Alpha 2.0 Instant Orders: Available on all supported chains.\\n🔸 Alpha Deposits & Withdrawals: Available on BSC, ETH, BASE, and ARBITRUM networks, with the rest expected to follow soon.\\n🔸 Alpha Events: Airdrops and trading competitions will resume today. Stay tuned for upcoming announcements.\\n\\nThank you for your patience and continued support. We look forward to bringing you more exciting events soon!\",\n      \"coins\": [\n        \"ARB\",\n        \"KGEN\",\n        \"VELO\",\n        \"VELVET\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14022\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2120801480106181050\"\n    },\n    {\n      \"no\": 12066,\n      \"time\": \"2026-11-06T07:34:42.990Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"特别感谢币安Alpha社区\\n\\n币安Alpha目前正在进行系统升级。在此，我们衷心感谢社区成员的持续支持和参与。空投和交易竞赛即将回归，我们期待为您带来更多精彩活动！\\n\\n🎁 专属回馈空投\\n\\n为表达我们的谢意，截至2026年11月6日23:59:59 UTC，拥有200点或以上Alpha积分的用户将有机会分享总价值35万美元的空投奖励池。\\n\\n🔸 不扣除Alpha积分\\n\\n🔸 无需先到先得或领取\\n\\n🔸 奖励将自动发放至符合条件用户的Alpha账户\\n\\n有关奖励和发放时间的更多详情，我们将尽快公布。\\n\\n感谢您的耐心等待和持续支持。我们期待很快为您带来更多精彩活动！\",\n      \"en\": \"A Special Thank You to Our Binance Alpha Community\\n\\nBinance Alpha is currently undergoing a system upgrade. We want to take a moment to thank our community for your continued support and participation. Airdrops and trading competitions will return soon, and we look forward to bringing you more exciting events!\\n\\n🎁 Exclusive Appreciation Airdrop\\n\\nAs a token of our gratitude, users with 200 or more Alpha Points as of November 6, 2026, at 23:59:59 UTC will be eligible to share a total airdrop reward pool worth $350,000.\\n\\n🔸 No Alpha Points deduction\\n🔸 No FCFS or claiming required\\n🔸 Rewards will be automatically distributed to eligible users’ Alpha accounts\\n\\nFurther details regarding rewards and distribution timing will be announced soon.\\n\\nThank you for your patience and continued support. We look forward to bringing you more exciting events soon!\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/12066\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2118607986298167510\"\n    },\n    {\n      \"no\": 10534,\n      \"time\": \"2026-11-02T07:56:55.274Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Spot Listing\",\n      \"zh\": \"Aster 现货上线：IDOLUSDT\",\n      \"en\": \"Aster Spot Listing: IDOLUSDT\",\n      \"coins\": [\n        \"ASTER\",\n        \"IDOL\",\n        \"SPOT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/10534\",\n      \"source_url\": \"https://www.asterdex.com/en/spot/IDOLUSDT\"\n    },\n    {\n      \"no\": 8899,\n      \"time\": \"2026-10-29T12:00:09.567Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Alpha\",\n      \"zh\": \"币安 Alpha 上线新代币：\\nWarden (WARD)\\n合约地址：0xf5cb7cc90040aa717a16887c8b7d7c10a7c60984 (BSC)\",\n      \"en\": \"Binance Alpha lists new tokens:\\nWarden (WARD)\\nContract Address: 0xf5cb7cc90040aa717a16887c8b7d7c10a7c60984 (BSC)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/8899\",\n      \"source_url\": \"https://www.binance.com/en/alpha/bsc/0xf5cb7cc90040aa717a16887c8b7d7c10a7c60984\"\n    },\n    {\n      \"no\": 8794,\n      \"time\": \"2026-10-29T05:11:27.097Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"拥有 60 点或以上币安 Alpha 积分的币安钱包用户可通过 Alpha 活动页面参与本次 TGE Prime 预售活动。\\n\\n参与本次 TGE 活动将扣除 15 点积分。\",\n      \"en\": \"Binance Wallet users with 60 or more Binance Alpha Points can join this Pre-TGE Prime Sale event via the Alpha event page. \\n\\nParticipation in this TGE event will deduct 15 points.\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/8794\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2115672832919433233\"\n    },\n    {\n      \"no\": 8464,\n      \"time\": \"2026-10-28T09:02:03.003Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"币安Alpha第二波Unitas (UP)空投奖励现已开启！\\n\\n拥有至少244点币安Alpha积分的用户即可按先到先得的方式领取197枚UP代币的空投。如果奖励池未全部发放完毕，积分门槛将每5分钟自动降低5点。\\n\\n请注意，领取空投将消耗15点币安Alpha积分。用户必须在24小时内于Alpha活动页面确认领取，否则将被视为放弃领取。\",\n      \"en\": \"Binance Alpha's second wave of Unitas (UP) airdrop rewards are here!\\n\\nUsers with at least 244 Binance Alpha Points can claim an airdrop of 197 UP tokens on a first-come, first-served basis. If the reward pool is not fully distributed, the score threshold will automatically decrease by 5 points every 5 minutes.\\n\\nPlease note that claiming the airdrop will consume 15 Binance Alpha Points. Users must confirm their claim on the Alpha Events page within 24 hours; otherwise, it will be deemed that users have given up claiming the airdrop.\",\n      \"coins\": [\n        \"UNITAS\",\n        \"UP\",\n        \"UPROBINHOOD\"\n      ],\n      \"url\": \"https://eqn.news/monitor/8464\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2115368475460075947\"\n    },\n    {\n      \"no\": 8425,\n      \"time\": \"2026-10-28T07:31:50.710Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"加入 @predictdotfun (PREDICT) 在 #BinanceWallet 上的 TGE Prime 预售活动\\n\\n📅 2026 年 10 月 29 日 08:00 - 10:00 (UTC)\\n\\n📜符合条件的用户需要币安 Alpha 积分才能参与\\n\\nTGE 预售详情和活动入口即将发布——敬请期待！\",\n      \"en\": \"Join the Pre-TGE Prime Sale Edition on #BinanceWallet with @predictdotfun (PREDICT)\\n\\n📅 08:00 -10:00 (UTC) on October 29, 2026\\n📜Eligible users need Binance Alpha Points to participate\\n\\nPre-TGE details and the Event Portal will be released soon — stay tuned! https://t.co/AndpgOgCEO\",\n      \"coins\": [\n        \"PORTAL\"\n      ],\n      \"url\": \"https://eqn.news/monitor/8425\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2115345773865181458\"\n    },\n    {\n      \"no\": 8359,\n      \"time\": \"2026-10-28T05:43:03.925Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"请准备好领取币安 Alpha 空投，并于今日 09:00 (UTC) 开始交易。\\n\\n拥有至少 244 点币安 Alpha 积分的用户即可按先到先得的方式领取代币，直至空投池全部发放完毕或空投活动结束。更多详情即将公布。\\n\\n请密切关注币安官方渠道，了解具体的空投代币及最新动态。\",\n      \"en\": \"Please get ready to claim the Binance Alpha airdrop and trade today at 09:00 (UTC).\\n\\nUsers with at least 244 Binance Alpha Points can claim the token on a first-come, first-served basis until the airdrop pool is fully distributed or the airdrop event expires. Further details will be announced soon.\\n\\nPlease stay tuned to Binance's official channels for the specific airdrop tokens and the latest updates.\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/8359\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2115318400004260211\"\n    },\n    {\n      \"no\": 8034,\n      \"time\": \"2026-10-27T08:46:58.620Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Perp Listing\",\n      \"zh\": \"Aster 永续合约上线：XTENUSDT\",\n      \"en\": \"Aster Perp Listing: XTENUSDT\",\n      \"coins\": [\n        \"ASTER\"\n      ],\n      \"url\": \"https://eqn.news/monitor/8034\",\n      \"source_url\": \"https://www.asterdex.com/en/futures/v1/XTENUSDT\"\n    },\n    {\n      \"no\": 7989,\n      \"time\": \"2026-10-27T06:41:23.515Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Hyperliquid Perp Listing\",\n      \"zh\": \"Hyperliquid 永续合约上线：XTEN\",\n      \"en\": \"Hyperliquid Perp Listing: XTEN\",\n      \"coins\": [\n        \"HYPE\"\n      ],\n      \"url\": \"https://eqn.news/monitor/7989\",\n      \"source_url\": \"https://app.hyperliquid.xyz/trade/XTEN\"\n    },\n    {\n      \"no\": 7585,\n      \"time\": \"2026-10-26T07:56:19.883Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Spot Listing\",\n      \"zh\": \"紫菀现货列表：BTWUSDT\",\n      \"en\": \"Aster Spot Listing: BTWUSDT\",\n      \"coins\": [\n        \"ASTER\",\n        \"BTW\",\n        \"SPOT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/7585\",\n      \"source_url\": \"https://www.asterdex.com/en/spot/BTWUSDT\"\n    },\n    {\n      \"no\": 7387,\n      \"time\": \"2026-10-25T08:07:34.707Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Spot Listing\",\n      \"zh\": \"紫菀现货列表：IRYSUSDT\",\n      \"en\": \"Aster Spot Listing: IRYSUSDT\",\n      \"coins\": [\n        \"ASTER\",\n        \"IRYS\",\n        \"SPOT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/7387\",\n      \"source_url\": \"https://www.asterdex.com/en/spot/IRYSUSDT\"\n    },\n    {\n      \"no\": 6439,\n      \"time\": \"2026-10-23T03:07:08.878Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Perp Listing\",\n      \"zh\": \"Aster Perp Listing: IOSTUSDT\",\n      \"en\": \"Aster Perp Listing: IOSTUSDT\",\n      \"coins\": [\n        \"ASTER\",\n        \"IOST\"\n      ],\n      \"url\": \"https://eqn.news/monitor/6439\",\n      \"source_url\": \"https://www.asterdex.com/en/futures/v1/IOSTUSDT\"\n    },\n    {\n      \"no\": 6245,\n      \"time\": \"2026-10-22T09:44:49.045Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Spot Listing\",\n      \"zh\": \"紫菀现货列表：KERNELUSDT\",\n      \"en\": \"Aster Spot Listing: KERNELUSDT\",\n      \"coins\": [\n        \"ASTER\",\n        \"KERNEL\",\n        \"SPOT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/6245\",\n      \"source_url\": \"https://www.asterdex.com/en/spot/KERNELUSDT\"\n    },\n    {\n      \"no\": 5978,\n      \"time\": \"2026-10-21T14:44:51.739Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Perp Listing\",\n      \"zh\": \"Aster Perp Listing: AXISUSDT\",\n      \"en\": \"Aster Perp Listing: AXISUSDT\",\n      \"coins\": [\n        \"AXIS\",\n        \"ASTER\"\n      ],\n      \"url\": \"https://eqn.news/monitor/5978\",\n      \"source_url\": \"https://www.asterdex.com/en/futures/v1/AXISUSDT\"\n    },\n    {\n      \"no\": 5919,\n      \"time\": \"2026-10-21T11:00:09.194Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Alpha\",\n      \"zh\": \"币安Alpha上线新代币：\\n\\nAxis Robotics (AXIS)\\n\\n合约地址：0x5be75e3b0aff5d1a042a5363ae36acb1d6d755ea（基础）\",\n      \"en\": \"Binance Alpha lists new tokens:\\nAxis Robotics (AXIS)\\nContract Address: 0x5be75e3b0aff5d1a042a5363ae36acb1d6d755ea (Base)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/5919\",\n      \"source_url\": \"https://www.binance.com/en/alpha/base/0x5be75e3b0aff5d1a042a5363ae36acb1d6d755ea\"\n    },\n    {\n      \"no\": 5876,\n      \"time\": \"2026-10-21T08:54:14.893Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Perp Listing\",\n      \"zh\": \"Aster Perp Listing: PREDICTUSDT\",\n      \"en\": \"Aster Perp Listing: PREDICTUSDT\",\n      \"coins\": [\n        \"ASTER\"\n      ],\n      \"url\": \"https://eqn.news/monitor/5876\",\n      \"source_url\": \"https://www.asterdex.com/en/futures/v1/PREDICTUSDT\"\n    },\n    {\n      \"no\": 5855,\n      \"time\": \"2026-10-21T06:31:59.756Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"币安Alpha是首个搭载Axis Robotics (AXIS)的平台，将于2026年10月21日11:00 (UTC)正式上线交易。\\n\\n拥有至少235个币安Alpha积分的用户可参与空投，先到先得，空投金额为250枚AXIS代币。如果……\",\n      \"en\": \"Binance Alpha is the first platform to feature Axis Robotics (AXIS), with Alpha debut and trading starting on October 21, 2026, at 11:00 (UTC). \\n\\nUsers with at least 235 Binance Alpha Points can claim an airdrop of 250 AXIS tokens on a first-come, first-served basis. If the…\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/5855\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2112793998570213703\"\n    },\n    {\n      \"no\": 5719,\n      \"time\": \"2026-10-20T12:30:44.116Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"币安Alpha将于10月21日率先推出Axis Robotics (AXIS) 的空投产品。\\n\\n符合条件的用户可在交易开放后，前往Alpha Events页面使用币安Alpha积分领取空投。更多详情即将公布。\\n\\n敬请关注币安官方…\",\n      \"en\": \"Binance Alpha will be the first platform to feature Axis Robotics (AXIS) on October 21.\\n\\nEligible users can claim their airdrop using Binance Alpha Points on the Alpha Events page once trading opens. Further details will be announced soon.\\n\\nPlease stay tuned to Binance’s official… https://t.co/l9rgMJ7InT\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/5719\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2112521890178949305\"\n    },\n    {\n      \"no\": 5595,\n      \"time\": \"2026-10-19T14:37:36.883Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Perp Listing\",\n      \"zh\": \"Aster Perp Listing: PAPERUSDT\",\n      \"en\": \"Aster Perp Listing: PAPERUSDT\",\n      \"coins\": [\n        \"ASTER\"\n      ],\n      \"url\": \"https://eqn.news/monitor/5595\",\n      \"source_url\": \"https://www.asterdex.com/en/futures/v1/PAPERUSDT\"\n    },\n    {\n      \"no\": 5580,\n      \"time\": \"2026-10-19T13:01:09.994Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"币安Alpha第二波Concrete (CT)空投奖励现已开启！\\n\\n拥有至少255点币安Alpha积分的用户即可按先到先得的方式领取87枚CT代币空投。如果奖励池未全部发放完毕，积分门槛将每5分钟自动降低5点。\\n\\n请注意，领取空投将消耗15点币安Alpha积分。用户必须在24小时内于Alpha活动页面确认领取，否则将被视为放弃领取。\",\n      \"en\": \"Binance Alpha's second wave of Concrete (CT)  airdrop rewards are here!\\n\\nUsers with at least 255 Binance Alpha Points can claim an airdrop of 87 CT tokens on a first-come, first-served basis. If the reward pool is not fully distributed, the score threshold will automatically decrease by 5 points every 5 minutes.\\n\\nPlease note that claiming the airdrop will consume 15 Binance Alpha Points. Users must confirm their claim on the Alpha Events page within 24 hours; otherwise, it will be deemed that users have given up claiming the airdrop.\",\n      \"coins\": [\n        \"CT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/5580\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2112167161380880715\"\n    },\n    {\n      \"no\": 5565,\n      \"time\": \"2026-10-19T11:04:18.315Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"请准备好领取币安 Alpha 空投，并于今日 13:00 (UTC) 开始交易。\\n\\n拥有至少 255 点币安 Alpha 积分的用户即可按先到先得的方式领取代币，直至空投池全部发放完毕或空投活动结束。更多详情即将公布……\",\n      \"en\": \"Please get ready to claim the Binance Alpha airdrop and trade today at 13:00 (UTC).\\n\\nUsers with at least 255 Binance Alpha Points can claim the token on a first-come, first-served basis until the airdrop pool is fully distributed or the airdrop event expires. Further details will…\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/5565\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2112137752783569282\"\n    },\n    {\n      \"no\": 5091,\n      \"time\": \"2026-10-16T10:36:18.114Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Perp Listing\",\n      \"zh\": \"紫菀 Perp 列表：DNAUSDT\",\n      \"en\": \"Aster Perp Listing: DNAUSDT\",\n      \"coins\": [\n        \"ASTER\",\n        \"DNA\"\n      ],\n      \"url\": \"https://eqn.news/monitor/5091\",\n      \"source_url\": \"https://www.asterdex.com/en/futures/v1/DNAUSDT\"\n    },\n    {\n      \"no\": 5066,\n      \"time\": \"2026-10-16T08:00:08.816Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Alpha\",\n      \"zh\": \"币安 Alpha 上线新代币：\\n\\nNeoSoul (DNA)\\n\\n合约地址：0xa991f61940095aea0724ef54077223b048c5cf7b (BSC)\",\n      \"en\": \"Binance Alpha lists new tokens:\\nNeoSoul (DNA)\\nContract Address: 0xa991f61940095aea0724ef54077223b048c5cf7b (BSC)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/5066\",\n      \"source_url\": \"https://www.binance.com/en/alpha/bsc/0xa991f61940095aea0724ef54077223b048c5cf7b\"\n    },\n    {\n      \"no\": 5047,\n      \"time\": \"2026-10-16T06:03:46.612Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"币安 Alpha 是首个搭载 NeoSoul (DNA) 的平台，将于 2026 年 10 月 16 日 08:00 (UTC) 正式上线交易。\\n\\n拥有至少 245 点币安 Alpha 积分的用户可参与空投，先到先得，空投金额为 400 枚 DNA 代币。如果奖励池……\",\n      \"en\": \"Binance Alpha is the first platform to feature NeoSoul (DNA), with Alpha debut and trading starting on October 16, 2026, at 08:00 (UTC). \\n\\nUsers with at least 245 Binance Alpha Points can claim an airdrop of 400 DNA tokens on a first-come, first-served basis. If the reward pool…\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/5047\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2110974958621134896\"\n    },\n    {\n      \"no\": 4835,\n      \"time\": \"2026-10-15T11:30:38.313Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"币安Alpha将于10月16日率先推出NeoSoul（DNA）代币。\\n\\n符合条件的用户可在交易开放后，前往Alpha活动页面使用币安Alpha积分领取空投。更多详情即将公布。\\n\\n请关注币安官方渠道获取最新资讯。\",\n      \"en\": \"Binance Alpha will be the first platform to feature NeoSoul (DNA) on October 16.\\n\\nEligible users can claim their airdrop using Binance Alpha Points on the Alpha Events page once trading opens. Further details will be announced soon.\\n\\nPlease stay tuned to Binance’s official channels for the latest updates.\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/4835\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2110694828963176858\"\n    },\n    {\n      \"no\": 4803,\n      \"time\": \"2026-10-15T10:04:39.082Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Perp Listing\",\n      \"zh\": \"紫菀种植清单：WALUSDT\",\n      \"en\": \"Aster Perp Listing: WALUSDT\",\n      \"coins\": [\n        \"WAL\",\n        \"ASTER\"\n      ],\n      \"url\": \"https://eqn.news/monitor/4803\",\n      \"source_url\": \"https://www.asterdex.com/en/futures/v1/WALUSDT\"\n    },\n    {\n      \"no\": 4774,\n      \"time\": \"2026-10-15T07:06:35.598Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Spot Listing\",\n      \"zh\": \"紫菀现货清单：CRCLBUSDT\",\n      \"en\": \"Aster Spot Listing: CRCLBUSDT\",\n      \"coins\": [\n        \"CRCLB\",\n        \"SPOT\",\n        \"ASTER\"\n      ],\n      \"url\": \"https://eqn.news/monitor/4774\",\n      \"source_url\": \"https://www.asterdex.com/en/spot/CRCLBUSDT\"\n    },\n    {\n      \"no\": 4773,\n      \"time\": \"2026-10-15T07:05:50.613Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Spot Listing\",\n      \"zh\": \"紫菀地点列表：MSTRBUSDT\",\n      \"en\": \"Aster Spot Listing: MSTRBUSDT\",\n      \"coins\": [\n        \"MSTRB\",\n        \"SPOT\",\n        \"ASTER\"\n      ],\n      \"url\": \"https://eqn.news/monitor/4773\",\n      \"source_url\": \"https://www.asterdex.com/en/spot/MSTRBUSDT\"\n    },\n    {\n      \"no\": 4758,\n      \"time\": \"2026-10-15T05:52:56.415Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Spot Listing\",\n      \"zh\": \"Aster Spot Listing: NVDABUSDT\",\n      \"en\": \"Aster Spot Listing: NVDABUSDT\",\n      \"coins\": [\n        \"NVDAB\",\n        \"SPOT\",\n        \"ASTER\"\n      ],\n      \"url\": \"https://eqn.news/monitor/4758\",\n      \"source_url\": \"https://www.asterdex.com/en/spot/NVDABUSDT\"\n    },\n    {\n      \"no\": 4519,\n      \"time\": \"2026-10-14T10:00:16.288Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"Derive (DRV) 现已在币安 Alpha 上线！\\n\\n拥有至少 245 点币安 Alpha 积分的用户即可参与空投，先到先得，每 5 天领取 70 枚 DRV 代币。如果奖励池未全部发放完毕，积分门槛将自动降低 5 点……\",\n      \"en\": \"Derive (DRV) is now live on Binance Alpha!\\n\\nUsers with at least 245 Binance Alpha Points can claim an airdrop of 70 DRV tokens on a first-come, first-served basis. If the reward pool is not fully distributed, the score threshold will automatically decrease by 5 points every 5… https://t.co/LbFpqHkx7w https://t.co/2qZutTERcn\",\n      \"coins\": [\n        \"DRV\"\n      ],\n      \"url\": \"https://eqn.news/monitor/4519\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2110309697500959033\"\n    },\n    {\n      \"no\": 4518,\n      \"time\": \"2026-10-14T10:00:09.077Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Alpha\",\n      \"zh\": \"币安 Alpha 上线新代币：\\n\\nDerive (DRV)\\n\\n合约地址：0x9d0e8f5b25384c7310cb8c6ae32c8fbeb645d083（基础地址）\",\n      \"en\": \"Binance Alpha lists new tokens:\\nDerive (DRV)\\nContract Address: 0x9d0e8f5b25384c7310cb8c6ae32c8fbeb645d083 (Base)\",\n      \"coins\": [\n        \"DRV\"\n      ],\n      \"url\": \"https://eqn.news/monitor/4518\",\n      \"source_url\": \"https://www.binance.com/en/alpha/base/0x9d0e8f5b25384c7310cb8c6ae32c8fbeb645d083\"\n    },\n    {\n      \"no\": 4500,\n      \"time\": \"2026-10-14T08:00:57.050Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"请准备好领取币安 Alpha 空投，并于今日 10:00 (UTC) 开始交易。\\n\\n拥有至少 245 点币安 Alpha 积分的用户即可按先到先得的方式领取代币，直至空投池全部发放完毕或空投活动结束。更多详情即将公布……\",\n      \"en\": \"Please get ready to claim the Binance Alpha airdrop and trade today at 10:00 (UTC).\\n\\nUsers with at least 245 Binance Alpha Points can claim the token on a first-come, first-served basis until the airdrop pool is fully distributed or the airdrop event expires. Further details will…\",\n      \"coins\": [\n        \"00\"\n      ],\n      \"url\": \"https://eqn.news/monitor/4500\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2110279669962756189\"\n    },\n    {\n      \"no\": 4308,\n      \"time\": \"2026-10-13T08:23:05.844Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Spot Listing\",\n      \"zh\": \"紫菀现货列表：旺柴USDT\",\n      \"en\": \"Aster Spot Listing: WANGCHAIUSDT\",\n      \"coins\": [\n        \"ASTER\",\n        \"SPOT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/4308\",\n      \"source_url\": \"https://www.asterdex.com/en/spot/WANGCHAIUSDT\"\n    },\n    {\n      \"no\": 4087,\n      \"time\": \"2026-10-12T11:28:24.318Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Perp Listing\",\n      \"zh\": \"Aster Perp Listing: SQQQUSDT\",\n      \"en\": \"Aster Perp Listing: SQQQUSDT\",\n      \"coins\": [\n        \"SQQQ\",\n        \"ASTER\"\n      ],\n      \"url\": \"https://eqn.news/monitor/4087\",\n      \"source_url\": \"https://www.asterdex.com/en/futures/v1/SQQQUSDT\"\n    },\n    {\n      \"no\": 4025,\n      \"time\": \"2026-10-12T08:24:08.867Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Perp Listing\",\n      \"zh\": \"紫菀种植清单：RSRUSDT\",\n      \"en\": \"Aster Perp Listing: RSRUSDT\",\n      \"coins\": [\n        \"RSR\",\n        \"ASTER\"\n      ],\n      \"url\": \"https://eqn.news/monitor/4025\",\n      \"source_url\": \"https://www.asterdex.com/en/futures/v1/RSRUSDT\"\n    },\n    {\n      \"no\": 4024,\n      \"time\": \"2026-10-12T08:23:29.878Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Perp Listing\",\n      \"zh\": \"紫菀种植清单：WUSDT\",\n      \"en\": \"Aster Perp Listing: WUSDT\",\n      \"coins\": [\n        \"ASTER\"\n      ],\n      \"url\": \"https://eqn.news/monitor/4024\",\n      \"source_url\": \"https://www.asterdex.com/en/futures/v1/WUSDT\"\n    },\n    {\n      \"no\": 3881,\n      \"time\": \"2026-10-11T08:18:53.724Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Perp Listing\",\n      \"zh\": \"Aster Perp Listing: BATUSDT\",\n      \"en\": \"Aster Perp Listing: BATUSDT\",\n      \"coins\": [\n        \"ASTER\",\n        \"BAT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/3881\",\n      \"source_url\": \"https://www.asterdex.com/en/futures/v1/BATUSDT\"\n    },\n    {\n      \"no\": 3610,\n      \"time\": \"2026-10-09T11:30:39.255Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Perp Listing\",\n      \"zh\": \"紫菀种植清单：PEARLUSDT\",\n      \"en\": \"Aster Perp Listing: PEARLUSDT\",\n      \"coins\": [\n        \"ASTER\"\n      ],\n      \"url\": \"https://eqn.news/monitor/3610\",\n      \"source_url\": \"https://www.asterdex.com/en/futures/v1/PEARLUSDT\"\n    },\n    {\n      \"no\": 3580,\n      \"time\": \"2026-10-09T09:00:20.378Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"币安 Alpha Box 空投活动现已开启！\\n\\n本次活动采用更新后的 Alpha Box 模型，空投池包含来自两个项目的代币：Yei Finance (CLO) 和 Bitlayer (BTR)。持有至少 245 点币安 Alpha 积分的用户即可在 Alpha 活动中领取一次代币空投……\",\n      \"en\": \"The Binance Alpha Box is now live!\\n\\nThis event uses the updated Alpha Box model, with the airdrop pool consisting of tokens from two projects: Yei Finance (CLO) and Bitlayer (BTR). Users holding at least 245 Binance Alpha points can claim one token airdrop on the Alpha Events… https://t.co/qDxIzg9SQF https://t.co/SRGys1hKab\",\n      \"coins\": [\n        \"CLO\",\n        \"BTR\"\n      ],\n      \"url\": \"https://eqn.news/monitor/3580\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2108482676223357277\"\n    },\n    {\n      \"no\": 3543,\n      \"time\": \"2026-10-09T07:01:34.834Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"请准备好领取币安 Alpha 空投，并于今日 9:00 (UTC) 开始交易。\\n\\n本次活动采用升级版币安 Alpha Box 模型，空投池包含来自多个项目的代币。拥有至少 245 点币安 Alpha 积分的用户即可领取一个代币奖励……\",\n      \"en\": \"Please get ready to claim the Binance Alpha airdrop and trade today at 9:00 (UTC).\\n\\nThis event features an updated Binance Alpha Box model, where the airdrop pool includes tokens from multiple projects. Users with at least 245 Binance Alpha Points can claim one token reward on a…\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/3543\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2108452790104457248\"\n    },\n    {\n      \"no\": 3124,\n      \"time\": \"2026-10-07T09:00:30.039Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"Talus Network (US) 现已在币安 Alpha 上线！\\n\\n拥有至少 246 点币安 Alpha 积分的用户即可参与空投，先到先得，共计 2,280 个 US 代币。如果奖励池未全部发放完毕，积分门槛将每 5 分钟自动降低 5 点。\\n\\n请注意，领取空投将消耗 15 点币安 Alpha 积分。用户必须在 24 小时内于 Alpha 活动页面确认领取，否则将被视为放弃领取。\",\n      \"en\": \"Talus Network (US) is now live on Binance Alpha!\\n\\nUsers with at least 246 Binance Alpha Points can claim an airdrop of 2,280 US tokens on a first-come, first-served basis. If the reward pool is not fully distributed, the score threshold will automatically decrease by 5 points every 5 minutes.\\n\\nPlease note that claiming the airdrop will consume 15 Binance Alpha Points. Users must confirm their claim on the Alpha Events page within 24 hours; otherwise, it will be deemed that users have given up claiming the airdrop.\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/3124\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2107757939586904432\"\n    },\n    {\n      \"no\": 3121,\n      \"time\": \"2026-10-07T08:00:21.199Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Binance Wallet Pre-TGE\",\n      \"zh\": \"请准备好领取币安 Alpha 空投，并于今日 9:00 (UTC) 开始交易。\\n\\n拥有至少 246 点币安 Alpha 积分的用户即可按先到先得的方式领取代币，直至空投池全部发放完毕或空投活动结束。更多详情即将公布……\",\n      \"en\": \"Please get ready to claim the Binance Alpha airdrop and trade today at 9:00 (UTC).\\n\\nUsers with at least 246 Binance Alpha Points can claim the token on a first-come, first-served basis until the airdrop pool is fully distributed or the airdrop event expires. Further details will…\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/3121\",\n      \"source_url\": \"https://x.com/BinanceWallet/status/2107742804890001715\"\n    },\n    {\n      \"no\": 2970,\n      \"time\": \"2026-10-06T13:19:51.691Z\",\n      \"channels\": [\n        \"alpha\"\n      ],\n      \"source\": \"Aster Perp Listing\",\n      \"zh\": \"Aster Perp Listing: SDEVUSD1\",\n      \"en\": \"Aster Perp Listing: SDEVUSD1\",\n      \"coins\": [\n        \"ASTER\"\n      ],\n      \"url\": \"https://eqn.news/monitor/2970\",\n      \"source_url\": \"https://www.asterdex.com/en/futures/v1/SDEVUSD1\"\n    }\n  ],\n  \"next_cursor\": \"1791292791691-2970\"\n}",
+    "type": "text"
+   }
+  ],
+  "isError": false,
+  "structuredContent": {
+   "items": [
+    {
+     "no": 14876,
+     "time": "2026-11-14T16:07:11.272Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Perp Listing",
+     "zh": "Aster 永续合约上线：SOPHUSDT",
+     "en": "Aster Perp Listing: SOPHUSDT",
+     "coins": [
+      "ASTER",
+      "SOPH"
+     ],
+     "url": "https://eqn.news/monitor/14876",
+     "source_url": "https://www.asterdex.com/en/futures/v1/SOPHUSDT"
+    },
+    {
+     "no": 14403,
+     "time": "2026-11-13T11:00:24.157Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "币安Alpha第二轮RaveDAO (RAVE)空投奖励现已开启！\n\n拥有至少256点币安Alpha积分的用户即可领取270枚RAVE代币空投，先到先得。如果奖励池未全部发放完毕，积分门槛将每5分钟自动降低5点。\n\n请注意，领取空投将消耗15点币安Alpha积分。用户必须在24小时内于Alpha活动页面确认领取，否则将被视为放弃领取。",
+     "en": "Binance Alpha's second wave of RaveDAO (RAVE) airdrop rewards are here!\n\nUsers with at least 256 Binance Alpha Points can claim an airdrop of 270 RAVE tokens on a first-come, first-served basis. If the reward pool is not fully distributed, the score threshold will automatically decrease by 5 points every 5 minutes.\n\nPlease note that claiming the airdrop will consume 15 Binance Alpha Points. Users must confirm their claim on the Alpha Events page within 24 hours; otherwise, it will be deemed that users have given up claiming the airdrop.",
+     "coins": [
+      "RAVE"
+     ],
+     "url": "https://eqn.news/monitor/14403",
+     "source_url": "https://x.com/BinanceWallet/status/2121196465389486181"
+    },
+    {
+     "no": 14352,
+     "time": "2026-11-13T07:32:13.536Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "请准备好领取币安 Alpha 空投，并于今日 11:00 (UTC) 开始交易。\n\n拥有至少 256 点币安 Alpha 积分的用户即可按先到先得的方式领取代币，直至空投池全部发放完毕或空投活动结束。更多详情即将公布。\n\n请密切关注币安官方渠道，了解具体的空投代币及最新动态。",
+     "en": "Please get ready to claim the Binance Alpha airdrop and trade today at 11:00 (UTC).\n\nUsers with at least 256 Binance Alpha Points can claim the token in a first-come, first-served basis until the airdrop pool is fully distributed or the airdrop event expires. Further details will be announced soon.\n\nPlease stay tuned to Binance's official channels for the specific airdrop tokens and the latest updates.",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14352",
+     "source_url": "https://x.com/BinanceWallet/status/2121144076141760957"
+    },
+    {
+     "no": 14057,
+     "time": "2026-11-12T11:00:18.374Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "币安Alpha第三波BSquared Network (B2)空投奖励现已开启！\n\n拥有至少250点币安Alpha积分的用户即可按先到先得的方式领取72枚B2代币空投。如果奖励池未全部发放完毕，积分门槛将每5分钟自动降低5点。\n\n请注意，领取空投将消耗15点币安Alpha积分。用户必须在24小时内于Alpha活动页面确认领取，否则将被视为放弃领取。",
+     "en": "Binance Alpha's third wave of BSquared Network (B2) airdrop rewards are here!\n\nUsers with at least 250 Binance Alpha Points can claim an airdrop of 72 B2 tokens on a first-come, first-served basis. If the reward pool is not fully distributed, the score threshold will automatically decrease by 5 points every 5 minutes.\n\nPlease note that claiming the airdrop will consume 15 Binance Alpha Points. Users must confirm their claim on the Alpha Events page within 24 hours; otherwise, it will be deemed that users have given up claiming the airdrop.",
+     "coins": [
+      "B2"
+     ],
+     "url": "https://eqn.news/monitor/14057",
+     "source_url": "https://x.com/BinanceWallet/status/2120834053586973070"
+    },
+    {
+     "no": 14039,
+     "time": "2026-11-12T10:00:38.646Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "🎮惊喜空投：英雄联盟试玩券！\n\n🎁 我们将随机空投价值 5,000 USDT 的试玩券，助您体验英雄联盟预测市场。\n\n🗓 活动时间：11 月 12 日上午 10:00（UTC）至 11 月 15 日上午 10:00（UTC）\n\n• 我们将随机抽取 5,000 名符合条件的用户，每人获得 1 张试玩券（1 USDT）\n\n• 仅限之前未进行过英雄联盟预测市场交易的用户参与\n\n• 仅限英雄联盟比赛市场使用\n\n• 请在活动结束前（11 月 15 日上午 10:00（UTC））使用您的试玩券",
+     "en": "🎮 Surprise Airdrop: League of Legends Trial Vouchers!\n\n🎁 We’re randomly airdropping 5,000 USDT in Trial Vouchers to help you experience League of Legends Prediction Markets.\n\n🗓 Campaign: Nov 12, 10:00 AM UTC to Nov 15, 10:00 AM UTC\n\n• 5,000 eligible users will be randomly selected to receive 1 Trial Voucher (1 USDT)\n• Available to users with no previous League of Legends Prediction Market trades\n• Valid on League of Legends match markets only\n• Use your voucher before Nov 15, 10:00 AM UTC when the campaign ends",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14039",
+     "source_url": "https://x.com/BinanceWallet/status/2120819039446663485"
+    },
+    {
+     "no": 14034,
+     "time": "2026-11-12T09:31:23.297Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "请准备好领取币安 Alpha 空投，并于今日 11:00 (UTC) 开始交易。\n\n拥有至少 250 点币安 Alpha 积分的用户即可按先到先得的方式领取代币，直至空投池全部发放完毕或空投活动结束。更多详情即将公布。\n\n请密切关注币安官方渠道，了解具体的空投代币及最新动态。",
+     "en": "Please get ready to claim the Binance Alpha airdrop and trade today at 11:00 (UTC).\n\nUsers with at least 250 Binance Alpha Points can claim the token on a first-come, first-served basis until the airdrop pool is fully distributed or the airdrop event expires. Further details will be announced soon.\n\nPlease stay tuned to Binance's official channels for the specific airdrop tokens and the latest updates.",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14034",
+     "source_url": "https://x.com/BinanceWallet/status/2120811676190838837"
+    },
+    {
+     "no": 14022,
+     "time": "2026-11-12T08:50:52.144Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "币安 Alpha 增值空投及服务更新\n\n价值 35 万美元的增值空投奖励将发放至符合条件的币安 Alpha 账户或币安钱包。\n\n无需领取，也不会扣除 Alpha 积分。每位符合条件的用户将获得以下代币之一的奖励：\n\n🔸 KGeN (KGEN)\n\n🔸 Velo (VELO)\n\n🔸 Velvet (VELVET)\n\n最新服务更新\n\n🔸 Alpha 2.0 即时下单：现已在所有支持的区块链上线。\n\n🔸 Alpha 充值提现：现已在 BSC、ETH、BASE 和 ARBITRUM 网络上线，其他网络预计很快也将支持。\n\n🔸 Alpha 活动：空投和交易竞赛将于今日恢复。敬请关注后续公告。\n\n感谢您的耐心和持续支持。我们期待很快为您带来更多精彩活动！",
+     "en": "Binance Alpha Appreciation Airdrop & Service Updates\n\nRewards from the $350,000 Appreciation Airdrop will be available in eligible users’ Binance Alpha accounts or Binance Wallets.\n\nNo claiming or Alpha Points deduction is required. Each eligible user will receive rewards in one of the following tokens:\n\n🔸 KGeN (KGEN)\n🔸 Velo (VELO)\n🔸 Velvet (VELVET)\n\nLatest Service Updates\n\n🔸 Alpha 2.0 Instant Orders: Available on all supported chains.\n🔸 Alpha Deposits & Withdrawals: Available on BSC, ETH, BASE, and ARBITRUM networks, with the rest expected to follow soon.\n🔸 Alpha Events: Airdrops and trading competitions will resume today. Stay tuned for upcoming announcements.\n\nThank you for your patience and continued support. We look forward to bringing you more exciting events soon!",
+     "coins": [
+      "ARB",
+      "KGEN",
+      "VELO",
+      "VELVET"
+     ],
+     "url": "https://eqn.news/monitor/14022",
+     "source_url": "https://x.com/BinanceWallet/status/2120801480106181050"
+    },
+    {
+     "no": 12066,
+     "time": "2026-11-06T07:34:42.990Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "特别感谢币安Alpha社区\n\n币安Alpha目前正在进行系统升级。在此，我们衷心感谢社区成员的持续支持和参与。空投和交易竞赛即将回归，我们期待为您带来更多精彩活动！\n\n🎁 专属回馈空投\n\n为表达我们的谢意，截至2026年11月6日23:59:59 UTC，拥有200点或以上Alpha积分的用户将有机会分享总价值35万美元的空投奖励池。\n\n🔸 不扣除Alpha积分\n\n🔸 无需先到先得或领取\n\n🔸 奖励将自动发放至符合条件用户的Alpha账户\n\n有关奖励和发放时间的更多详情，我们将尽快公布。\n\n感谢您的耐心等待和持续支持。我们期待很快为您带来更多精彩活动！",
+     "en": "A Special Thank You to Our Binance Alpha Community\n\nBinance Alpha is currently undergoing a system upgrade. We want to take a moment to thank our community for your continued support and participation. Airdrops and trading competitions will return soon, and we look forward to bringing you more exciting events!\n\n🎁 Exclusive Appreciation Airdrop\n\nAs a token of our gratitude, users with 200 or more Alpha Points as of November 6, 2026, at 23:59:59 UTC will be eligible to share a total airdrop reward pool worth $350,000.\n\n🔸 No Alpha Points deduction\n🔸 No FCFS or claiming required\n🔸 Rewards will be automatically distributed to eligible users’ Alpha accounts\n\nFurther details regarding rewards and distribution timing will be announced soon.\n\nThank you for your patience and continued support. We look forward to bringing you more exciting events soon!",
+     "coins": [],
+     "url": "https://eqn.news/monitor/12066",
+     "source_url": "https://x.com/BinanceWallet/status/2118607986298167510"
+    },
+    {
+     "no": 10534,
+     "time": "2026-11-02T07:56:55.274Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Spot Listing",
+     "zh": "Aster 现货上线：IDOLUSDT",
+     "en": "Aster Spot Listing: IDOLUSDT",
+     "coins": [
+      "ASTER",
+      "IDOL",
+      "SPOT"
+     ],
+     "url": "https://eqn.news/monitor/10534",
+     "source_url": "https://www.asterdex.com/en/spot/IDOLUSDT"
+    },
+    {
+     "no": 8899,
+     "time": "2026-10-29T12:00:09.567Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Alpha",
+     "zh": "币安 Alpha 上线新代币：\nWarden (WARD)\n合约地址：0xf5cb7cc90040aa717a16887c8b7d7c10a7c60984 (BSC)",
+     "en": "Binance Alpha lists new tokens:\nWarden (WARD)\nContract Address: 0xf5cb7cc90040aa717a16887c8b7d7c10a7c60984 (BSC)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/8899",
+     "source_url": "https://www.binance.com/en/alpha/bsc/0xf5cb7cc90040aa717a16887c8b7d7c10a7c60984"
+    },
+    {
+     "no": 8794,
+     "time": "2026-10-29T05:11:27.097Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "拥有 60 点或以上币安 Alpha 积分的币安钱包用户可通过 Alpha 活动页面参与本次 TGE Prime 预售活动。\n\n参与本次 TGE 活动将扣除 15 点积分。",
+     "en": "Binance Wallet users with 60 or more Binance Alpha Points can join this Pre-TGE Prime Sale event via the Alpha event page. \n\nParticipation in this TGE event will deduct 15 points.",
+     "coins": [],
+     "url": "https://eqn.news/monitor/8794",
+     "source_url": "https://x.com/BinanceWallet/status/2115672832919433233"
+    },
+    {
+     "no": 8464,
+     "time": "2026-10-28T09:02:03.003Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "币安Alpha第二波Unitas (UP)空投奖励现已开启！\n\n拥有至少244点币安Alpha积分的用户即可按先到先得的方式领取197枚UP代币的空投。如果奖励池未全部发放完毕，积分门槛将每5分钟自动降低5点。\n\n请注意，领取空投将消耗15点币安Alpha积分。用户必须在24小时内于Alpha活动页面确认领取，否则将被视为放弃领取。",
+     "en": "Binance Alpha's second wave of Unitas (UP) airdrop rewards are here!\n\nUsers with at least 244 Binance Alpha Points can claim an airdrop of 197 UP tokens on a first-come, first-served basis. If the reward pool is not fully distributed, the score threshold will automatically decrease by 5 points every 5 minutes.\n\nPlease note that claiming the airdrop will consume 15 Binance Alpha Points. Users must confirm their claim on the Alpha Events page within 24 hours; otherwise, it will be deemed that users have given up claiming the airdrop.",
+     "coins": [
+      "UNITAS",
+      "UP",
+      "UPROBINHOOD"
+     ],
+     "url": "https://eqn.news/monitor/8464",
+     "source_url": "https://x.com/BinanceWallet/status/2115368475460075947"
+    },
+    {
+     "no": 8425,
+     "time": "2026-10-28T07:31:50.710Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "加入 @predictdotfun (PREDICT) 在 #BinanceWallet 上的 TGE Prime 预售活动\n\n📅 2026 年 10 月 29 日 08:00 - 10:00 (UTC)\n\n📜符合条件的用户需要币安 Alpha 积分才能参与\n\nTGE 预售详情和活动入口即将发布——敬请期待！",
+     "en": "Join the Pre-TGE Prime Sale Edition on #BinanceWallet with @predictdotfun (PREDICT)\n\n📅 08:00 -10:00 (UTC) on October 29, 2026\n📜Eligible users need Binance Alpha Points to participate\n\nPre-TGE details and the Event Portal will be released soon — stay tuned! https://t.co/AndpgOgCEO",
+     "coins": [
+      "PORTAL"
+     ],
+     "url": "https://eqn.news/monitor/8425",
+     "source_url": "https://x.com/BinanceWallet/status/2115345773865181458"
+    },
+    {
+     "no": 8359,
+     "time": "2026-10-28T05:43:03.925Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "请准备好领取币安 Alpha 空投，并于今日 09:00 (UTC) 开始交易。\n\n拥有至少 244 点币安 Alpha 积分的用户即可按先到先得的方式领取代币，直至空投池全部发放完毕或空投活动结束。更多详情即将公布。\n\n请密切关注币安官方渠道，了解具体的空投代币及最新动态。",
+     "en": "Please get ready to claim the Binance Alpha airdrop and trade today at 09:00 (UTC).\n\nUsers with at least 244 Binance Alpha Points can claim the token on a first-come, first-served basis until the airdrop pool is fully distributed or the airdrop event expires. Further details will be announced soon.\n\nPlease stay tuned to Binance's official channels for the specific airdrop tokens and the latest updates.",
+     "coins": [],
+     "url": "https://eqn.news/monitor/8359",
+     "source_url": "https://x.com/BinanceWallet/status/2115318400004260211"
+    },
+    {
+     "no": 8034,
+     "time": "2026-10-27T08:46:58.620Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Perp Listing",
+     "zh": "Aster 永续合约上线：XTENUSDT",
+     "en": "Aster Perp Listing: XTENUSDT",
+     "coins": [
+      "ASTER"
+     ],
+     "url": "https://eqn.news/monitor/8034",
+     "source_url": "https://www.asterdex.com/en/futures/v1/XTENUSDT"
+    },
+    {
+     "no": 7989,
+     "time": "2026-10-27T06:41:23.515Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Hyperliquid Perp Listing",
+     "zh": "Hyperliquid 永续合约上线：XTEN",
+     "en": "Hyperliquid Perp Listing: XTEN",
+     "coins": [
+      "HYPE"
+     ],
+     "url": "https://eqn.news/monitor/7989",
+     "source_url": "https://app.hyperliquid.xyz/trade/XTEN"
+    },
+    {
+     "no": 7585,
+     "time": "2026-10-26T07:56:19.883Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Spot Listing",
+     "zh": "紫菀现货列表：BTWUSDT",
+     "en": "Aster Spot Listing: BTWUSDT",
+     "coins": [
+      "ASTER",
+      "BTW",
+      "SPOT"
+     ],
+     "url": "https://eqn.news/monitor/7585",
+     "source_url": "https://www.asterdex.com/en/spot/BTWUSDT"
+    },
+    {
+     "no": 7387,
+     "time": "2026-10-25T08:07:34.707Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Spot Listing",
+     "zh": "紫菀现货列表：IRYSUSDT",
+     "en": "Aster Spot Listing: IRYSUSDT",
+     "coins": [
+      "ASTER",
+      "IRYS",
+      "SPOT"
+     ],
+     "url": "https://eqn.news/monitor/7387",
+     "source_url": "https://www.asterdex.com/en/spot/IRYSUSDT"
+    },
+    {
+     "no": 6439,
+     "time": "2026-10-23T03:07:08.878Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Perp Listing",
+     "zh": "Aster Perp Listing: IOSTUSDT",
+     "en": "Aster Perp Listing: IOSTUSDT",
+     "coins": [
+      "ASTER",
+      "IOST"
+     ],
+     "url": "https://eqn.news/monitor/6439",
+     "source_url": "https://www.asterdex.com/en/futures/v1/IOSTUSDT"
+    },
+    {
+     "no": 6245,
+     "time": "2026-10-22T09:44:49.045Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Spot Listing",
+     "zh": "紫菀现货列表：KERNELUSDT",
+     "en": "Aster Spot Listing: KERNELUSDT",
+     "coins": [
+      "ASTER",
+      "KERNEL",
+      "SPOT"
+     ],
+     "url": "https://eqn.news/monitor/6245",
+     "source_url": "https://www.asterdex.com/en/spot/KERNELUSDT"
+    },
+    {
+     "no": 5978,
+     "time": "2026-10-21T14:44:51.739Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Perp Listing",
+     "zh": "Aster Perp Listing: AXISUSDT",
+     "en": "Aster Perp Listing: AXISUSDT",
+     "coins": [
+      "AXIS",
+      "ASTER"
+     ],
+     "url": "https://eqn.news/monitor/5978",
+     "source_url": "https://www.asterdex.com/en/futures/v1/AXISUSDT"
+    },
+    {
+     "no": 5919,
+     "time": "2026-10-21T11:00:09.194Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Alpha",
+     "zh": "币安Alpha上线新代币：\n\nAxis Robotics (AXIS)\n\n合约地址：0x5be75e3b0aff5d1a042a5363ae36acb1d6d755ea（基础）",
+     "en": "Binance Alpha lists new tokens:\nAxis Robotics (AXIS)\nContract Address: 0x5be75e3b0aff5d1a042a5363ae36acb1d6d755ea (Base)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/5919",
+     "source_url": "https://www.binance.com/en/alpha/base/0x5be75e3b0aff5d1a042a5363ae36acb1d6d755ea"
+    },
+    {
+     "no": 5876,
+     "time": "2026-10-21T08:54:14.893Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Perp Listing",
+     "zh": "Aster Perp Listing: PREDICTUSDT",
+     "en": "Aster Perp Listing: PREDICTUSDT",
+     "coins": [
+      "ASTER"
+     ],
+     "url": "https://eqn.news/monitor/5876",
+     "source_url": "https://www.asterdex.com/en/futures/v1/PREDICTUSDT"
+    },
+    {
+     "no": 5855,
+     "time": "2026-10-21T06:31:59.756Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "币安Alpha是首个搭载Axis Robotics (AXIS)的平台，将于2026年10月21日11:00 (UTC)正式上线交易。\n\n拥有至少235个币安Alpha积分的用户可参与空投，先到先得，空投金额为250枚AXIS代币。如果……",
+     "en": "Binance Alpha is the first platform to feature Axis Robotics (AXIS), with Alpha debut and trading starting on October 21, 2026, at 11:00 (UTC). \n\nUsers with at least 235 Binance Alpha Points can claim an airdrop of 250 AXIS tokens on a first-come, first-served basis. If the…",
+     "coins": [],
+     "url": "https://eqn.news/monitor/5855",
+     "source_url": "https://x.com/BinanceWallet/status/2112793998570213703"
+    },
+    {
+     "no": 5719,
+     "time": "2026-10-20T12:30:44.116Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "币安Alpha将于10月21日率先推出Axis Robotics (AXIS) 的空投产品。\n\n符合条件的用户可在交易开放后，前往Alpha Events页面使用币安Alpha积分领取空投。更多详情即将公布。\n\n敬请关注币安官方…",
+     "en": "Binance Alpha will be the first platform to feature Axis Robotics (AXIS) on October 21.\n\nEligible users can claim their airdrop using Binance Alpha Points on the Alpha Events page once trading opens. Further details will be announced soon.\n\nPlease stay tuned to Binance’s official… https://t.co/l9rgMJ7InT",
+     "coins": [],
+     "url": "https://eqn.news/monitor/5719",
+     "source_url": "https://x.com/BinanceWallet/status/2112521890178949305"
+    },
+    {
+     "no": 5595,
+     "time": "2026-10-19T14:37:36.883Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Perp Listing",
+     "zh": "Aster Perp Listing: PAPERUSDT",
+     "en": "Aster Perp Listing: PAPERUSDT",
+     "coins": [
+      "ASTER"
+     ],
+     "url": "https://eqn.news/monitor/5595",
+     "source_url": "https://www.asterdex.com/en/futures/v1/PAPERUSDT"
+    },
+    {
+     "no": 5580,
+     "time": "2026-10-19T13:01:09.994Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "币安Alpha第二波Concrete (CT)空投奖励现已开启！\n\n拥有至少255点币安Alpha积分的用户即可按先到先得的方式领取87枚CT代币空投。如果奖励池未全部发放完毕，积分门槛将每5分钟自动降低5点。\n\n请注意，领取空投将消耗15点币安Alpha积分。用户必须在24小时内于Alpha活动页面确认领取，否则将被视为放弃领取。",
+     "en": "Binance Alpha's second wave of Concrete (CT)  airdrop rewards are here!\n\nUsers with at least 255 Binance Alpha Points can claim an airdrop of 87 CT tokens on a first-come, first-served basis. If the reward pool is not fully distributed, the score threshold will automatically decrease by 5 points every 5 minutes.\n\nPlease note that claiming the airdrop will consume 15 Binance Alpha Points. Users must confirm their claim on the Alpha Events page within 24 hours; otherwise, it will be deemed that users have given up claiming the airdrop.",
+     "coins": [
+      "CT"
+     ],
+     "url": "https://eqn.news/monitor/5580",
+     "source_url": "https://x.com/BinanceWallet/status/2112167161380880715"
+    },
+    {
+     "no": 5565,
+     "time": "2026-10-19T11:04:18.315Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "请准备好领取币安 Alpha 空投，并于今日 13:00 (UTC) 开始交易。\n\n拥有至少 255 点币安 Alpha 积分的用户即可按先到先得的方式领取代币，直至空投池全部发放完毕或空投活动结束。更多详情即将公布……",
+     "en": "Please get ready to claim the Binance Alpha airdrop and trade today at 13:00 (UTC).\n\nUsers with at least 255 Binance Alpha Points can claim the token on a first-come, first-served basis until the airdrop pool is fully distributed or the airdrop event expires. Further details will…",
+     "coins": [],
+     "url": "https://eqn.news/monitor/5565",
+     "source_url": "https://x.com/BinanceWallet/status/2112137752783569282"
+    },
+    {
+     "no": 5091,
+     "time": "2026-10-16T10:36:18.114Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Perp Listing",
+     "zh": "紫菀 Perp 列表：DNAUSDT",
+     "en": "Aster Perp Listing: DNAUSDT",
+     "coins": [
+      "ASTER",
+      "DNA"
+     ],
+     "url": "https://eqn.news/monitor/5091",
+     "source_url": "https://www.asterdex.com/en/futures/v1/DNAUSDT"
+    },
+    {
+     "no": 5066,
+     "time": "2026-10-16T08:00:08.816Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Alpha",
+     "zh": "币安 Alpha 上线新代币：\n\nNeoSoul (DNA)\n\n合约地址：0xa991f61940095aea0724ef54077223b048c5cf7b (BSC)",
+     "en": "Binance Alpha lists new tokens:\nNeoSoul (DNA)\nContract Address: 0xa991f61940095aea0724ef54077223b048c5cf7b (BSC)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/5066",
+     "source_url": "https://www.binance.com/en/alpha/bsc/0xa991f61940095aea0724ef54077223b048c5cf7b"
+    },
+    {
+     "no": 5047,
+     "time": "2026-10-16T06:03:46.612Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "币安 Alpha 是首个搭载 NeoSoul (DNA) 的平台，将于 2026 年 10 月 16 日 08:00 (UTC) 正式上线交易。\n\n拥有至少 245 点币安 Alpha 积分的用户可参与空投，先到先得，空投金额为 400 枚 DNA 代币。如果奖励池……",
+     "en": "Binance Alpha is the first platform to feature NeoSoul (DNA), with Alpha debut and trading starting on October 16, 2026, at 08:00 (UTC). \n\nUsers with at least 245 Binance Alpha Points can claim an airdrop of 400 DNA tokens on a first-come, first-served basis. If the reward pool…",
+     "coins": [],
+     "url": "https://eqn.news/monitor/5047",
+     "source_url": "https://x.com/BinanceWallet/status/2110974958621134896"
+    },
+    {
+     "no": 4835,
+     "time": "2026-10-15T11:30:38.313Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "币安Alpha将于10月16日率先推出NeoSoul（DNA）代币。\n\n符合条件的用户可在交易开放后，前往Alpha活动页面使用币安Alpha积分领取空投。更多详情即将公布。\n\n请关注币安官方渠道获取最新资讯。",
+     "en": "Binance Alpha will be the first platform to feature NeoSoul (DNA) on October 16.\n\nEligible users can claim their airdrop using Binance Alpha Points on the Alpha Events page once trading opens. Further details will be announced soon.\n\nPlease stay tuned to Binance’s official channels for the latest updates.",
+     "coins": [],
+     "url": "https://eqn.news/monitor/4835",
+     "source_url": "https://x.com/BinanceWallet/status/2110694828963176858"
+    },
+    {
+     "no": 4803,
+     "time": "2026-10-15T10:04:39.082Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Perp Listing",
+     "zh": "紫菀种植清单：WALUSDT",
+     "en": "Aster Perp Listing: WALUSDT",
+     "coins": [
+      "WAL",
+      "ASTER"
+     ],
+     "url": "https://eqn.news/monitor/4803",
+     "source_url": "https://www.asterdex.com/en/futures/v1/WALUSDT"
+    },
+    {
+     "no": 4774,
+     "time": "2026-10-15T07:06:35.598Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Spot Listing",
+     "zh": "紫菀现货清单：CRCLBUSDT",
+     "en": "Aster Spot Listing: CRCLBUSDT",
+     "coins": [
+      "CRCLB",
+      "SPOT",
+      "ASTER"
+     ],
+     "url": "https://eqn.news/monitor/4774",
+     "source_url": "https://www.asterdex.com/en/spot/CRCLBUSDT"
+    },
+    {
+     "no": 4773,
+     "time": "2026-10-15T07:05:50.613Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Spot Listing",
+     "zh": "紫菀地点列表：MSTRBUSDT",
+     "en": "Aster Spot Listing: MSTRBUSDT",
+     "coins": [
+      "MSTRB",
+      "SPOT",
+      "ASTER"
+     ],
+     "url": "https://eqn.news/monitor/4773",
+     "source_url": "https://www.asterdex.com/en/spot/MSTRBUSDT"
+    },
+    {
+     "no": 4758,
+     "time": "2026-10-15T05:52:56.415Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Spot Listing",
+     "zh": "Aster Spot Listing: NVDABUSDT",
+     "en": "Aster Spot Listing: NVDABUSDT",
+     "coins": [
+      "NVDAB",
+      "SPOT",
+      "ASTER"
+     ],
+     "url": "https://eqn.news/monitor/4758",
+     "source_url": "https://www.asterdex.com/en/spot/NVDABUSDT"
+    },
+    {
+     "no": 4519,
+     "time": "2026-10-14T10:00:16.288Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "Derive (DRV) 现已在币安 Alpha 上线！\n\n拥有至少 245 点币安 Alpha 积分的用户即可参与空投，先到先得，每 5 天领取 70 枚 DRV 代币。如果奖励池未全部发放完毕，积分门槛将自动降低 5 点……",
+     "en": "Derive (DRV) is now live on Binance Alpha!\n\nUsers with at least 245 Binance Alpha Points can claim an airdrop of 70 DRV tokens on a first-come, first-served basis. If the reward pool is not fully distributed, the score threshold will automatically decrease by 5 points every 5… https://t.co/LbFpqHkx7w https://t.co/2qZutTERcn",
+     "coins": [
+      "DRV"
+     ],
+     "url": "https://eqn.news/monitor/4519",
+     "source_url": "https://x.com/BinanceWallet/status/2110309697500959033"
+    },
+    {
+     "no": 4518,
+     "time": "2026-10-14T10:00:09.077Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Alpha",
+     "zh": "币安 Alpha 上线新代币：\n\nDerive (DRV)\n\n合约地址：0x9d0e8f5b25384c7310cb8c6ae32c8fbeb645d083（基础地址）",
+     "en": "Binance Alpha lists new tokens:\nDerive (DRV)\nContract Address: 0x9d0e8f5b25384c7310cb8c6ae32c8fbeb645d083 (Base)",
+     "coins": [
+      "DRV"
+     ],
+     "url": "https://eqn.news/monitor/4518",
+     "source_url": "https://www.binance.com/en/alpha/base/0x9d0e8f5b25384c7310cb8c6ae32c8fbeb645d083"
+    },
+    {
+     "no": 4500,
+     "time": "2026-10-14T08:00:57.050Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "请准备好领取币安 Alpha 空投，并于今日 10:00 (UTC) 开始交易。\n\n拥有至少 245 点币安 Alpha 积分的用户即可按先到先得的方式领取代币，直至空投池全部发放完毕或空投活动结束。更多详情即将公布……",
+     "en": "Please get ready to claim the Binance Alpha airdrop and trade today at 10:00 (UTC).\n\nUsers with at least 245 Binance Alpha Points can claim the token on a first-come, first-served basis until the airdrop pool is fully distributed or the airdrop event expires. Further details will…",
+     "coins": [
+      "00"
+     ],
+     "url": "https://eqn.news/monitor/4500",
+     "source_url": "https://x.com/BinanceWallet/status/2110279669962756189"
+    },
+    {
+     "no": 4308,
+     "time": "2026-10-13T08:23:05.844Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Spot Listing",
+     "zh": "紫菀现货列表：旺柴USDT",
+     "en": "Aster Spot Listing: WANGCHAIUSDT",
+     "coins": [
+      "ASTER",
+      "SPOT"
+     ],
+     "url": "https://eqn.news/monitor/4308",
+     "source_url": "https://www.asterdex.com/en/spot/WANGCHAIUSDT"
+    },
+    {
+     "no": 4087,
+     "time": "2026-10-12T11:28:24.318Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Perp Listing",
+     "zh": "Aster Perp Listing: SQQQUSDT",
+     "en": "Aster Perp Listing: SQQQUSDT",
+     "coins": [
+      "SQQQ",
+      "ASTER"
+     ],
+     "url": "https://eqn.news/monitor/4087",
+     "source_url": "https://www.asterdex.com/en/futures/v1/SQQQUSDT"
+    },
+    {
+     "no": 4025,
+     "time": "2026-10-12T08:24:08.867Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Perp Listing",
+     "zh": "紫菀种植清单：RSRUSDT",
+     "en": "Aster Perp Listing: RSRUSDT",
+     "coins": [
+      "RSR",
+      "ASTER"
+     ],
+     "url": "https://eqn.news/monitor/4025",
+     "source_url": "https://www.asterdex.com/en/futures/v1/RSRUSDT"
+    },
+    {
+     "no": 4024,
+     "time": "2026-10-12T08:23:29.878Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Perp Listing",
+     "zh": "紫菀种植清单：WUSDT",
+     "en": "Aster Perp Listing: WUSDT",
+     "coins": [
+      "ASTER"
+     ],
+     "url": "https://eqn.news/monitor/4024",
+     "source_url": "https://www.asterdex.com/en/futures/v1/WUSDT"
+    },
+    {
+     "no": 3881,
+     "time": "2026-10-11T08:18:53.724Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Perp Listing",
+     "zh": "Aster Perp Listing: BATUSDT",
+     "en": "Aster Perp Listing: BATUSDT",
+     "coins": [
+      "ASTER",
+      "BAT"
+     ],
+     "url": "https://eqn.news/monitor/3881",
+     "source_url": "https://www.asterdex.com/en/futures/v1/BATUSDT"
+    },
+    {
+     "no": 3610,
+     "time": "2026-10-09T11:30:39.255Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Perp Listing",
+     "zh": "紫菀种植清单：PEARLUSDT",
+     "en": "Aster Perp Listing: PEARLUSDT",
+     "coins": [
+      "ASTER"
+     ],
+     "url": "https://eqn.news/monitor/3610",
+     "source_url": "https://www.asterdex.com/en/futures/v1/PEARLUSDT"
+    },
+    {
+     "no": 3580,
+     "time": "2026-10-09T09:00:20.378Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "币安 Alpha Box 空投活动现已开启！\n\n本次活动采用更新后的 Alpha Box 模型，空投池包含来自两个项目的代币：Yei Finance (CLO) 和 Bitlayer (BTR)。持有至少 245 点币安 Alpha 积分的用户即可在 Alpha 活动中领取一次代币空投……",
+     "en": "The Binance Alpha Box is now live!\n\nThis event uses the updated Alpha Box model, with the airdrop pool consisting of tokens from two projects: Yei Finance (CLO) and Bitlayer (BTR). Users holding at least 245 Binance Alpha points can claim one token airdrop on the Alpha Events… https://t.co/qDxIzg9SQF https://t.co/SRGys1hKab",
+     "coins": [
+      "CLO",
+      "BTR"
+     ],
+     "url": "https://eqn.news/monitor/3580",
+     "source_url": "https://x.com/BinanceWallet/status/2108482676223357277"
+    },
+    {
+     "no": 3543,
+     "time": "2026-10-09T07:01:34.834Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "请准备好领取币安 Alpha 空投，并于今日 9:00 (UTC) 开始交易。\n\n本次活动采用升级版币安 Alpha Box 模型，空投池包含来自多个项目的代币。拥有至少 245 点币安 Alpha 积分的用户即可领取一个代币奖励……",
+     "en": "Please get ready to claim the Binance Alpha airdrop and trade today at 9:00 (UTC).\n\nThis event features an updated Binance Alpha Box model, where the airdrop pool includes tokens from multiple projects. Users with at least 245 Binance Alpha Points can claim one token reward on a…",
+     "coins": [],
+     "url": "https://eqn.news/monitor/3543",
+     "source_url": "https://x.com/BinanceWallet/status/2108452790104457248"
+    },
+    {
+     "no": 3124,
+     "time": "2026-10-07T09:00:30.039Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "Talus Network (US) 现已在币安 Alpha 上线！\n\n拥有至少 246 点币安 Alpha 积分的用户即可参与空投，先到先得，共计 2,280 个 US 代币。如果奖励池未全部发放完毕，积分门槛将每 5 分钟自动降低 5 点。\n\n请注意，领取空投将消耗 15 点币安 Alpha 积分。用户必须在 24 小时内于 Alpha 活动页面确认领取，否则将被视为放弃领取。",
+     "en": "Talus Network (US) is now live on Binance Alpha!\n\nUsers with at least 246 Binance Alpha Points can claim an airdrop of 2,280 US tokens on a first-come, first-served basis. If the reward pool is not fully distributed, the score threshold will automatically decrease by 5 points every 5 minutes.\n\nPlease note that claiming the airdrop will consume 15 Binance Alpha Points. Users must confirm their claim on the Alpha Events page within 24 hours; otherwise, it will be deemed that users have given up claiming the airdrop.",
+     "coins": [],
+     "url": "https://eqn.news/monitor/3124",
+     "source_url": "https://x.com/BinanceWallet/status/2107757939586904432"
+    },
+    {
+     "no": 3121,
+     "time": "2026-10-07T08:00:21.199Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Binance Wallet Pre-TGE",
+     "zh": "请准备好领取币安 Alpha 空投，并于今日 9:00 (UTC) 开始交易。\n\n拥有至少 246 点币安 Alpha 积分的用户即可按先到先得的方式领取代币，直至空投池全部发放完毕或空投活动结束。更多详情即将公布……",
+     "en": "Please get ready to claim the Binance Alpha airdrop and trade today at 9:00 (UTC).\n\nUsers with at least 246 Binance Alpha Points can claim the token on a first-come, first-served basis until the airdrop pool is fully distributed or the airdrop event expires. Further details will…",
+     "coins": [],
+     "url": "https://eqn.news/monitor/3121",
+     "source_url": "https://x.com/BinanceWallet/status/2107742804890001715"
+    },
+    {
+     "no": 2970,
+     "time": "2026-10-06T13:19:51.691Z",
+     "channels": [
+      "alpha"
+     ],
+     "source": "Aster Perp Listing",
+     "zh": "Aster Perp Listing: SDEVUSD1",
+     "en": "Aster Perp Listing: SDEVUSD1",
+     "coins": [
+      "ASTER"
+     ],
+     "url": "https://eqn.news/monitor/2970",
+     "source_url": "https://www.asterdex.com/en/futures/v1/SDEVUSD1"
+    }
+   ],
+   "next_cursor": "1791292791691-2970"
+  }
+ }
+}

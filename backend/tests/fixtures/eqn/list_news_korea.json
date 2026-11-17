@@ -1,0 +1,753 @@
+{
+ "jsonrpc": "2.0",
+ "id": 2,
+ "result": {
+  "content": [
+   {
+    "text": "{\n  \"items\": [\n    {\n      \"no\": 15380,\n      \"time\": \"2026-11-17T02:22:06.124Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"个人信息处理方针修订通知\",\n      \"en\": \"Notice of Amendment to Privacy Policy\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15380\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655680\"\n    },\n    {\n      \"no\": 15272,\n      \"time\": \"2026-11-16T12:30:07.676Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"LIT 交易注意事项提示\",\n      \"en\": \"Notice of Caution Regarding LIT\",\n      \"coins\": [\n        \"LIT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15272\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655679\"\n    },\n    {\n      \"no\": 15266,\n      \"time\": \"2026-11-16T11:30:07.789Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"LIT 风险提示公告\",\n      \"en\": \"Notice of caution regarding LIT\",\n      \"coins\": [\n        \"LIT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15266\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6783\"\n    },\n    {\n      \"no\": 15262,\n      \"time\": \"2026-11-16T11:10:50.243Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"LIT充提暂停公告\",\n      \"en\": \"Notice of temporary suspension of deposits and withdrawals for LIT\",\n      \"coins\": [\n        \"LIT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15262\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655678\"\n    },\n    {\n      \"no\": 15261,\n      \"time\": \"2026-11-16T11:09:47.704Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"关于暂时中止LIT存款和取款的通知\",\n      \"en\": \"Notice of temporary suspension of deposits and withdrawals for LIT\",\n      \"coins\": [\n        \"LIT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15261\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6782\"\n    },\n    {\n      \"no\": 15221,\n      \"time\": \"2026-11-16T07:26:45.742Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"11月第2周GAS空投发放通知\",\n      \"en\": \"Notice on GAS airdrop distribution for the 2nd week of November\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15221\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655677\"\n    },\n    {\n      \"no\": 15197,\n      \"time\": \"2026-11-16T05:52:07.609Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"Polygon网络系列数字资产充提暂停公告（11/19 20:00起）\",\n      \"en\": \"Notice of temporary suspension of deposits and withdrawals for digital assets on the Polygon network (11/19 20:00 ~)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15197\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6781\"\n    },\n    {\n      \"no\": 15190,\n      \"time\": \"2026-11-16T05:00:51.248Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"KAVA 被列为交易注意项目\",\n      \"en\": \"KAVA designated as a trading caution item\",\n      \"coins\": [\n        \"KAVA\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15190\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655676\"\n    },\n    {\n      \"no\": 15188,\n      \"time\": \"2026-11-16T05:00:08.808Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"KAVA 交易注意事项指定公告\",\n      \"en\": \"Notice on Designation of KAVA as a Trading Caution Item\",\n      \"coins\": [\n        \"KAVA\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15188\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6780\"\n    },\n    {\n      \"no\": 15173,\n      \"time\": \"2026-11-16T04:16:04.304Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"11月第2周 GAS 空投发放通知\",\n      \"en\": \"Notice on GAS Airdrop Distribution for the 2nd Week of November\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15173\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6779\"\n    },\n    {\n      \"no\": 15159,\n      \"time\": \"2026-11-16T03:30:05.860Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"DYDX 充提暂停公告（11月16日下午6时起）\",\n      \"en\": \"Notice of temporary suspension of deposits and withdrawals for DYDX (11/16 6 PM–)\",\n      \"coins\": [\n        \"ETHDYDX\",\n        \"DYDX\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15159\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655675\"\n    },\n    {\n      \"no\": 14815,\n      \"time\": \"2026-11-14T11:38:16.387Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"KAVA 投资警示通知\",\n      \"en\": \"KAVA Investment Warning Notice\",\n      \"coins\": [\n        \"KAVA\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14815\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655674\"\n    },\n    {\n      \"no\": 14806,\n      \"time\": \"2026-11-14T11:00:08.737Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"KAVA 风险提示公告\",\n      \"en\": \"Notice of Caution Regarding KAVA\",\n      \"coins\": [\n        \"KAVA\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14806\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6777\"\n    },\n    {\n      \"no\": 14805,\n      \"time\": \"2026-11-14T10:37:04.942Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"KAVA充提临时暂停公告\",\n      \"en\": \"Notice of temporary suspension of KAVA deposits and withdrawals\",\n      \"coins\": [\n        \"KAVA\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14805\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6776\"\n    },\n    {\n      \"no\": 14801,\n      \"time\": \"2026-11-14T10:36:01.550Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"KAVA 充提暂停公告\",\n      \"en\": \"Notice of temporary suspension of KAVA deposits and withdrawals\",\n      \"coins\": [\n        \"KAVA\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14801\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655673\"\n    },\n    {\n      \"no\": 14375,\n      \"time\": \"2026-11-13T09:00:08.956Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"MAPO被指定为交易谨慎股票\",\n      \"en\": \"MAPO Protocol Designated as a Trading Caution Item\",\n      \"coins\": [\n        \"MAPO\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14375\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655648\"\n    },\n    {\n      \"no\": 14357,\n      \"time\": \"2026-11-13T07:49:16.113Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"实体驾驶证真伪验证暂停通知（11/13 19:00 ~）\",\n      \"en\": \"Notice of temporary suspension of real driver's license authenticity verification (11/13 19:00 ~)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14357\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6775\"\n    },\n    {\n      \"no\": 14351,\n      \"time\": \"2026-11-13T07:30:01.882Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"【活动】为庆祝DNA韩元市场上线，空投活动总价值达1.3亿韩元（*免交易手续费）\",\n      \"en\": \"[Event] Airdrop Event Worth a Total of 130 Million KRW to Celebrate the Addition of NeoSoul (DNA) KRW Market (*Free Trading Fees)\",\n      \"coins\": [\n        \"DNA\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14351\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655646\"\n    },\n    {\n      \"no\": 14341,\n      \"time\": \"2026-11-13T07:03:18.834Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"因 CBK 代币互换及迁移，暂停充提公告（11/17 11:00 ~）\",\n      \"en\": \"Notice of temporary suspension of deposits and withdrawals due to Cobak Token (CBK) token swap and migration (11/17 11:00 ~)\",\n      \"coins\": [\n        \"CBK\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14341\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6774\"\n    },\n    {\n      \"no\": 14337,\n      \"time\": \"2026-11-13T07:00:14.710Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"MANTRA(MANTRA)、RECALL(RECALL) 终止交易支持\",\n      \"en\": \"MANTRA (MANTRA) and RECALL (RECALL) trading support to end\",\n      \"coins\": [\n        \"MANTRA\",\n        \"RECALL\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14337\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655647\"\n    },\n    {\n      \"no\": 14336,\n      \"time\": \"2026-11-13T07:00:08.585Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"MANTRA交易支持终止通知（12/14 15:00）\",\n      \"en\": \"Notice of termination of trading support for MANTRA (MANTRA) (12/14 15:00)\",\n      \"coins\": [\n        \"MANTRA\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14336\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6773\"\n    },\n    {\n      \"no\": 14281,\n      \"time\": \"2026-11-13T05:00:07.804Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"POL质押用户KAT空投发放公告\",\n      \"en\": \"Notice on KAT airdrop distribution to POL staking members\",\n      \"coins\": [\n        \"KAT\",\n        \"POL\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14281\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6772\"\n    },\n    {\n      \"no\": 14273,\n      \"time\": \"2026-11-13T04:46:43.692Z\",\n      \"channels\": [\n        \"main\",\n        \"korea\"\n      ],\n      \"source\": \"Bithumb Listing\",\n      \"zh\": \"[新增市场] 新增 Neo Soul(DNA) 韩元市场\",\n      \"en\": null,\n      \"coins\": [\n        \"DNA\"\n      ],\n      \"url\": \"https://eqn.news/main/14273\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655643\"\n    },\n    {\n      \"no\": 14236,\n      \"time\": \"2026-11-13T02:25:02.492Z\",\n      \"channels\": [\n        \"main\",\n        \"korea\"\n      ],\n      \"source\": \"UPBIT LISTING\",\n      \"zh\": \"SANC 新增交易支持公告（KRW、BTC、USDT 市场）\",\n      \"en\": null,\n      \"coins\": [],\n      \"url\": \"https://eqn.news/main/14236\",\n      \"source_url\": null\n    },\n    {\n      \"no\": 14228,\n      \"time\": \"2026-11-13T01:21:55.853Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"OSMO充提暂停公告\",\n      \"en\": \"Notice of temporary suspension of deposits and withdrawals for OSMO\",\n      \"coins\": [\n        \"OSMO\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14228\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6770\"\n    },\n    {\n      \"no\": 14227,\n      \"time\": \"2026-11-13T01:00:06.269Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"Upbit Lounge 运营暂停通知（11/19）\",\n      \"en\": \"Notice of Temporary Suspension of Upbit Lounge Operations (11/19)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14227\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6754\"\n    },\n    {\n      \"no\": 14221,\n      \"time\": \"2026-11-12T23:43:10.444Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"Osmosis(OSMO)充提暂停公告\",\n      \"en\": \"Notice of temporary suspension of deposits and withdrawals for Osmosis (OSMO)\",\n      \"coins\": [\n        \"OSMO\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14221\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655642\"\n    },\n    {\n      \"no\": 14028,\n      \"time\": \"2026-11-12T09:00:14.058Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"特别充值王：仅向Bithumb充值虚拟资产，即可获得最高价值2亿韩元的奖励。\",\n      \"en\": \"Special Deposit King: Deposit virtual assets to Bithumb and receive rewards worth up to 200 million won.\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14028\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655641\"\n    },\n    {\n      \"no\": 14027,\n      \"time\": \"2026-11-12T09:00:10.890Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"Cosmos(ATOM)充提暂停公告（11月18日下午6时起）\",\n      \"en\": \"Notice of temporary suspension of deposits and withdrawals for Cosmos (ATOM) (Nov 18, 6 PM–)\",\n      \"coins\": [\n        \"ATOM\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14027\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655640\"\n    },\n    {\n      \"no\": 13928,\n      \"time\": \"2026-11-12T03:00:07.901Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"POKT充提暂停公告（11月12日下午7时起）\",\n      \"en\": \"Notice of temporary suspension of deposits and withdrawals for POKT (11/12 7 PM~)\",\n      \"coins\": [\n        \"POKT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13928\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655638\"\n    },\n    {\n      \"no\": 13926,\n      \"time\": \"2026-11-12T02:46:36.349Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"POKT充提暂停公告（11/12 20:00起）\",\n      \"en\": \"Notice of temporary suspension of deposits and withdrawals for POKT (11/12 20:00 ~)\",\n      \"coins\": [\n        \"POKT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13926\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6768\"\n    },\n    {\n      \"no\": 13704,\n      \"time\": \"2026-11-11T06:53:37.542Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"11月第1周GAS空投发放通知\",\n      \"en\": \"Notice on GAS airdrop distribution for the first week of November\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13704\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655621\"\n    },\n    {\n      \"no\": 13703,\n      \"time\": \"2026-11-11T06:45:29.195Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"Cosmos(ATOM)充提暂停通知（11/18 20:00起）\",\n      \"en\": \"Notice of temporary suspension of deposits and withdrawals for Cosmos (ATOM) (11/18 20:00 ~)\",\n      \"coins\": [\n        \"ATOM\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13703\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6765\"\n    },\n    {\n      \"no\": 13692,\n      \"time\": \"2026-11-11T06:10:27.376Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"IOST空投20期付款通知\",\n      \"en\": \"IOST Airdrop 20th Payment Notice\",\n      \"coins\": [\n        \"IOST\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13692\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655620\"\n    },\n    {\n      \"no\": 13665,\n      \"time\": \"2026-11-11T03:30:07.969Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"FLR充提暂停公告（11月11日下午7时起）\",\n      \"en\": \"Notice of temporary suspension of FLR deposits and withdrawals (11/11, 7 PM–)\",\n      \"coins\": [\n        \"FLR\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13665\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655614\"\n    },\n    {\n      \"no\": 13657,\n      \"time\": \"2026-11-11T02:30:02.870Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"INJ 充提暂停通知（11月11日下午6时起）\",\n      \"en\": \"Notice of temporary suspension of INJ deposits and withdrawals (Nov 11, 6 PM~)\",\n      \"coins\": [\n        \"INJ\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13657\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655613\"\n    },\n    {\n      \"no\": 13655,\n      \"time\": \"2026-11-11T02:29:02.714Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"FLR 提币暂停公告（11/11 23:00 起）\",\n      \"en\": \"Notice of temporary suspension of FLR withdrawals (11/11 23:00 ~)\",\n      \"coins\": [\n        \"FLR\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13655\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6764\"\n    },\n    {\n      \"no\": 13654,\n      \"time\": \"2026-11-11T02:00:02.601Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"Songbird(SGB)提现暂停通知（11/11 下午2时起）\",\n      \"en\": \"Notice of temporary suspension of SGB withdrawals (Nov 11, 2 PM~)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13654\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655612\"\n    },\n    {\n      \"no\": 13591,\n      \"time\": \"2026-11-10T17:28:58.849Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"Tether(USDT) Tron网络提币暂停公告\",\n      \"en\": \"Notice of temporary suspension of USDT withdrawals on the Tron network\",\n      \"coins\": [\n        \"TRX\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13591\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655611\"\n    },\n    {\n      \"no\": 13469,\n      \"time\": \"2026-11-10T12:09:18.508Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"INJ 充提暂停通知（11/11 18:00 起）\",\n      \"en\": \"Notice of temporary suspension of deposits and withdrawals for INJ (11/11 18:00 ~)\",\n      \"coins\": [\n        \"INJ\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13469\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6763\"\n    },\n    {\n      \"no\": 13455,\n      \"time\": \"2026-11-10T11:07:03.148Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"WAVES 被列为交易注意项目\",\n      \"en\": \"WAVES designated as a trading caution item\",\n      \"coins\": [\n        \"WAVES\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13455\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655610\"\n    },\n    {\n      \"no\": 13452,\n      \"time\": \"2026-11-10T11:00:17.450Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"WAVES 交易警示品种指定公告\",\n      \"en\": \"Notice on Designation of WAVES as a Trading Caution Item\",\n      \"coins\": [\n        \"WAVES\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13452\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6762\"\n    },\n    {\n      \"no\": 13429,\n      \"time\": \"2026-11-10T10:00:08.568Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"MANTRA(MANTRA) 提币暂停通知（11/10 晚上10点起）\",\n      \"en\": \"Notice of temporary suspension of MANTRA withdrawals (11/10 10 PM–)\",\n      \"coins\": [\n        \"MANTRA\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13429\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655608\"\n    },\n    {\n      \"no\": 13409,\n      \"time\": \"2026-11-10T08:58:22.705Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"访问主页时提示信息错误及恢复正常通知\",\n      \"en\": \"Notice on Error in Guidance Text When Accessing Homepage and Restoration Notice\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13409\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655609\"\n    },\n    {\n      \"no\": 13389,\n      \"time\": \"2026-11-10T07:39:11.116Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"MANTRA(MANTRA) 提币暂停公告（11/10 20:00 ~）\",\n      \"en\": \"Notice of temporary suspension of MANTRA withdrawals (11/10 20:00 ~)\",\n      \"coins\": [\n        \"MANTRA\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13389\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6761\"\n    },\n    {\n      \"no\": 13388,\n      \"time\": \"2026-11-10T07:18:07.305Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"INIT 提币暂停公告\",\n      \"en\": \"Notice of temporary suspension of INIT withdrawals\",\n      \"coins\": [\n        \"INIT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13388\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655589\"\n    },\n    {\n      \"no\": 13384,\n      \"time\": \"2026-11-10T06:57:26.979Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"Initia(INIT)提现暂停公告\",\n      \"en\": \"Notice of temporary suspension of INIT withdrawals\",\n      \"coins\": [\n        \"INIT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13384\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6760\"\n    },\n    {\n      \"no\": 13382,\n      \"time\": \"2026-11-10T06:55:01.976Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Bithumb\",\n      \"zh\": \"【活动】为庆祝HYPE韩元市场上线，空投活动总价值1亿韩元（*免交易手续费）\",\n      \"en\": \"[Event] Airdrop Event Worth a Total of 100 Million Won to Celebrate the Addition of HyperLiquid (HYPE) KRW Market (*Free Trading Fees)\",\n      \"coins\": [\n        \"HYPE\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13382\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655588\"\n    },\n    {\n      \"no\": 13363,\n      \"time\": \"2026-11-10T05:23:50.188Z\",\n      \"channels\": [\n        \"korea\"\n      ],\n      \"source\": \"Upbit\",\n      \"zh\": \"ELF充提暂停公告（11/17 22:00起）\",\n      \"en\": \"Notice of temporary suspension of ELF deposits and withdrawals (11/17 22:00 ~)\",\n      \"coins\": [\n        \"ELF\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13363\",\n      \"source_url\": \"https://upbit.com/service_center/notice?id=6759\"\n    },\n    {\n      \"no\": 13359,\n      \"time\": \"2026-11-10T05:13:55.552Z\",\n      \"channels\": [\n        \"main\",\n        \"korea\"\n      ],\n      \"source\": \"Bithumb Listing\",\n      \"zh\": \"[新增市场] 新增 HYPE、CARDS 韩元市场\",\n      \"en\": null,\n      \"coins\": [\n        \"CARDS\",\n        \"HYPE\"\n      ],\n      \"url\": \"https://eqn.news/main/13359\",\n      \"source_url\": \"https://feed.bithumb.com/notice/1655585\"\n    }\n  ],\n  \"next_cursor\": \"1794287635552-13359\"\n}",
+    "type": "text"
+   }
+  ],
+  "isError": false,
+  "structuredContent": {
+   "items": [
+    {
+     "no": 15380,
+     "time": "2026-11-17T02:22:06.124Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "个人信息处理方针修订通知",
+     "en": "Notice of Amendment to Privacy Policy",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15380",
+     "source_url": "https://feed.bithumb.com/notice/1655680"
+    },
+    {
+     "no": 15272,
+     "time": "2026-11-16T12:30:07.676Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "LIT 交易注意事项提示",
+     "en": "Notice of Caution Regarding LIT",
+     "coins": [
+      "LIT"
+     ],
+     "url": "https://eqn.news/monitor/15272",
+     "source_url": "https://feed.bithumb.com/notice/1655679"
+    },
+    {
+     "no": 15266,
+     "time": "2026-11-16T11:30:07.789Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "LIT 风险提示公告",
+     "en": "Notice of caution regarding LIT",
+     "coins": [
+      "LIT"
+     ],
+     "url": "https://eqn.news/monitor/15266",
+     "source_url": "https://upbit.com/service_center/notice?id=6783"
+    },
+    {
+     "no": 15262,
+     "time": "2026-11-16T11:10:50.243Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "LIT充提暂停公告",
+     "en": "Notice of temporary suspension of deposits and withdrawals for LIT",
+     "coins": [
+      "LIT"
+     ],
+     "url": "https://eqn.news/monitor/15262",
+     "source_url": "https://feed.bithumb.com/notice/1655678"
+    },
+    {
+     "no": 15261,
+     "time": "2026-11-16T11:09:47.704Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "关于暂时中止LIT存款和取款的通知",
+     "en": "Notice of temporary suspension of deposits and withdrawals for LIT",
+     "coins": [
+      "LIT"
+     ],
+     "url": "https://eqn.news/monitor/15261",
+     "source_url": "https://upbit.com/service_center/notice?id=6782"
+    },
+    {
+     "no": 15221,
+     "time": "2026-11-16T07:26:45.742Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "11月第2周GAS空投发放通知",
+     "en": "Notice on GAS airdrop distribution for the 2nd week of November",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15221",
+     "source_url": "https://feed.bithumb.com/notice/1655677"
+    },
+    {
+     "no": 15197,
+     "time": "2026-11-16T05:52:07.609Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "Polygon网络系列数字资产充提暂停公告（11/19 20:00起）",
+     "en": "Notice of temporary suspension of deposits and withdrawals for digital assets on the Polygon network (11/19 20:00 ~)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15197",
+     "source_url": "https://upbit.com/service_center/notice?id=6781"
+    },
+    {
+     "no": 15190,
+     "time": "2026-11-16T05:00:51.248Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "KAVA 被列为交易注意项目",
+     "en": "KAVA designated as a trading caution item",
+     "coins": [
+      "KAVA"
+     ],
+     "url": "https://eqn.news/monitor/15190",
+     "source_url": "https://feed.bithumb.com/notice/1655676"
+    },
+    {
+     "no": 15188,
+     "time": "2026-11-16T05:00:08.808Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "KAVA 交易注意事项指定公告",
+     "en": "Notice on Designation of KAVA as a Trading Caution Item",
+     "coins": [
+      "KAVA"
+     ],
+     "url": "https://eqn.news/monitor/15188",
+     "source_url": "https://upbit.com/service_center/notice?id=6780"
+    },
+    {
+     "no": 15173,
+     "time": "2026-11-16T04:16:04.304Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "11月第2周 GAS 空投发放通知",
+     "en": "Notice on GAS Airdrop Distribution for the 2nd Week of November",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15173",
+     "source_url": "https://upbit.com/service_center/notice?id=6779"
+    },
+    {
+     "no": 15159,
+     "time": "2026-11-16T03:30:05.860Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "DYDX 充提暂停公告（11月16日下午6时起）",
+     "en": "Notice of temporary suspension of deposits and withdrawals for DYDX (11/16 6 PM–)",
+     "coins": [
+      "ETHDYDX",
+      "DYDX"
+     ],
+     "url": "https://eqn.news/monitor/15159",
+     "source_url": "https://feed.bithumb.com/notice/1655675"
+    },
+    {
+     "no": 14815,
+     "time": "2026-11-14T11:38:16.387Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "KAVA 投资警示通知",
+     "en": "KAVA Investment Warning Notice",
+     "coins": [
+      "KAVA"
+     ],
+     "url": "https://eqn.news/monitor/14815",
+     "source_url": "https://feed.bithumb.com/notice/1655674"
+    },
+    {
+     "no": 14806,
+     "time": "2026-11-14T11:00:08.737Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "KAVA 风险提示公告",
+     "en": "Notice of Caution Regarding KAVA",
+     "coins": [
+      "KAVA"
+     ],
+     "url": "https://eqn.news/monitor/14806",
+     "source_url": "https://upbit.com/service_center/notice?id=6777"
+    },
+    {
+     "no": 14805,
+     "time": "2026-11-14T10:37:04.942Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "KAVA充提临时暂停公告",
+     "en": "Notice of temporary suspension of KAVA deposits and withdrawals",
+     "coins": [
+      "KAVA"
+     ],
+     "url": "https://eqn.news/monitor/14805",
+     "source_url": "https://upbit.com/service_center/notice?id=6776"
+    },
+    {
+     "no": 14801,
+     "time": "2026-11-14T10:36:01.550Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "KAVA 充提暂停公告",
+     "en": "Notice of temporary suspension of KAVA deposits and withdrawals",
+     "coins": [
+      "KAVA"
+     ],
+     "url": "https://eqn.news/monitor/14801",
+     "source_url": "https://feed.bithumb.com/notice/1655673"
+    },
+    {
+     "no": 14375,
+     "time": "2026-11-13T09:00:08.956Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "MAPO被指定为交易谨慎股票",
+     "en": "MAPO Protocol Designated as a Trading Caution Item",
+     "coins": [
+      "MAPO"
+     ],
+     "url": "https://eqn.news/monitor/14375",
+     "source_url": "https://feed.bithumb.com/notice/1655648"
+    },
+    {
+     "no": 14357,
+     "time": "2026-11-13T07:49:16.113Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "实体驾驶证真伪验证暂停通知（11/13 19:00 ~）",
+     "en": "Notice of temporary suspension of real driver's license authenticity verification (11/13 19:00 ~)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14357",
+     "source_url": "https://upbit.com/service_center/notice?id=6775"
+    },
+    {
+     "no": 14351,
+     "time": "2026-11-13T07:30:01.882Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "【活动】为庆祝DNA韩元市场上线，空投活动总价值达1.3亿韩元（*免交易手续费）",
+     "en": "[Event] Airdrop Event Worth a Total of 130 Million KRW to Celebrate the Addition of NeoSoul (DNA) KRW Market (*Free Trading Fees)",
+     "coins": [
+      "DNA"
+     ],
+     "url": "https://eqn.news/monitor/14351",
+     "source_url": "https://feed.bithumb.com/notice/1655646"
+    },
+    {
+     "no": 14341,
+     "time": "2026-11-13T07:03:18.834Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "因 CBK 代币互换及迁移，暂停充提公告（11/17 11:00 ~）",
+     "en": "Notice of temporary suspension of deposits and withdrawals due to Cobak Token (CBK) token swap and migration (11/17 11:00 ~)",
+     "coins": [
+      "CBK"
+     ],
+     "url": "https://eqn.news/monitor/14341",
+     "source_url": "https://upbit.com/service_center/notice?id=6774"
+    },
+    {
+     "no": 14337,
+     "time": "2026-11-13T07:00:14.710Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "MANTRA(MANTRA)、RECALL(RECALL) 终止交易支持",
+     "en": "MANTRA (MANTRA) and RECALL (RECALL) trading support to end",
+     "coins": [
+      "MANTRA",
+      "RECALL"
+     ],
+     "url": "https://eqn.news/monitor/14337",
+     "source_url": "https://feed.bithumb.com/notice/1655647"
+    },
+    {
+     "no": 14336,
+     "time": "2026-11-13T07:00:08.585Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "MANTRA交易支持终止通知（12/14 15:00）",
+     "en": "Notice of termination of trading support for MANTRA (MANTRA) (12/14 15:00)",
+     "coins": [
+      "MANTRA"
+     ],
+     "url": "https://eqn.news/monitor/14336",
+     "source_url": "https://upbit.com/service_center/notice?id=6773"
+    },
+    {
+     "no": 14281,
+     "time": "2026-11-13T05:00:07.804Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "POL质押用户KAT空投发放公告",
+     "en": "Notice on KAT airdrop distribution to POL staking members",
+     "coins": [
+      "KAT",
+      "POL"
+     ],
+     "url": "https://eqn.news/monitor/14281",
+     "source_url": "https://upbit.com/service_center/notice?id=6772"
+    },
+    {
+     "no": 14273,
+     "time": "2026-11-13T04:46:43.692Z",
+     "channels": [
+      "main",
+      "korea"
+     ],
+     "source": "Bithumb Listing",
+     "zh": "[新增市场] 新增 Neo Soul(DNA) 韩元市场",
+     "en": null,
+     "coins": [
+      "DNA"
+     ],
+     "url": "https://eqn.news/main/14273",
+     "source_url": "https://feed.bithumb.com/notice/1655643"
+    },
+    {
+     "no": 14236,
+     "time": "2026-11-13T02:25:02.492Z",
+     "channels": [
+      "main",
+      "korea"
+     ],
+     "source": "UPBIT LISTING",
+     "zh": "SANC 新增交易支持公告（KRW、BTC、USDT 市场）",
+     "en": null,
+     "coins": [],
+     "url": "https://eqn.news/main/14236",
+     "source_url": null
+    },
+    {
+     "no": 14228,
+     "time": "2026-11-13T01:21:55.853Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "OSMO充提暂停公告",
+     "en": "Notice of temporary suspension of deposits and withdrawals for OSMO",
+     "coins": [
+      "OSMO"
+     ],
+     "url": "https://eqn.news/monitor/14228",
+     "source_url": "https://upbit.com/service_center/notice?id=6770"
+    },
+    {
+     "no": 14227,
+     "time": "2026-11-13T01:00:06.269Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "Upbit Lounge 运营暂停通知（11/19）",
+     "en": "Notice of Temporary Suspension of Upbit Lounge Operations (11/19)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14227",
+     "source_url": "https://upbit.com/service_center/notice?id=6754"
+    },
+    {
+     "no": 14221,
+     "time": "2026-11-12T23:43:10.444Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "Osmosis(OSMO)充提暂停公告",
+     "en": "Notice of temporary suspension of deposits and withdrawals for Osmosis (OSMO)",
+     "coins": [
+      "OSMO"
+     ],
+     "url": "https://eqn.news/monitor/14221",
+     "source_url": "https://feed.bithumb.com/notice/1655642"
+    },
+    {
+     "no": 14028,
+     "time": "2026-11-12T09:00:14.058Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "特别充值王：仅向Bithumb充值虚拟资产，即可获得最高价值2亿韩元的奖励。",
+     "en": "Special Deposit King: Deposit virtual assets to Bithumb and receive rewards worth up to 200 million won.",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14028",
+     "source_url": "https://feed.bithumb.com/notice/1655641"
+    },
+    {
+     "no": 14027,
+     "time": "2026-11-12T09:00:10.890Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "Cosmos(ATOM)充提暂停公告（11月18日下午6时起）",
+     "en": "Notice of temporary suspension of deposits and withdrawals for Cosmos (ATOM) (Nov 18, 6 PM–)",
+     "coins": [
+      "ATOM"
+     ],
+     "url": "https://eqn.news/monitor/14027",
+     "source_url": "https://feed.bithumb.com/notice/1655640"
+    },
+    {
+     "no": 13928,
+     "time": "2026-11-12T03:00:07.901Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "POKT充提暂停公告（11月12日下午7时起）",
+     "en": "Notice of temporary suspension of deposits and withdrawals for POKT (11/12 7 PM~)",
+     "coins": [
+      "POKT"
+     ],
+     "url": "https://eqn.news/monitor/13928",
+     "source_url": "https://feed.bithumb.com/notice/1655638"
+    },
+    {
+     "no": 13926,
+     "time": "2026-11-12T02:46:36.349Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "POKT充提暂停公告（11/12 20:00起）",
+     "en": "Notice of temporary suspension of deposits and withdrawals for POKT (11/12 20:00 ~)",
+     "coins": [
+      "POKT"
+     ],
+     "url": "https://eqn.news/monitor/13926",
+     "source_url": "https://upbit.com/service_center/notice?id=6768"
+    },
+    {
+     "no": 13704,
+     "time": "2026-11-11T06:53:37.542Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "11月第1周GAS空投发放通知",
+     "en": "Notice on GAS airdrop distribution for the first week of November",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13704",
+     "source_url": "https://feed.bithumb.com/notice/1655621"
+    },
+    {
+     "no": 13703,
+     "time": "2026-11-11T06:45:29.195Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "Cosmos(ATOM)充提暂停通知（11/18 20:00起）",
+     "en": "Notice of temporary suspension of deposits and withdrawals for Cosmos (ATOM) (11/18 20:00 ~)",
+     "coins": [
+      "ATOM"
+     ],
+     "url": "https://eqn.news/monitor/13703",
+     "source_url": "https://upbit.com/service_center/notice?id=6765"
+    },
+    {
+     "no": 13692,
+     "time": "2026-11-11T06:10:27.376Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "IOST空投20期付款通知",
+     "en": "IOST Airdrop 20th Payment Notice",
+     "coins": [
+      "IOST"
+     ],
+     "url": "https://eqn.news/monitor/13692",
+     "source_url": "https://feed.bithumb.com/notice/1655620"
+    },
+    {
+     "no": 13665,
+     "time": "2026-11-11T03:30:07.969Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "FLR充提暂停公告（11月11日下午7时起）",
+     "en": "Notice of temporary suspension of FLR deposits and withdrawals (11/11, 7 PM–)",
+     "coins": [
+      "FLR"
+     ],
+     "url": "https://eqn.news/monitor/13665",
+     "source_url": "https://feed.bithumb.com/notice/1655614"
+    },
+    {
+     "no": 13657,
+     "time": "2026-11-11T02:30:02.870Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "INJ 充提暂停通知（11月11日下午6时起）",
+     "en": "Notice of temporary suspension of INJ deposits and withdrawals (Nov 11, 6 PM~)",
+     "coins": [
+      "INJ"
+     ],
+     "url": "https://eqn.news/monitor/13657",
+     "source_url": "https://feed.bithumb.com/notice/1655613"
+    },
+    {
+     "no": 13655,
+     "time": "2026-11-11T02:29:02.714Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "FLR 提币暂停公告（11/11 23:00 起）",
+     "en": "Notice of temporary suspension of FLR withdrawals (11/11 23:00 ~)",
+     "coins": [
+      "FLR"
+     ],
+     "url": "https://eqn.news/monitor/13655",
+     "source_url": "https://upbit.com/service_center/notice?id=6764"
+    },
+    {
+     "no": 13654,
+     "time": "2026-11-11T02:00:02.601Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "Songbird(SGB)提现暂停通知（11/11 下午2时起）",
+     "en": "Notice of temporary suspension of SGB withdrawals (Nov 11, 2 PM~)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13654",
+     "source_url": "https://feed.bithumb.com/notice/1655612"
+    },
+    {
+     "no": 13591,
+     "time": "2026-11-10T17:28:58.849Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "Tether(USDT) Tron网络提币暂停公告",
+     "en": "Notice of temporary suspension of USDT withdrawals on the Tron network",
+     "coins": [
+      "TRX"
+     ],
+     "url": "https://eqn.news/monitor/13591",
+     "source_url": "https://feed.bithumb.com/notice/1655611"
+    },
+    {
+     "no": 13469,
+     "time": "2026-11-10T12:09:18.508Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "INJ 充提暂停通知（11/11 18:00 起）",
+     "en": "Notice of temporary suspension of deposits and withdrawals for INJ (11/11 18:00 ~)",
+     "coins": [
+      "INJ"
+     ],
+     "url": "https://eqn.news/monitor/13469",
+     "source_url": "https://upbit.com/service_center/notice?id=6763"
+    },
+    {
+     "no": 13455,
+     "time": "2026-11-10T11:07:03.148Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "WAVES 被列为交易注意项目",
+     "en": "WAVES designated as a trading caution item",
+     "coins": [
+      "WAVES"
+     ],
+     "url": "https://eqn.news/monitor/13455",
+     "source_url": "https://feed.bithumb.com/notice/1655610"
+    },
+    {
+     "no": 13452,
+     "time": "2026-11-10T11:00:17.450Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "WAVES 交易警示品种指定公告",
+     "en": "Notice on Designation of WAVES as a Trading Caution Item",
+     "coins": [
+      "WAVES"
+     ],
+     "url": "https://eqn.news/monitor/13452",
+     "source_url": "https://upbit.com/service_center/notice?id=6762"
+    },
+    {
+     "no": 13429,
+     "time": "2026-11-10T10:00:08.568Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "MANTRA(MANTRA) 提币暂停通知（11/10 晚上10点起）",
+     "en": "Notice of temporary suspension of MANTRA withdrawals (11/10 10 PM–)",
+     "coins": [
+      "MANTRA"
+     ],
+     "url": "https://eqn.news/monitor/13429",
+     "source_url": "https://feed.bithumb.com/notice/1655608"
+    },
+    {
+     "no": 13409,
+     "time": "2026-11-10T08:58:22.705Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "访问主页时提示信息错误及恢复正常通知",
+     "en": "Notice on Error in Guidance Text When Accessing Homepage and Restoration Notice",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13409",
+     "source_url": "https://feed.bithumb.com/notice/1655609"
+    },
+    {
+     "no": 13389,
+     "time": "2026-11-10T07:39:11.116Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "MANTRA(MANTRA) 提币暂停公告（11/10 20:00 ~）",
+     "en": "Notice of temporary suspension of MANTRA withdrawals (11/10 20:00 ~)",
+     "coins": [
+      "MANTRA"
+     ],
+     "url": "https://eqn.news/monitor/13389",
+     "source_url": "https://upbit.com/service_center/notice?id=6761"
+    },
+    {
+     "no": 13388,
+     "time": "2026-11-10T07:18:07.305Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "INIT 提币暂停公告",
+     "en": "Notice of temporary suspension of INIT withdrawals",
+     "coins": [
+      "INIT"
+     ],
+     "url": "https://eqn.news/monitor/13388",
+     "source_url": "https://feed.bithumb.com/notice/1655589"
+    },
+    {
+     "no": 13384,
+     "time": "2026-11-10T06:57:26.979Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "Initia(INIT)提现暂停公告",
+     "en": "Notice of temporary suspension of INIT withdrawals",
+     "coins": [
+      "INIT"
+     ],
+     "url": "https://eqn.news/monitor/13384",
+     "source_url": "https://upbit.com/service_center/notice?id=6760"
+    },
+    {
+     "no": 13382,
+     "time": "2026-11-10T06:55:01.976Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Bithumb",
+     "zh": "【活动】为庆祝HYPE韩元市场上线，空投活动总价值1亿韩元（*免交易手续费）",
+     "en": "[Event] Airdrop Event Worth a Total of 100 Million Won to Celebrate the Addition of HyperLiquid (HYPE) KRW Market (*Free Trading Fees)",
+     "coins": [
+      "HYPE"
+     ],
+     "url": "https://eqn.news/monitor/13382",
+     "source_url": "https://feed.bithumb.com/notice/1655588"
+    },
+    {
+     "no": 13363,
+     "time": "2026-11-10T05:23:50.188Z",
+     "channels": [
+      "korea"
+     ],
+     "source": "Upbit",
+     "zh": "ELF充提暂停公告（11/17 22:00起）",
+     "en": "Notice of temporary suspension of ELF deposits and withdrawals (11/17 22:00 ~)",
+     "coins": [
+      "ELF"
+     ],
+     "url": "https://eqn.news/monitor/13363",
+     "source_url": "https://upbit.com/service_center/notice?id=6759"
+    },
+    {
+     "no": 13359,
+     "time": "2026-11-10T05:13:55.552Z",
+     "channels": [
+      "main",
+      "korea"
+     ],
+     "source": "Bithumb Listing",
+     "zh": "[新增市场] 新增 HYPE、CARDS 韩元市场",
+     "en": null,
+     "coins": [
+      "CARDS",
+      "HYPE"
+     ],
+     "url": "https://eqn.news/main/13359",
+     "source_url": "https://feed.bithumb.com/notice/1655585"
+    }
+   ],
+   "next_cursor": "1794287635552-13359"
+  }
+ }
+}

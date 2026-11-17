@@ -87,6 +87,9 @@ async def run_announcement_sources(
                 settings = await settings_loader()
                 interval = max(min_interval_seconds, float(settings.poll_interval_seconds))
                 active = settings.enabled and provider.exchange in settings.record_exchanges
+                if provider.exchange == "eqn":
+                    interval = max(5.0, float(provider.poll_interval_seconds))
+                    active = settings.enabled and provider.enabled
                 if active:
                     bootstrap = not await monitor.repository.has_any()
                     fetch_start = time.monotonic()

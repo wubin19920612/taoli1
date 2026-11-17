@@ -3503,6 +3503,10 @@ def test_announcement_exchange_options_endpoint_returns_supported_providers() ->
         {"label": "Gate", "value": "gate"},
         {"label": "Bitget", "value": "bitget"},
         {"label": "Hyperliquid", "value": "hyperliquid"},
+        {"label": "Upbit", "value": "upbit"},
+        {"label": "Bithumb", "value": "bithumb"},
+        {"label": "MEXC", "value": "mexc"},
+        {"label": "Aster", "value": "aster"},
     ]
 
 

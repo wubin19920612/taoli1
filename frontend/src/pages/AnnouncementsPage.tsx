@@ -25,7 +25,7 @@ const defaultAnnouncementSettings: AnnouncementSettings = {
   enabled: true,
   poll_interval_seconds: 30,
   alert_max_age_minutes: 30,
-  record_exchanges: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"],
+  record_exchanges: ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid", "upbit", "bithumb", "mexc", "aster"],
   alert_exchanges: [],
   listing_delisting_alerts_enabled: true,
   launchpool_alerts_enabled: true,
@@ -42,7 +42,11 @@ const fallbackExchangeOptions: AnnouncementExchangeOption[] = [
   { label: "Bybit", value: "bybit" },
   { label: "Gate", value: "gate" },
   { label: "Bitget", value: "bitget" },
-  { label: "Hyperliquid", value: "hyperliquid" }
+  { label: "Hyperliquid", value: "hyperliquid" },
+  { label: "Upbit", value: "upbit" },
+  { label: "Bithumb", value: "bithumb" },
+  { label: "MEXC", value: "mexc" },
+  { label: "Aster", value: "aster" }
 ];
 
 const kindOptions: Array<{ label: string; value: "" | AnnouncementKind }> = [

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import unicodedata
 from datetime import UTC, datetime, timedelta
 
 import aiosqlite
@@ -805,6 +806,37 @@ class AnnouncementRepository:
     def __init__(self, db: aiosqlite.Connection):
         self.db = db
 
+    async def find_cross_source_duplicate(
+        self, announcement: ExchangeAnnouncement,
+    ) -> ExchangeAnnouncement | None:
+        def normalize_title(value: str | None) -> str:
+            return "".join(
+                char for char in (value or "").lower()
+                if not char.isspace() and not unicodedata.category(char).startswith("P")
+            )
+
+        titles = {normalize_title(announcement.title), normalize_title(announcement.title_zh)} - {""}
+        published_at = announcement.published_at
+        if published_at.tzinfo is None:
+            published_at = published_at.replace(tzinfo=UTC)
+        cursor = await self.db.execute(
+            """
+            SELECT * FROM exchange_announcements
+            WHERE exchange = ? AND source != ?
+              AND julianday(published_at) BETWEEN julianday(?) AND julianday(?)
+            ORDER BY julianday(fetched_at), rowid
+            """,
+            (announcement.exchange, announcement.source,
+             (published_at - timedelta(hours=6)).isoformat(),
+             (published_at + timedelta(hours=6)).isoformat()),
+        )
+        for row in await cursor.fetchall():
+            if row["url"] == announcement.url or titles.intersection({
+                normalize_title(row["title"]), normalize_title(row["title_zh"]),
+            }):
+                return self._announcement_from_db(row)
+        return None
+
     async def create_if_new(self, announcement: ExchangeAnnouncement) -> ExchangeAnnouncement | None:
         cursor = await self.db.execute(
             """
@@ -876,6 +908,7 @@ class AnnouncementRepository:
                 ELSE asset_research_json
               END,
               event_reminder_status = CASE
+                WHEN alert_status = 'duplicate' THEN 'not_applicable'
                 WHEN ? AND event_reminder_status != 'sent' THEN 'not_applicable'
                 WHEN ? IS NOT NULL AND ? = 'pending' AND event_reminder_status != 'sent' THEN 'pending'
                 ELSE event_reminder_status
@@ -1029,7 +1062,7 @@ class AnnouncementRepository:
         limit: int = 100,
         demote_baseline: bool = False,
     ) -> list[ExchangeAnnouncement]:
-        clauses: list[str] = []
+        clauses: list[str] = ["alert_status != 'duplicate'"]
         params: list[object] = []
         if exchange:
             clauses.append("exchange = ?")
@@ -1079,6 +1112,7 @@ class AnnouncementRepository:
               AND event_time > ?
               AND event_time <= ?
               AND event_reminder_status = 'pending'
+              AND alert_status != 'duplicate'
               AND kind IN ('listing', 'delisting')
               AND exchange IN ({placeholders})
             ORDER BY event_time ASC, published_at DESC
@@ -1460,7 +1494,25 @@ class SettingsRepository:
         row = await cursor.fetchone()
         if row is None:
             return AnnouncementSettings()
-        return AnnouncementSettings.model_validate(json.loads(row["payload"]))
+        payload = json.loads(row["payload"])
+        settings = AnnouncementSettings.model_validate(payload)
+        if "exchange_catalog_version" not in payload or settings.exchange_catalog_version < 2:
+            settings = settings.model_copy(update={
+                "record_exchanges": list(dict.fromkeys([
+                    *settings.record_exchanges, "upbit", "bithumb", "mexc", "aster",
+                ])),
+                "exchange_catalog_version": 2,
+            })
+            # Compare-and-swap: simultaneous polling/settings reads must not
+            # overwrite a user's newer save with a stale migration snapshot.
+            cursor = await self.db.execute(
+                "UPDATE app_settings SET payload = ? WHERE key = ? AND payload = ?",
+                (settings.model_dump_json(), "announcements", row["payload"]),
+            )
+            await self.db.commit()
+            if cursor.rowcount == 0:
+                return await self.get_announcement_settings()
+        return settings
 
     async def set_announcement_settings(
         self,

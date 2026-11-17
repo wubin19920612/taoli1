@@ -1,0 +1,759 @@
+{
+ "jsonrpc": "2.0",
+ "id": 2,
+ "result": {
+  "content": [
+   {
+    "text": "{\n  \"items\": [\n    {\n      \"no\": 15382,\n      \"time\": \"2026-11-17T02:28:18.140Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"MEXC调整4和MAV期货的Tick Size\",\n      \"en\": \"MEXC Adjusts Tick Size for 4 and MAV Futures\",\n      \"coins\": [\n        \"MAV\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15382\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/mexc-adjusts-tick-size-for-4-and-mav-futures-17827791539784\"\n    },\n    {\n      \"no\": 15278,\n      \"time\": \"2026-11-16T12:59:11.625Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"MEXC调整HUMA和VANA期货的最小变动价位\",\n      \"en\": \"MEXC Adjusts Tick Size for HUMA and VANA Futures\",\n      \"coins\": [\n        \"HUMA\",\n        \"VANA\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15278\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/mexc-adjusts-tick-size-for-huma-and-vana-futures-17827791539780\"\n    },\n    {\n      \"no\": 15265,\n      \"time\": \"2026-11-16T11:30:11.465Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Gate.io Announcements\",\n      \"zh\": \"上线公告：Gate Stock Zone 现已提供 ANTUSDT (Anthropic) 永续合约盘前交易……\",\n      \"en\": \"Launch Announcement: Gate Stock Zone Now Offers ANTUSDT (Anthropic) Perpetual Futures Pre-Market Tra...\",\n      \"coins\": [\n        \"GT\",\n        \"NOW\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15265\",\n      \"source_url\": \"https://www.gate.com/announcements/article/102801\"\n    },\n    {\n      \"no\": 15264,\n      \"time\": \"2026-11-16T11:21:55.063Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Gate.io Announcements\",\n      \"zh\": \"Gate将下架ANTHROPIC盘前永续合约并上线更名后的ANT盘前永续合约...\",\n      \"en\": \"Gate to Delist ANTHROPIC Pre-Market Perpetual Futures and List Renamed ANT Pre-Market Perpetual Futu...\",\n      \"coins\": [\n        \"GT\",\n        \"FUTU\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15264\",\n      \"source_url\": \"https://www.gate.com/announcements/article/102800\"\n    },\n    {\n      \"no\": 15252,\n      \"time\": \"2026-11-16T10:14:48.815Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"市场首创：MEXC将于11月16日上线CHTR、JNJ、SCHW和HUM股票期货\",\n      \"en\": \"First in Market: MEXC to List CHTR, JNJ, SCHW and HUM Stock Futures on Nov 16\",\n      \"coins\": [\n        \"JNJ\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15252\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/first-in-market-17827791539779\"\n    },\n    {\n      \"no\": 15193,\n      \"time\": \"2026-11-16T05:17:39.063Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"MEXC调整KOR、FLOAT及其他3个合约交易对的Tick Size\",\n      \"en\": \"MEXC Adjusts Tick Size for KOR, FLOAT and 3 Other Futures Pairs\",\n      \"coins\": [\n        \"FLOAT\",\n        \"KOR\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15193\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/mexc-adjusts-tick-size-for-kor-float-and-3-other-futures-pairs-17827791539775\"\n    },\n    {\n      \"no\": 15178,\n      \"time\": \"2026-11-16T04:25:30.636Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"JDSTOCKUSDT 永续合约最高杠杆倍数调整 [2026年11月17日]\",\n      \"en\": \"Maximum Leverage Adjusted for JDSTOCKUSDT Futures [Nov 17, 2026]\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15178\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/maximum-leverage-adjusted-for-jdstockusdt-futures-nov-17-2026-17827791539769\"\n    },\n    {\n      \"no\": 15177,\n      \"time\": \"2026-11-16T04:25:26.551Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"NVIDIAUSDT 期货最高杠杆调整 [2026年11月17日]\",\n      \"en\": \"Maximum Leverage Adjusted for NVIDIAUSDT Futures [Nov 17, 2026]\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15177\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/maximum-leverage-adjusted-for-nvidiausdt-futures-nov-17-2026-17827791539771\"\n    },\n    {\n      \"no\": 15176,\n      \"time\": \"2026-11-16T04:25:24.127Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"PANWUSDT 期货最高杠杆已调整 [2026年11月18日]\",\n      \"en\": \"Maximum Leverage Adjusted for PANWUSDT Futures [Nov 18, 2026]\",\n      \"coins\": [\n        \"PANW\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15176\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/maximum-leverage-adjusted-for-panwusdt-futures-nov-18-2026-17827791539772\"\n    },\n    {\n      \"no\": 15171,\n      \"time\": \"2026-11-16T04:13:15.264Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Gate.io Announcements\",\n      \"zh\": \"Gate 支持 Clearpool (CPOOL) 迁移至 Clearpool (CLEAR)\",\n      \"en\": \"Gate Supports Clearpool (CPOOL) Migration to Clearpool (CLEAR)\",\n      \"coins\": [\n        \"CPOOL\",\n        \"GT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15171\",\n      \"source_url\": \"https://www.gate.com/announcements/article/102784\"\n    },\n    {\n      \"no\": 15163,\n      \"time\": \"2026-11-16T03:42:14.546Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Gate.io Announcements\",\n      \"zh\": \"Gate已完成89笔股票和ETF股息分配，包括Morgan Stanley (MS)\",\n      \"en\": \"Gate Has Completed 89 Stock and ETF Dividend Distributions, Including Morgan Stanley (MS)\",\n      \"coins\": [\n        \"GT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15163\",\n      \"source_url\": \"https://www.gate.com/announcements/article/102783\"\n    },\n    {\n      \"no\": 15120,\n      \"time\": \"2026-11-16T00:57:25.713Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"RAREUSDT 期货最大杠杆已调整 [2026年11月15日 20:00 (UTC)]\",\n      \"en\": \"Maximum Leverage Adjusted for RAREUSDT Futures [Nov 15, 2026, 20:00 (UTC)]\",\n      \"coins\": [\n        \"RARE\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15120\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/maximum-leverage-adjusted-for-rareusdt-futures-nov-15-2026-20-17827791539766\"\n    },\n    {\n      \"no\": 15061,\n      \"time\": \"2026-11-15T16:26:02.093Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"MEXC将于2026年11月17日对ANTHROPIC Pre-IPO期货进行代币拆分并更名为ANTUSDT\",\n      \"en\": \"MEXC to Rebase ANTHROPIC Pre-IPO Futures and Rename to ANTUSDT on Nov 17, 2026\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15061\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/mexc-to-rebase-anthropic-pre-ipo-futures-and-rename-to-antusdt-on-nov-17-2026-17827791539765\"\n    },\n    {\n      \"no\": 15043,\n      \"time\": \"2026-11-15T12:48:06.547Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"SOPHUSDT 资金费率结算频率调整 [2026年11月15日 12:45 (UTC)]\",\n      \"en\": \"Adjustment to SOPHUSDT Funding Rate Settlement Frequency [Nov 15, 2026, 12:45 (UTC)]\",\n      \"coins\": [\n        \"SOPH\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15043\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/adjustment-to-sophusdt-funding-rate-settlement-frequency-nov-15-2026-12-17827791539763\"\n    },\n    {\n      \"no\": 15003,\n      \"time\": \"2026-11-15T06:21:29.195Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"市场首创：WASTED 现已上线 MEXC Meme+\",\n      \"en\": \"First in Market: WASTED Now Live on MEXC Meme+\",\n      \"coins\": [\n        \"NOW\",\n        \"WASTED\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15003\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/first-in-market-17827791539762\"\n    },\n    {\n      \"no\": 14985,\n      \"time\": \"2026-11-15T02:15:16.210Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"MEXC调整AVNTUSDT合约最小变动价位\",\n      \"en\": \"MEXC Adjusts Tick Size for AVNTUSDT Futures\",\n      \"coins\": [\n        \"AVNT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14985\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/mexc-adjusts-tick-size-for-avntusdt-futures-17827791539761\"\n    },\n    {\n      \"no\": 14853,\n      \"time\": \"2026-11-14T14:40:53.560Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"MEXC Global 银行卡维护通知：重要更新与资金安排\",\n      \"en\": \"MEXC Global Card Maintenance Notice: Important Updates & Fund Arrangements\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14853\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/mexc-global-card-maintenance-notice-17827791539760\"\n    },\n    {\n      \"no\": 14438,\n      \"time\": \"2026-11-13T13:57:22.589Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Gate.io Announcements\",\n      \"zh\": \"Gate将下架ZZZ、STONKS及另外18种代币的永续合约\",\n      \"en\": \"Gate Will Delist ZZZ, STONKS and 18 Other Tokens Perpetuals\",\n      \"coins\": [\n        \"GT\",\n        \"ZZZ\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14438\",\n      \"source_url\": \"https://www.gate.com/announcements/article/102778\"\n    },\n    {\n      \"no\": 14389,\n      \"time\": \"2026-11-13T09:37:20.098Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"MEXC将于2026年11月18日对KEYENCE股票期货进行代币拆分调整\",\n      \"en\": \"MEXC to Rebase KEYENCE Stock Futures on Nov 18, 2026\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14389\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/mexc-to-rebase-keyence-stock-futures-on-nov-18-2026-17827791539743\"\n    },\n    {\n      \"no\": 14388,\n      \"time\": \"2026-11-13T09:37:12.024Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"MEXC将于2026年11月19日对BITO股票期货进行代币拆分\",\n      \"en\": \"MEXC to Rebase BITO Stock Futures on Nov 19, 2026\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14388\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/mexc-to-rebase-bito-stock-futures-on-nov-19-2026-17827791539744\"\n    },\n    {\n      \"no\": 14387,\n      \"time\": \"2026-11-13T09:37:09.296Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"MEXC将于2026年11月20日对SNDK股票期货进行代币拆分调整\",\n      \"en\": \"MEXC to Rebase SNDK Stock Futures on Nov 20, 2026\",\n      \"coins\": [\n        \"SNDK\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14387\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/mexc-to-rebase-sndk-stock-futures-on-nov-20-2026-17827791539745\"\n    },\n    {\n      \"no\": 14358,\n      \"time\": \"2026-11-13T07:52:39.061Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Gate.io Announcements\",\n      \"zh\": \"Gate 集成 Elysium 生态：扩展多链 Web3 基础设施，提供超高速 O...\",\n      \"en\": \"Gate Integrates Elysium Ecosystem: Expanding Multi-Chain Web3 Infrastructure to Deliver Ultra-Fast O...\",\n      \"coins\": [\n        \"GT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14358\",\n      \"source_url\": \"https://www.gate.com/announcements/article/102771\"\n    },\n    {\n      \"no\": 14346,\n      \"time\": \"2026-11-13T07:13:33.713Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"MEXC CFD MT5 服务器定期维护与产品升级（11月13日与14日）\",\n      \"en\": \"Scheduled MEXC CFD MT5 Server Maintenance & Product Upgrade (Nov 13 & 14)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14346\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/scheduled-mexc-cfd-mt5-server-maintenance-product-upgrade-nov-13-14-17827791539735\"\n    },\n    {\n      \"no\": 14264,\n      \"time\": \"2026-11-13T04:05:46.809Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"MEXC APAC 卡服务停止通知：资金与结算安排\",\n      \"en\": \"MEXC APAC Card Service Discontinuation Notice: Funds & Settlement Arrangements\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14264\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/mexc-apac-card-service-discontinuation-notice-17827791539730\"\n    },\n    {\n      \"no\": 14234,\n      \"time\": \"2026-11-13T02:20:10.904Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"CXMTUSDT 资金费率结算频率调整 [2026年11月13日 02:15 (UTC)]\",\n      \"en\": \"Adjustment to CXMTUSDT Funding Rate Settlement Frequency [Nov 13, 2026, 02:15 (UTC)]\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14234\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/adjustment-to-cxmtusdt-funding-rate-settlement-frequency-nov-13-2026-02-17827791539728\"\n    },\n    {\n      \"no\": 14067,\n      \"time\": \"2026-11-12T12:34:43.937Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"MEXC调整NUSTOCKUSDT期货最小变动价位\",\n      \"en\": \"MEXC Adjusts Tick Size for NUSTOCKUSDT Futures\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14067\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/mexc-adjusts-tick-size-for-nustockusdt-futures-17827791539723\"\n    },\n    {\n      \"no\": 14051,\n      \"time\": \"2026-11-12T10:16:15.776Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"尼泊尔和斯里兰卡 JCT 和 ONE 期货交易手续费调整\",\n      \"en\": \"Adjustments to Trading Fees on JCT and ONE Futures in Nepal and Sri Lanka\",\n      \"coins\": [\n        \"ONE\",\n        \"JCT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14051\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/adjustments-to-trading-fees-on-jct-and-one-futures-in-nepal-and-sri-lanka-17827791539721\"\n    },\n    {\n      \"no\": 14044,\n      \"time\": \"2026-11-12T10:09:03.563Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"部分国家和地区 MU 股票期货交易手续费调整\",\n      \"en\": \"Adjustments to Trading Fees on MU Stock Futures in Selected Countries and Regions\",\n      \"coins\": [\n        \"MU\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14044\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/adjustments-to-trading-fees-on-mu-stock-futures-in-selected-countries-and-regions-17827791539718\"\n    },\n    {\n      \"no\": 14043,\n      \"time\": \"2026-11-12T10:06:59.813Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"巴基斯坦和孟加拉国SOXS合约交易手续费调整\",\n      \"en\": \"Adjustments to Trading Fees on SOXS Futures in Pakistan and Bangladesh\",\n      \"coins\": [\n        \"SOXS\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14043\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/adjustments-to-trading-fees-on-soxs-futures-in-pakistan-and-bangladesh-17827791539715\"\n    },\n    {\n      \"no\": 14042,\n      \"time\": \"2026-11-12T10:04:56.981Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"西亚部分国家和地区ZEC、NVDA和ONE期货交易手续费调整\",\n      \"en\": \"Adjustments to Trading Fees on ZEC, NVDA and ONE Futures in Selected Countries and Regions in West Asia\",\n      \"coins\": [\n        \"ONE\",\n        \"NVDA\",\n        \"ZEC\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14042\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/adjustments-to-trading-fees-on-zec-nvda-and-one-futures-in-selected-countries-and-regions-in-west-asia-17827791539713\"\n    },\n    {\n      \"no\": 14002,\n      \"time\": \"2026-11-12T08:18:24.136Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Gate.io Announcements\",\n      \"zh\": \"Gate将调整部分交易对的数量精度（11月13日 08:00 UTC）\",\n      \"en\": \"Gate to Adjust Size Decimal Places for Certain Trading Pairs (November 13, 08:00 UTC)\",\n      \"coins\": [\n        \"GT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14002\",\n      \"source_url\": \"https://www.gate.com/announcements/article/102754\"\n    },\n    {\n      \"no\": 13999,\n      \"time\": \"2026-11-12T08:04:47.757Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"AMDUSDT 和 MVLLUSDT 期货交易手续费更新（2026年11月16日）\",\n      \"en\": \"Updates to AMDUSDT and MVLLUSDT Futures Trading Fees (Nov 16, 2026)\",\n      \"coins\": [\n        \"AMD\",\n        \"MVLL\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13999\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/updates-to-amdusdt-and-mvllusdt-futures-trading-fees-nov-16-2026-17827791539711\"\n    },\n    {\n      \"no\": 13996,\n      \"time\": \"2026-11-12T08:00:42.590Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"零手续费狂欢：LIGHTUSDT、HEIUSDT 及另外 2 个期货活动将于 2026年11月16日 10:00 (UTC) 结束\",\n      \"en\": \"0-Fee Fest: LIGHTUSDT, HEIUSDT, and 2 Other Futures Events Conclude on Nov 16, 2026, 10:00 (UTC)\",\n      \"coins\": [\n        \"LIGHT\",\n        \"HEI\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13996\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/0-fee-fest-17827791539710\"\n    },\n    {\n      \"no\": 13982,\n      \"time\": \"2026-11-12T07:08:23.762Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"零手续费活动：新增 ANTHROPICUSDT 永续合约交易对\",\n      \"en\": \"0-Fee Fest: Addition of ANTHROPICUSDT Futures pair\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13982\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/0-fee-fest-17827791539706\"\n    },\n    {\n      \"no\": 13954,\n      \"time\": \"2026-11-12T05:29:25.931Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Gate.io Announcements\",\n      \"zh\": \"首次上线：Gate 股票期货专区将新增期货交易、交易机器人及跟单交易，针对...\",\n      \"en\": \"Initial Listing: Gate Stock Futures Zone Will Add Futures Trading, Trading Bots, and Copy Trading fo...\",\n      \"coins\": [\n        \"GT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13954\",\n      \"source_url\": \"https://www.gate.com/announcements/article/102744\"\n    },\n    {\n      \"no\": 13935,\n      \"time\": \"2026-11-12T03:44:10.215Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Gate.io Announcements\",\n      \"zh\": \"Gate ETF 将上线 SOXL5L/USDT、SOXL5S/USDT\",\n      \"en\": \"Gate ETF to List SOXL5L/USDT, SOXL5S/USDT\",\n      \"coins\": [\n        \"GT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13935\",\n      \"source_url\": \"https://www.gate.com/announcements/article/102742\"\n    },\n    {\n      \"no\": 13798,\n      \"time\": \"2026-11-11T12:04:35.134Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"XMR和DASH现货交易对将于2026年11月13日下架\",\n      \"en\": \"Delisting of XMR and DASH Spot Pairs on Nov 13, 2026\",\n      \"coins\": [\n        \"DASH\",\n        \"XMR\",\n        \"SPOT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13798\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/delisting-of-xmr-and-dash-spot-pairs-on-nov-13-2026-17827791539687\"\n    },\n    {\n      \"no\": 13793,\n      \"time\": \"2026-11-11T11:54:28.403Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Gate.io Announcements\",\n      \"zh\": \"首次上线：Gate Stocks 为 DANGOTEUSDT（Dangote Group）永续合约 F... 开启盘前交易\",\n      \"en\": \"Initial Listing: Gate Stocks Launches Pre-Market Trading for DANGOTEUSDT (Dangote Group) Perpetual F...\",\n      \"coins\": [\n        \"GT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13793\",\n      \"source_url\": \"https://www.gate.com/announcements/article/102735\"\n    },\n    {\n      \"no\": 13770,\n      \"time\": \"2026-11-11T09:34:10.031Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Gate.io Announcements\",\n      \"zh\": \"Gate 完成 XFI 和 MAIGA 等 22 个币种的下架与回购\",\n      \"en\": \"Gate Completes Delisting and Buyback of 22 Coins, Including XFI and MAIGA\",\n      \"coins\": [\n        \"GT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13770\",\n      \"source_url\": \"https://www.gate.com/announcements/article/102731\"\n    },\n    {\n      \"no\": 13764,\n      \"time\": \"2026-11-11T09:24:51.711Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Gate.io Announcements\",\n      \"zh\": \"Gate将下架包括OXYP和IRON在内的25种代币\",\n      \"en\": \"Gate to Delist 25 Coins Including OXYP and IRON\",\n      \"coins\": [\n        \"GT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13764\",\n      \"source_url\": \"https://www.gate.com/announcements/article/102729\"\n    },\n    {\n      \"no\": 13734,\n      \"time\": \"2026-11-11T08:49:31.449Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"MEXC调整牛逼USDT合约最小变动价位\",\n      \"en\": \"MEXC Adjusts Tick Size for 牛逼USDT Futures\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13734\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/mexc-adjusts-tick-size-for-牛逼usdt-futures-17827791539680\"\n    },\n    {\n      \"no\": 13674,\n      \"time\": \"2026-11-11T04:06:00.502Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Gate.io Announcements\",\n      \"zh\": \"Gate将下架FLYBRAIN永续合约交易市场\",\n      \"en\": \"Gate Will Delist FLYBRAIN Perpetual Futures Trading Market\",\n      \"coins\": [\n        \"GT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13674\",\n      \"source_url\": \"https://www.gate.com/announcements/article/102716\"\n    },\n    {\n      \"no\": 13670,\n      \"time\": \"2026-11-11T03:54:41.598Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Gate.io Announcements\",\n      \"zh\": \"Gate Futures Meme Zone 现已支持 MIHAO 的合约交易、交易机器人及跟单交易\",\n      \"en\": \"Gate Futures Meme Zone Now Supports Futures Trading, Trading Bots, and Copy Trading for MIHAO\",\n      \"coins\": [\n        \"GT\",\n        \"NOW\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13670\",\n      \"source_url\": \"https://www.gate.com/announcements/article/102714\"\n    },\n    {\n      \"no\": 13663,\n      \"time\": \"2026-11-11T03:18:01.839Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"AMATUSDT 和 CSCOUSDT 期货最高杠杆调整 [2026年11月12日 (UTC)]\",\n      \"en\": \"Maximum Leverage Adjusted for AMATUSDT And CSCOUSDT Futures [Nov 12, 2026 (UTC)]\",\n      \"coins\": [\n        \"AMAT\",\n        \"CSCO\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13663\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/maximum-leverage-adjusted-for-amatusdt-and-cscousdt-futures-nov-12-2026-utc-17827791539668\"\n    },\n    {\n      \"no\": 13581,\n      \"time\": \"2026-11-10T16:16:05.931Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"INITUSDT 资金费率结算频率调整 [2026年11月10日 16:10 (UTC)]\",\n      \"en\": \"Adjustment to INITUSDT Funding Rate Settlement Frequency [Nov 10, 2026, 16:10 (UTC)]\",\n      \"coins\": [\n        \"INIT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13581\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/adjustment-to-initusdt-funding-rate-settlement-frequency-nov-10-2026-16-17827791539665\"\n    },\n    {\n      \"no\": 13579,\n      \"time\": \"2026-11-10T16:14:59.864Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"INITUSDT 资金费率结算频率调整 [2026年11月10日 14:10 (UTC)]\",\n      \"en\": \"Adjustment to INITUSDT Funding Rate Settlement Frequency [Nov 10, 2026, 14:10 (UTC)]\",\n      \"coins\": [\n        \"INIT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13579\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/adjustment-to-initusdt-funding-rate-settlement-frequency-nov-10-2026-14-17827791539665\"\n    },\n    {\n      \"no\": 13518,\n      \"time\": \"2026-11-10T13:31:20.788Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Gate.io Announcements\",\n      \"zh\": \"Gate完成Velodrome（VELODROME）合并并迁移至Aero（AERO）以及Aero（AERO）……\",\n      \"en\": \"Gate Completes the Merger and Migration of Velodrome (VELODROME) to Aero (AERO) and the Aero (AERO)...\",\n      \"coins\": [\n        \"AERO\",\n        \"GT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13518\",\n      \"source_url\": \"https://www.gate.com/announcements/article/102708\"\n    },\n    {\n      \"no\": 13462,\n      \"time\": \"2026-11-10T11:49:10.134Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"市场首创：MEXC将于11月10日上线WAT、FANG、ALNY和EQIX股票期货\",\n      \"en\": \"First in Market: MEXC to List WAT, FANG, ALNY and EQIX Stock Futures on Nov 10\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13462\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/first-in-market-17827791539660\"\n    },\n    {\n      \"no\": 13458,\n      \"time\": \"2026-11-10T11:28:41.855Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"市场首创：MEXC将于2026年11月10日12:30（UTC）上线PYBOBO USDT-M永续合约\",\n      \"en\": \"First in Market: MEXC to List PYBOBO USDT-M Futures on Nov 10, 2026, 12:30 (UTC)\",\n      \"coins\": [\n        \"PYBOBO\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13458\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/first-in-market-17827791539659\"\n    },\n    {\n      \"no\": 13457,\n      \"time\": \"2026-11-10T11:24:36.548Z\",\n      \"channels\": [\n        \"tier3\"\n      ],\n      \"source\": \"Mexc Announcements\",\n      \"zh\": \"市场首创：MEXC将于2026年10月10日12:30（UTC）在创新区上线PYBOBOUSDT合约\",\n      \"en\": \"First in Market: MEXC to List PYBOBOUSDT Futures in Innovation Zone on Nov 10, 2026, 12:30 (UTC)\",\n      \"coins\": [\n        \"PYBOBO\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13457\",\n      \"source_url\": \"https://www.mexc.com/announcements/article/first-in-market-17827791539658\"\n    }\n  ],\n  \"next_cursor\": \"1794309876548-13457\"\n}",
+    "type": "text"
+   }
+  ],
+  "isError": false,
+  "structuredContent": {
+   "items": [
+    {
+     "no": 15382,
+     "time": "2026-11-17T02:28:18.140Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "MEXC调整4和MAV期货的Tick Size",
+     "en": "MEXC Adjusts Tick Size for 4 and MAV Futures",
+     "coins": [
+      "MAV"
+     ],
+     "url": "https://eqn.news/monitor/15382",
+     "source_url": "https://www.mexc.com/announcements/article/mexc-adjusts-tick-size-for-4-and-mav-futures-17827791539784"
+    },
+    {
+     "no": 15278,
+     "time": "2026-11-16T12:59:11.625Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "MEXC调整HUMA和VANA期货的最小变动价位",
+     "en": "MEXC Adjusts Tick Size for HUMA and VANA Futures",
+     "coins": [
+      "HUMA",
+      "VANA"
+     ],
+     "url": "https://eqn.news/monitor/15278",
+     "source_url": "https://www.mexc.com/announcements/article/mexc-adjusts-tick-size-for-huma-and-vana-futures-17827791539780"
+    },
+    {
+     "no": 15265,
+     "time": "2026-11-16T11:30:11.465Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Gate.io Announcements",
+     "zh": "上线公告：Gate Stock Zone 现已提供 ANTUSDT (Anthropic) 永续合约盘前交易……",
+     "en": "Launch Announcement: Gate Stock Zone Now Offers ANTUSDT (Anthropic) Perpetual Futures Pre-Market Tra...",
+     "coins": [
+      "GT",
+      "NOW"
+     ],
+     "url": "https://eqn.news/monitor/15265",
+     "source_url": "https://www.gate.com/announcements/article/102801"
+    },
+    {
+     "no": 15264,
+     "time": "2026-11-16T11:21:55.063Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Gate.io Announcements",
+     "zh": "Gate将下架ANTHROPIC盘前永续合约并上线更名后的ANT盘前永续合约...",
+     "en": "Gate to Delist ANTHROPIC Pre-Market Perpetual Futures and List Renamed ANT Pre-Market Perpetual Futu...",
+     "coins": [
+      "GT",
+      "FUTU"
+     ],
+     "url": "https://eqn.news/monitor/15264",
+     "source_url": "https://www.gate.com/announcements/article/102800"
+    },
+    {
+     "no": 15252,
+     "time": "2026-11-16T10:14:48.815Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "市场首创：MEXC将于11月16日上线CHTR、JNJ、SCHW和HUM股票期货",
+     "en": "First in Market: MEXC to List CHTR, JNJ, SCHW and HUM Stock Futures on Nov 16",
+     "coins": [
+      "JNJ"
+     ],
+     "url": "https://eqn.news/monitor/15252",
+     "source_url": "https://www.mexc.com/announcements/article/first-in-market-17827791539779"
+    },
+    {
+     "no": 15193,
+     "time": "2026-11-16T05:17:39.063Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "MEXC调整KOR、FLOAT及其他3个合约交易对的Tick Size",
+     "en": "MEXC Adjusts Tick Size for KOR, FLOAT and 3 Other Futures Pairs",
+     "coins": [
+      "FLOAT",
+      "KOR"
+     ],
+     "url": "https://eqn.news/monitor/15193",
+     "source_url": "https://www.mexc.com/announcements/article/mexc-adjusts-tick-size-for-kor-float-and-3-other-futures-pairs-17827791539775"
+    },
+    {
+     "no": 15178,
+     "time": "2026-11-16T04:25:30.636Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "JDSTOCKUSDT 永续合约最高杠杆倍数调整 [2026年11月17日]",
+     "en": "Maximum Leverage Adjusted for JDSTOCKUSDT Futures [Nov 17, 2026]",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15178",
+     "source_url": "https://www.mexc.com/announcements/article/maximum-leverage-adjusted-for-jdstockusdt-futures-nov-17-2026-17827791539769"
+    },
+    {
+     "no": 15177,
+     "time": "2026-11-16T04:25:26.551Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "NVIDIAUSDT 期货最高杠杆调整 [2026年11月17日]",
+     "en": "Maximum Leverage Adjusted for NVIDIAUSDT Futures [Nov 17, 2026]",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15177",
+     "source_url": "https://www.mexc.com/announcements/article/maximum-leverage-adjusted-for-nvidiausdt-futures-nov-17-2026-17827791539771"
+    },
+    {
+     "no": 15176,
+     "time": "2026-11-16T04:25:24.127Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "PANWUSDT 期货最高杠杆已调整 [2026年11月18日]",
+     "en": "Maximum Leverage Adjusted for PANWUSDT Futures [Nov 18, 2026]",
+     "coins": [
+      "PANW"
+     ],
+     "url": "https://eqn.news/monitor/15176",
+     "source_url": "https://www.mexc.com/announcements/article/maximum-leverage-adjusted-for-panwusdt-futures-nov-18-2026-17827791539772"
+    },
+    {
+     "no": 15171,
+     "time": "2026-11-16T04:13:15.264Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Gate.io Announcements",
+     "zh": "Gate 支持 Clearpool (CPOOL) 迁移至 Clearpool (CLEAR)",
+     "en": "Gate Supports Clearpool (CPOOL) Migration to Clearpool (CLEAR)",
+     "coins": [
+      "CPOOL",
+      "GT"
+     ],
+     "url": "https://eqn.news/monitor/15171",
+     "source_url": "https://www.gate.com/announcements/article/102784"
+    },
+    {
+     "no": 15163,
+     "time": "2026-11-16T03:42:14.546Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Gate.io Announcements",
+     "zh": "Gate已完成89笔股票和ETF股息分配，包括Morgan Stanley (MS)",
+     "en": "Gate Has Completed 89 Stock and ETF Dividend Distributions, Including Morgan Stanley (MS)",
+     "coins": [
+      "GT"
+     ],
+     "url": "https://eqn.news/monitor/15163",
+     "source_url": "https://www.gate.com/announcements/article/102783"
+    },
+    {
+     "no": 15120,
+     "time": "2026-11-16T00:57:25.713Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "RAREUSDT 期货最大杠杆已调整 [2026年11月15日 20:00 (UTC)]",
+     "en": "Maximum Leverage Adjusted for RAREUSDT Futures [Nov 15, 2026, 20:00 (UTC)]",
+     "coins": [
+      "RARE"
+     ],
+     "url": "https://eqn.news/monitor/15120",
+     "source_url": "https://www.mexc.com/announcements/article/maximum-leverage-adjusted-for-rareusdt-futures-nov-15-2026-20-17827791539766"
+    },
+    {
+     "no": 15061,
+     "time": "2026-11-15T16:26:02.093Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "MEXC将于2026年11月17日对ANTHROPIC Pre-IPO期货进行代币拆分并更名为ANTUSDT",
+     "en": "MEXC to Rebase ANTHROPIC Pre-IPO Futures and Rename to ANTUSDT on Nov 17, 2026",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15061",
+     "source_url": "https://www.mexc.com/announcements/article/mexc-to-rebase-anthropic-pre-ipo-futures-and-rename-to-antusdt-on-nov-17-2026-17827791539765"
+    },
+    {
+     "no": 15043,
+     "time": "2026-11-15T12:48:06.547Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "SOPHUSDT 资金费率结算频率调整 [2026年11月15日 12:45 (UTC)]",
+     "en": "Adjustment to SOPHUSDT Funding Rate Settlement Frequency [Nov 15, 2026, 12:45 (UTC)]",
+     "coins": [
+      "SOPH"
+     ],
+     "url": "https://eqn.news/monitor/15043",
+     "source_url": "https://www.mexc.com/announcements/article/adjustment-to-sophusdt-funding-rate-settlement-frequency-nov-15-2026-12-17827791539763"
+    },
+    {
+     "no": 15003,
+     "time": "2026-11-15T06:21:29.195Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "市场首创：WASTED 现已上线 MEXC Meme+",
+     "en": "First in Market: WASTED Now Live on MEXC Meme+",
+     "coins": [
+      "NOW",
+      "WASTED"
+     ],
+     "url": "https://eqn.news/monitor/15003",
+     "source_url": "https://www.mexc.com/announcements/article/first-in-market-17827791539762"
+    },
+    {
+     "no": 14985,
+     "time": "2026-11-15T02:15:16.210Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "MEXC调整AVNTUSDT合约最小变动价位",
+     "en": "MEXC Adjusts Tick Size for AVNTUSDT Futures",
+     "coins": [
+      "AVNT"
+     ],
+     "url": "https://eqn.news/monitor/14985",
+     "source_url": "https://www.mexc.com/announcements/article/mexc-adjusts-tick-size-for-avntusdt-futures-17827791539761"
+    },
+    {
+     "no": 14853,
+     "time": "2026-11-14T14:40:53.560Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "MEXC Global 银行卡维护通知：重要更新与资金安排",
+     "en": "MEXC Global Card Maintenance Notice: Important Updates & Fund Arrangements",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14853",
+     "source_url": "https://www.mexc.com/announcements/article/mexc-global-card-maintenance-notice-17827791539760"
+    },
+    {
+     "no": 14438,
+     "time": "2026-11-13T13:57:22.589Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Gate.io Announcements",
+     "zh": "Gate将下架ZZZ、STONKS及另外18种代币的永续合约",
+     "en": "Gate Will Delist ZZZ, STONKS and 18 Other Tokens Perpetuals",
+     "coins": [
+      "GT",
+      "ZZZ"
+     ],
+     "url": "https://eqn.news/monitor/14438",
+     "source_url": "https://www.gate.com/announcements/article/102778"
+    },
+    {
+     "no": 14389,
+     "time": "2026-11-13T09:37:20.098Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "MEXC将于2026年11月18日对KEYENCE股票期货进行代币拆分调整",
+     "en": "MEXC to Rebase KEYENCE Stock Futures on Nov 18, 2026",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14389",
+     "source_url": "https://www.mexc.com/announcements/article/mexc-to-rebase-keyence-stock-futures-on-nov-18-2026-17827791539743"
+    },
+    {
+     "no": 14388,
+     "time": "2026-11-13T09:37:12.024Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "MEXC将于2026年11月19日对BITO股票期货进行代币拆分",
+     "en": "MEXC to Rebase BITO Stock Futures on Nov 19, 2026",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14388",
+     "source_url": "https://www.mexc.com/announcements/article/mexc-to-rebase-bito-stock-futures-on-nov-19-2026-17827791539744"
+    },
+    {
+     "no": 14387,
+     "time": "2026-11-13T09:37:09.296Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "MEXC将于2026年11月20日对SNDK股票期货进行代币拆分调整",
+     "en": "MEXC to Rebase SNDK Stock Futures on Nov 20, 2026",
+     "coins": [
+      "SNDK"
+     ],
+     "url": "https://eqn.news/monitor/14387",
+     "source_url": "https://www.mexc.com/announcements/article/mexc-to-rebase-sndk-stock-futures-on-nov-20-2026-17827791539745"
+    },
+    {
+     "no": 14358,
+     "time": "2026-11-13T07:52:39.061Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Gate.io Announcements",
+     "zh": "Gate 集成 Elysium 生态：扩展多链 Web3 基础设施，提供超高速 O...",
+     "en": "Gate Integrates Elysium Ecosystem: Expanding Multi-Chain Web3 Infrastructure to Deliver Ultra-Fast O...",
+     "coins": [
+      "GT"
+     ],
+     "url": "https://eqn.news/monitor/14358",
+     "source_url": "https://www.gate.com/announcements/article/102771"
+    },
+    {
+     "no": 14346,
+     "time": "2026-11-13T07:13:33.713Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "MEXC CFD MT5 服务器定期维护与产品升级（11月13日与14日）",
+     "en": "Scheduled MEXC CFD MT5 Server Maintenance & Product Upgrade (Nov 13 & 14)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14346",
+     "source_url": "https://www.mexc.com/announcements/article/scheduled-mexc-cfd-mt5-server-maintenance-product-upgrade-nov-13-14-17827791539735"
+    },
+    {
+     "no": 14264,
+     "time": "2026-11-13T04:05:46.809Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "MEXC APAC 卡服务停止通知：资金与结算安排",
+     "en": "MEXC APAC Card Service Discontinuation Notice: Funds & Settlement Arrangements",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14264",
+     "source_url": "https://www.mexc.com/announcements/article/mexc-apac-card-service-discontinuation-notice-17827791539730"
+    },
+    {
+     "no": 14234,
+     "time": "2026-11-13T02:20:10.904Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "CXMTUSDT 资金费率结算频率调整 [2026年11月13日 02:15 (UTC)]",
+     "en": "Adjustment to CXMTUSDT Funding Rate Settlement Frequency [Nov 13, 2026, 02:15 (UTC)]",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14234",
+     "source_url": "https://www.mexc.com/announcements/article/adjustment-to-cxmtusdt-funding-rate-settlement-frequency-nov-13-2026-02-17827791539728"
+    },
+    {
+     "no": 14067,
+     "time": "2026-11-12T12:34:43.937Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "MEXC调整NUSTOCKUSDT期货最小变动价位",
+     "en": "MEXC Adjusts Tick Size for NUSTOCKUSDT Futures",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14067",
+     "source_url": "https://www.mexc.com/announcements/article/mexc-adjusts-tick-size-for-nustockusdt-futures-17827791539723"
+    },
+    {
+     "no": 14051,
+     "time": "2026-11-12T10:16:15.776Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "尼泊尔和斯里兰卡 JCT 和 ONE 期货交易手续费调整",
+     "en": "Adjustments to Trading Fees on JCT and ONE Futures in Nepal and Sri Lanka",
+     "coins": [
+      "ONE",
+      "JCT"
+     ],
+     "url": "https://eqn.news/monitor/14051",
+     "source_url": "https://www.mexc.com/announcements/article/adjustments-to-trading-fees-on-jct-and-one-futures-in-nepal-and-sri-lanka-17827791539721"
+    },
+    {
+     "no": 14044,
+     "time": "2026-11-12T10:09:03.563Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "部分国家和地区 MU 股票期货交易手续费调整",
+     "en": "Adjustments to Trading Fees on MU Stock Futures in Selected Countries and Regions",
+     "coins": [
+      "MU"
+     ],
+     "url": "https://eqn.news/monitor/14044",
+     "source_url": "https://www.mexc.com/announcements/article/adjustments-to-trading-fees-on-mu-stock-futures-in-selected-countries-and-regions-17827791539718"
+    },
+    {
+     "no": 14043,
+     "time": "2026-11-12T10:06:59.813Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "巴基斯坦和孟加拉国SOXS合约交易手续费调整",
+     "en": "Adjustments to Trading Fees on SOXS Futures in Pakistan and Bangladesh",
+     "coins": [
+      "SOXS"
+     ],
+     "url": "https://eqn.news/monitor/14043",
+     "source_url": "https://www.mexc.com/announcements/article/adjustments-to-trading-fees-on-soxs-futures-in-pakistan-and-bangladesh-17827791539715"
+    },
+    {
+     "no": 14042,
+     "time": "2026-11-12T10:04:56.981Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "西亚部分国家和地区ZEC、NVDA和ONE期货交易手续费调整",
+     "en": "Adjustments to Trading Fees on ZEC, NVDA and ONE Futures in Selected Countries and Regions in West Asia",
+     "coins": [
+      "ONE",
+      "NVDA",
+      "ZEC"
+     ],
+     "url": "https://eqn.news/monitor/14042",
+     "source_url": "https://www.mexc.com/announcements/article/adjustments-to-trading-fees-on-zec-nvda-and-one-futures-in-selected-countries-and-regions-in-west-asia-17827791539713"
+    },
+    {
+     "no": 14002,
+     "time": "2026-11-12T08:18:24.136Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Gate.io Announcements",
+     "zh": "Gate将调整部分交易对的数量精度（11月13日 08:00 UTC）",
+     "en": "Gate to Adjust Size Decimal Places for Certain Trading Pairs (November 13, 08:00 UTC)",
+     "coins": [
+      "GT"
+     ],
+     "url": "https://eqn.news/monitor/14002",
+     "source_url": "https://www.gate.com/announcements/article/102754"
+    },
+    {
+     "no": 13999,
+     "time": "2026-11-12T08:04:47.757Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "AMDUSDT 和 MVLLUSDT 期货交易手续费更新（2026年11月16日）",
+     "en": "Updates to AMDUSDT and MVLLUSDT Futures Trading Fees (Nov 16, 2026)",
+     "coins": [
+      "AMD",
+      "MVLL"
+     ],
+     "url": "https://eqn.news/monitor/13999",
+     "source_url": "https://www.mexc.com/announcements/article/updates-to-amdusdt-and-mvllusdt-futures-trading-fees-nov-16-2026-17827791539711"
+    },
+    {
+     "no": 13996,
+     "time": "2026-11-12T08:00:42.590Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "零手续费狂欢：LIGHTUSDT、HEIUSDT 及另外 2 个期货活动将于 2026年11月16日 10:00 (UTC) 结束",
+     "en": "0-Fee Fest: LIGHTUSDT, HEIUSDT, and 2 Other Futures Events Conclude on Nov 16, 2026, 10:00 (UTC)",
+     "coins": [
+      "LIGHT",
+      "HEI"
+     ],
+     "url": "https://eqn.news/monitor/13996",
+     "source_url": "https://www.mexc.com/announcements/article/0-fee-fest-17827791539710"
+    },
+    {
+     "no": 13982,
+     "time": "2026-11-12T07:08:23.762Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "零手续费活动：新增 ANTHROPICUSDT 永续合约交易对",
+     "en": "0-Fee Fest: Addition of ANTHROPICUSDT Futures pair",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13982",
+     "source_url": "https://www.mexc.com/announcements/article/0-fee-fest-17827791539706"
+    },
+    {
+     "no": 13954,
+     "time": "2026-11-12T05:29:25.931Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Gate.io Announcements",
+     "zh": "首次上线：Gate 股票期货专区将新增期货交易、交易机器人及跟单交易，针对...",
+     "en": "Initial Listing: Gate Stock Futures Zone Will Add Futures Trading, Trading Bots, and Copy Trading fo...",
+     "coins": [
+      "GT"
+     ],
+     "url": "https://eqn.news/monitor/13954",
+     "source_url": "https://www.gate.com/announcements/article/102744"
+    },
+    {
+     "no": 13935,
+     "time": "2026-11-12T03:44:10.215Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Gate.io Announcements",
+     "zh": "Gate ETF 将上线 SOXL5L/USDT、SOXL5S/USDT",
+     "en": "Gate ETF to List SOXL5L/USDT, SOXL5S/USDT",
+     "coins": [
+      "GT"
+     ],
+     "url": "https://eqn.news/monitor/13935",
+     "source_url": "https://www.gate.com/announcements/article/102742"
+    },
+    {
+     "no": 13798,
+     "time": "2026-11-11T12:04:35.134Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "XMR和DASH现货交易对将于2026年11月13日下架",
+     "en": "Delisting of XMR and DASH Spot Pairs on Nov 13, 2026",
+     "coins": [
+      "DASH",
+      "XMR",
+      "SPOT"
+     ],
+     "url": "https://eqn.news/monitor/13798",
+     "source_url": "https://www.mexc.com/announcements/article/delisting-of-xmr-and-dash-spot-pairs-on-nov-13-2026-17827791539687"
+    },
+    {
+     "no": 13793,
+     "time": "2026-11-11T11:54:28.403Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Gate.io Announcements",
+     "zh": "首次上线：Gate Stocks 为 DANGOTEUSDT（Dangote Group）永续合约 F... 开启盘前交易",
+     "en": "Initial Listing: Gate Stocks Launches Pre-Market Trading for DANGOTEUSDT (Dangote Group) Perpetual F...",
+     "coins": [
+      "GT"
+     ],
+     "url": "https://eqn.news/monitor/13793",
+     "source_url": "https://www.gate.com/announcements/article/102735"
+    },
+    {
+     "no": 13770,
+     "time": "2026-11-11T09:34:10.031Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Gate.io Announcements",
+     "zh": "Gate 完成 XFI 和 MAIGA 等 22 个币种的下架与回购",
+     "en": "Gate Completes Delisting and Buyback of 22 Coins, Including XFI and MAIGA",
+     "coins": [
+      "GT"
+     ],
+     "url": "https://eqn.news/monitor/13770",
+     "source_url": "https://www.gate.com/announcements/article/102731"
+    },
+    {
+     "no": 13764,
+     "time": "2026-11-11T09:24:51.711Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Gate.io Announcements",
+     "zh": "Gate将下架包括OXYP和IRON在内的25种代币",
+     "en": "Gate to Delist 25 Coins Including OXYP and IRON",
+     "coins": [
+      "GT"
+     ],
+     "url": "https://eqn.news/monitor/13764",
+     "source_url": "https://www.gate.com/announcements/article/102729"
+    },
+    {
+     "no": 13734,
+     "time": "2026-11-11T08:49:31.449Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "MEXC调整牛逼USDT合约最小变动价位",
+     "en": "MEXC Adjusts Tick Size for 牛逼USDT Futures",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13734",
+     "source_url": "https://www.mexc.com/announcements/article/mexc-adjusts-tick-size-for-牛逼usdt-futures-17827791539680"
+    },
+    {
+     "no": 13674,
+     "time": "2026-11-11T04:06:00.502Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Gate.io Announcements",
+     "zh": "Gate将下架FLYBRAIN永续合约交易市场",
+     "en": "Gate Will Delist FLYBRAIN Perpetual Futures Trading Market",
+     "coins": [
+      "GT"
+     ],
+     "url": "https://eqn.news/monitor/13674",
+     "source_url": "https://www.gate.com/announcements/article/102716"
+    },
+    {
+     "no": 13670,
+     "time": "2026-11-11T03:54:41.598Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Gate.io Announcements",
+     "zh": "Gate Futures Meme Zone 现已支持 MIHAO 的合约交易、交易机器人及跟单交易",
+     "en": "Gate Futures Meme Zone Now Supports Futures Trading, Trading Bots, and Copy Trading for MIHAO",
+     "coins": [
+      "GT",
+      "NOW"
+     ],
+     "url": "https://eqn.news/monitor/13670",
+     "source_url": "https://www.gate.com/announcements/article/102714"
+    },
+    {
+     "no": 13663,
+     "time": "2026-11-11T03:18:01.839Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "AMATUSDT 和 CSCOUSDT 期货最高杠杆调整 [2026年11月12日 (UTC)]",
+     "en": "Maximum Leverage Adjusted for AMATUSDT And CSCOUSDT Futures [Nov 12, 2026 (UTC)]",
+     "coins": [
+      "AMAT",
+      "CSCO"
+     ],
+     "url": "https://eqn.news/monitor/13663",
+     "source_url": "https://www.mexc.com/announcements/article/maximum-leverage-adjusted-for-amatusdt-and-cscousdt-futures-nov-12-2026-utc-17827791539668"
+    },
+    {
+     "no": 13581,
+     "time": "2026-11-10T16:16:05.931Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "INITUSDT 资金费率结算频率调整 [2026年11月10日 16:10 (UTC)]",
+     "en": "Adjustment to INITUSDT Funding Rate Settlement Frequency [Nov 10, 2026, 16:10 (UTC)]",
+     "coins": [
+      "INIT"
+     ],
+     "url": "https://eqn.news/monitor/13581",
+     "source_url": "https://www.mexc.com/announcements/article/adjustment-to-initusdt-funding-rate-settlement-frequency-nov-10-2026-16-17827791539665"
+    },
+    {
+     "no": 13579,
+     "time": "2026-11-10T16:14:59.864Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "INITUSDT 资金费率结算频率调整 [2026年11月10日 14:10 (UTC)]",
+     "en": "Adjustment to INITUSDT Funding Rate Settlement Frequency [Nov 10, 2026, 14:10 (UTC)]",
+     "coins": [
+      "INIT"
+     ],
+     "url": "https://eqn.news/monitor/13579",
+     "source_url": "https://www.mexc.com/announcements/article/adjustment-to-initusdt-funding-rate-settlement-frequency-nov-10-2026-14-17827791539665"
+    },
+    {
+     "no": 13518,
+     "time": "2026-11-10T13:31:20.788Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Gate.io Announcements",
+     "zh": "Gate完成Velodrome（VELODROME）合并并迁移至Aero（AERO）以及Aero（AERO）……",
+     "en": "Gate Completes the Merger and Migration of Velodrome (VELODROME) to Aero (AERO) and the Aero (AERO)...",
+     "coins": [
+      "AERO",
+      "GT"
+     ],
+     "url": "https://eqn.news/monitor/13518",
+     "source_url": "https://www.gate.com/announcements/article/102708"
+    },
+    {
+     "no": 13462,
+     "time": "2026-11-10T11:49:10.134Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "市场首创：MEXC将于11月10日上线WAT、FANG、ALNY和EQIX股票期货",
+     "en": "First in Market: MEXC to List WAT, FANG, ALNY and EQIX Stock Futures on Nov 10",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13462",
+     "source_url": "https://www.mexc.com/announcements/article/first-in-market-17827791539660"
+    },
+    {
+     "no": 13458,
+     "time": "2026-11-10T11:28:41.855Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "市场首创：MEXC将于2026年11月10日12:30（UTC）上线PYBOBO USDT-M永续合约",
+     "en": "First in Market: MEXC to List PYBOBO USDT-M Futures on Nov 10, 2026, 12:30 (UTC)",
+     "coins": [
+      "PYBOBO"
+     ],
+     "url": "https://eqn.news/monitor/13458",
+     "source_url": "https://www.mexc.com/announcements/article/first-in-market-17827791539659"
+    },
+    {
+     "no": 13457,
+     "time": "2026-11-10T11:24:36.548Z",
+     "channels": [
+      "tier3"
+     ],
+     "source": "Mexc Announcements",
+     "zh": "市场首创：MEXC将于2026年10月10日12:30（UTC）在创新区上线PYBOBOUSDT合约",
+     "en": "First in Market: MEXC to List PYBOBOUSDT Futures in Innovation Zone on Nov 10, 2026, 12:30 (UTC)",
+     "coins": [
+      "PYBOBO"
+     ],
+     "url": "https://eqn.news/monitor/13457",
+     "source_url": "https://www.mexc.com/announcements/article/first-in-market-17827791539658"
+    }
+   ],
+   "next_cursor": "1794309876548-13457"
+  }
+ }
+}

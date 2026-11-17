@@ -879,7 +879,10 @@ async def test_settings_repository_round_trips_announcement_settings() -> None:
         repo = SettingsRepository(db)
 
         defaults = await repo.get_announcement_settings()
-        assert defaults.record_exchanges == ["binance", "okx", "bybit", "gate", "bitget", "hyperliquid"]
+        assert defaults.record_exchanges == [
+            "binance", "okx", "bybit", "gate", "bitget", "hyperliquid",
+            "upbit", "bithumb", "mexc", "aster",
+        ]
         assert defaults.listing_delisting_alerts_enabled is True
         assert defaults.launchpool_alerts_enabled is True
         assert defaults.alert_max_age_minutes == 30

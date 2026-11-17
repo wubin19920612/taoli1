@@ -1,0 +1,722 @@
+{
+ "jsonrpc": "2.0",
+ "id": 2,
+ "result": {
+  "content": [
+   {
+    "text": "{\n  \"items\": [\n    {\n      \"no\": 15366,\n      \"time\": \"2026-11-17T02:00:12.758Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"币安生活方式黑色星期五新用户及推荐活动：最高可赚取26 USDT！\",\n      \"en\": \"Binance Lifestyle Black Friday New User & Referral Campaign: Earn Up to 26 USDT!\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15366\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2331\"\n    },\n    {\n      \"no\": 15279,\n      \"time\": \"2026-11-16T13:00:06.235Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"推出 Binance Pay Later：无需卖出加密货币即可消费，并在下月1日前享受0%利息\",\n      \"en\": \"Introducing Binance Pay Later: Spend Without Selling Your Crypto and Enjoy 0% Interest Until the First of Next Month\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15279\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2330\"\n    },\n    {\n      \"no\": 15232,\n      \"time\": \"2026-11-16T09:00:14.363Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"交易合约赢大奖：完成任务瓜分200 BNB奖励！\",\n      \"en\": \"Trade Futures & Win: Complete Tasks to Share 200 BNB in Rewards!\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15232\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2329\"\n    },\n    {\n      \"no\": 15179,\n      \"time\": \"2026-11-16T04:30:05.217Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"Binance x Pick n Pay：从黑色星期五到新年，以USDC赚取20%返现！\",\n      \"en\": \"Binance x Pick n Pay: From Black Friday to New Year, Earn 20% Cashback in USDC!\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15179\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2328\"\n    },\n    {\n      \"no\": 15150,\n      \"time\": \"2026-11-16T03:00:12.489Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"每日一词：参与“股票期权更胜一筹”知识问答，解锁BNB奖励！\",\n      \"en\": \"Word of the Day: Test Your Knowledge on “Stock Options Got Better” to Unlock BNB Rewards!\",\n      \"coins\": [\n        \"TSTBSC\",\n        \"TST\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15150\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2327\"\n    },\n    {\n      \"no\": 15139,\n      \"time\": \"2026-11-16T02:00:11.930Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"非洲移动货币买币：解锁 USDC 简单赚币活期的 20% 奖励阶梯 APR\",\n      \"en\": \"Africa Mobile Money Buy Crypto: Unlock a 20% Bonus Tiered APR on USDC Simple Earn Flexible\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15139\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2326\"\n    },\n    {\n      \"no\": 15121,\n      \"time\": \"2026-11-16T01:00:13.762Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"Binance 将通过 bStocks 支持 Microsoft Corporation (MSFT) 和 Applied Materials, Inc. (AMAT) 的现金股息发放\",\n      \"en\": \"Binance Will Support the Microsoft Corporation (MSFT) and Applied Materials, Inc. (AMAT) Cash Dividend Distribution via bStocks\",\n      \"coins\": [\n        \"AMATB\",\n        \"AMAT\",\n        \"MSFT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15121\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2325\"\n    },\n    {\n      \"no\": 15054,\n      \"time\": \"2026-11-15T15:15:04.890Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"币安合约将调整USDⓈ-本位ANTHROPICUSDT盘前永续合约的合约单位，并将交易对名称更改为USDⓈ-本位ANTUSDT盘前永续合约（2026-11-17）\",\n      \"en\": \"Binance Futures Will Adjust The Contract Size of USDⓈ-Margined ANTHROPICUSDT Pre-IPO Perp and Rename The Ticker to USDⓈ-Margined ANTUSDT Pre-IPO Perp (2026-11-17)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15054\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2324\"\n    },\n    {\n      \"no\": 14704,\n      \"time\": \"2026-11-14T03:52:41.029Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"恢复进展：更多网络的提现已重新开放（2026-11-14）\",\n      \"en\": \"Recovery Update: Withdrawals Reopened for More Networks (2026-11-14)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14704\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2323\"\n    },\n    {\n      \"no\": 14407,\n      \"time\": \"2026-11-13T11:30:14.727Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"关于USDⓈ保证金ANTHROPICUSDT Pre-IPO永续合约份数基准的公告\",\n      \"en\": \"Notice on Share Count Basis of USDⓈ-Margined ANTHROPICUSDT Pre-IPO Perp\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14407\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2322\"\n    },\n    {\n      \"no\": 14402,\n      \"time\": \"2026-11-13T11:00:08.775Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"Binance Alpha交易竞赛：交易Fanable (COLLECT)并瓜分价值20万美元的奖励（2026-11-13）\",\n      \"en\": \"Binance Alpha Trading Competition: Trade Collect on Fanable (COLLECT) and Share $200K Worth of Rewards (2026-11-13)\",\n      \"coins\": [\n        \"COLLECT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14402\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2321\"\n    },\n    {\n      \"no\": 14171,\n      \"time\": \"2026-11-12T16:54:12.719Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"币安完成安全事件受影响资产的覆盖；发布新的储备金证明\",\n      \"en\": \"Binance Completes Coverage of Assets Impacted in Security Incident; New Proof of Reserves Published\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14171\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2320\"\n    },\n    {\n      \"no\": 14085,\n      \"time\": \"2026-11-12T13:15:07.481Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"Binance Stocks University：交易 bStocks 瓜分 2,000 USDC！\",\n      \"en\": \"Binance Stocks University: Trade bStocks to Share 2,000 USDC!\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14085\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2319\"\n    },\n    {\n      \"no\": 14060,\n      \"time\": \"2026-11-12T12:00:17.506Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"币安广场排行榜上线：发现顶尖交易者并分享你的成就\",\n      \"en\": \"Introducing Binance Square Leaderboards: Discover Top Traders and Share Your Achievements\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14060\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2318\"\n    },\n    {\n      \"no\": 14058,\n      \"time\": \"2026-11-12T11:00:23.695Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"Binance Alpha交易竞赛：交易LAB (LAB) 瓜分价值20万美元奖励（2026-11-12）\",\n      \"en\": \"Binance Alpha Trading Competition: Trade LAB (LAB) and Share $200K Worth of Rewards (2026-11-12)\",\n      \"coins\": [\n        \"LAB\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14058\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2317\"\n    },\n    {\n      \"no\": 14038,\n      \"time\": \"2026-11-12T10:00:21.814Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"关于币安股票交易美股ADR费用的通知 - 2026年10月\",\n      \"en\": \"Notice on ADR Fees for US Stocks on Binance Stock Trading - October 2026\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14038\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2316\"\n    },\n    {\n      \"no\": 14026,\n      \"time\": \"2026-11-12T09:00:09.552Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"币安 Lite Loan 活动延期：享受简单借贷，服务费五折优惠！（2026-11-13）\",\n      \"en\": \"Binance Lite Loan Promotion Extended: Enjoy Simple Borrowing with 50% Off Service Fee! (2026-11-13)\",\n      \"coins\": [\n        \"LITE\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14026\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2315\"\n    },\n    {\n      \"no\": 14009,\n      \"time\": \"2026-11-12T08:30:17.787Z\",\n      \"channels\": [\n        \"binance\",\n        \"earn\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"Binance Earn：双币投资支持 HYPE\",\n      \"en\": \"Binance Earn: Dual Investment Supports HYPE\",\n      \"coins\": [\n        \"DUAL\",\n        \"HYPE\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14009\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2314\"\n    },\n    {\n      \"no\": 13995,\n      \"time\": \"2026-11-12T08:00:10.234Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"Binance Button Game：参与游戏赢取价值3万美元的Anthropic bStocks或USDC！\",\n      \"en\": \"Binance Button Game: Play to Win $30,000 in Anthropic bStocks or USDC!\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13995\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2313\"\n    },\n    {\n      \"no\": 13962,\n      \"time\": \"2026-11-12T06:00:07.075Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"币安更新商品期权结算价格规则\",\n      \"en\": \"Binance Updates Commodity Options Settlement Price Rule\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13962\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2312\"\n    },\n    {\n      \"no\": 13929,\n      \"time\": \"2026-11-12T03:00:11.651Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"现货交易对步长更新（2026-11-19）\",\n      \"en\": \"Updates on Step Size for Spot Trading Pairs (2026-11-19)\",\n      \"coins\": [\n        \"SPOT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13929\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2311\"\n    },\n    {\n      \"no\": 13921,\n      \"time\": \"2026-11-12T02:00:11.789Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"Binance Wallet 将停止支持 Blast\",\n      \"en\": \"Binance Wallet to Discontinue Support for Blast\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13921\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2310\"\n    },\n    {\n      \"no\": 13780,\n      \"time\": \"2026-11-11T10:00:12.996Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"Binance Convert与Buy/Sell现已支持法币购买bStocks\",\n      \"en\": \"Binance Convert and Buy/Sell Now Support Fiat Purchases of bStocks\",\n      \"coins\": [\n        \"NOW\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13780\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2309\"\n    },\n    {\n      \"no\": 13775,\n      \"time\": \"2026-11-11T09:45:20.261Z\",\n      \"channels\": [\n        \"main\",\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"币安合约将上线多个 TradFi 以 USDⓈ 为保证金的永续合约（2026-11-12）\",\n      \"en\": \"Binance Futures Will Launch Multiple TradFi USDⓈ-Margined Perpetual Contracts (2026-11-12)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/main/13775\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2308\"\n    },\n    {\n      \"no\": 13714,\n      \"time\": \"2026-11-11T08:00:04.561Z\",\n      \"channels\": [\n        \"binance\",\n        \"earn\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"为您的首次定期购买注资 - 存入 USD 并赚取奖励\",\n      \"en\": \"Fund Your First Recurring Buy - Deposit USD and Earn Rewards\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13714\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2307\"\n    },\n    {\n      \"no\": 13678,\n      \"time\": \"2026-11-11T05:00:32.803Z\",\n      \"channels\": [\n        \"main\",\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"币安合约将上线以USDⓈ为保证金的HYPEUSDC和TRXUSDC永续合约（2026-11-11）\",\n      \"en\": \"Binance Futures Will Launch USDⓈ-Margined HYPEUSDC and TRXUSDC Perpetual Contracts (2026-11-11)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/main/13678\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2306\"\n    },\n    {\n      \"no\": 13672,\n      \"time\": \"2026-11-11T04:00:12.863Z\",\n      \"channels\": [\n        \"binance\",\n        \"earn\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"Binance Earn 收益竞技场：本周全新限时优惠，最高可享 20% APR！（2026-11-11）\",\n      \"en\": \"Binance Earn Yield Arena: Earn Up to 20% APR With This Week’s New Limited-Time Offers! (2026-11-11)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13672\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2305\"\n    },\n    {\n      \"no\": 13661,\n      \"time\": \"2026-11-11T03:00:06.373Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"币安将通过 bStocks 支持 Sandisk Corporation (SNDK) 的 1 拆 8 正向股票拆分\",\n      \"en\": \"Binance Will Support Sandisk Corporation (SNDK) 8-for-1 Forward Stock Split via bStocks\",\n      \"coins\": [\n        \"SNDK\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13661\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2304\"\n    },\n    {\n      \"no\": 13658,\n      \"time\": \"2026-11-11T02:30:28.730Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"币安合约将调整U本位SNDKUSDT永续合约的合约单位（2026-11-20）\",\n      \"en\": \"Binance Futures Will Adjust The Contract Size of USDⓈ-Margined SNDKUSDT Perpetual Contract (2026-11-20)\",\n      \"coins\": [\n        \"SNDK\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13658\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2303\"\n    },\n    {\n      \"no\": 13646,\n      \"time\": \"2026-11-11T00:00:37.175Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"币安学院比特币页面：2026年11月完成测验，赢取BTC奖励！\",\n      \"en\": \"Binance Academy Bitcoin Page: Complete Quiz to Earn BTC Rewards This November 2026!\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13646\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2302\"\n    },\n    {\n      \"no\": 13444,\n      \"time\": \"2026-11-10T10:31:21.675Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"币安合约将于2026年11月10日结束USDⓈ保证金BULLAUSDT永续合约的最后价格保护期\",\n      \"en\": \"Binance Futures Will End Last Price Protected Period on USDⓈ-Margined BULLAUSDT Perpetual Contract (2026-11-10)\",\n      \"coins\": [\n        \"BULLA\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13444\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2300\"\n    },\n    {\n      \"no\": 13410,\n      \"time\": \"2026-11-10T09:00:04.149Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"全仓保证金与组合保证金抵押率更新（2026-11-13）\",\n      \"en\": \"Update on the Collateral Ratio Under Cross Margin and Portfolio Margin (2026-11-13)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13410\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2299\"\n    },\n    {\n      \"no\": 13406,\n      \"time\": \"2026-11-10T08:30:10.193Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"重要提示：与某些加密平台的交易\",\n      \"en\": \"Important: Transactions with Certain Crypto Platforms\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13406\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2301\"\n    },\n    {\n      \"no\": 13395,\n      \"time\": \"2026-11-10T08:00:11.244Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"币安推出限时合约吃单方活动推广（2026-11-10）\",\n      \"en\": \"Binance Launches Limited-Time Futures Taker Program Promotion (2026-11-10)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13395\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2298\"\n    },\n    {\n      \"no\": 13385,\n      \"time\": \"2026-11-10T07:00:04.699Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"庆祝新年：成为币安VIP，解锁专属好礼\",\n      \"en\": \"Celebrating the New Year: Become A Binance VIP To Unlock Exclusive Gifts\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13385\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2297\"\n    },\n    {\n      \"no\": 13324,\n      \"time\": \"2026-11-10T03:00:05.592Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"多个USDⓈ-M永续合约最小价格变动单位更新（2026-11-11）\",\n      \"en\": \"Updates on Tick Size for Multiple USDⓈ-M Perpetual Futures Contracts (2026-11-11)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13324\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2296\"\n    },\n    {\n      \"no\": 13319,\n      \"time\": \"2026-11-10T02:30:21.231Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"币安合约将于2026年11月19日调整USDⓈ本位BITOUSDT永续合约的合约单位\",\n      \"en\": \"Binance Futures Will Adjust The Contract Size of USDⓈ-Margined BITOUSDT Perpetual Contract (2026-11-19)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13319\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2295\"\n    },\n    {\n      \"no\": 13299,\n      \"time\": \"2026-11-10T01:00:05.992Z\",\n      \"channels\": [\n        \"binance\",\n        \"earn\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"币安社区第三届感恩活动\",\n      \"en\": \"Binance’s Community 3rd Appreciation Campaign\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13299\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2294\"\n    },\n    {\n      \"no\": 12980,\n      \"time\": \"2026-11-09T06:00:24.744Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"推出子联盟：在Binance上灵活共享佣金\",\n      \"en\": \"Introducing Sub-Affiliate: Flexible Commission Sharing on Binance\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/12980\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2293\"\n    },\n    {\n      \"no\": 12927,\n      \"time\": \"2026-11-09T02:00:10.860Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"每日一词：参与“Choose Your Binance AI”知识问答，解锁BNB奖励！\",\n      \"en\": \"Word of the Day: Test Your Knowledge on “Choose Your Binance AI” to Unlock BNB Rewards!\",\n      \"coins\": [\n        \"TST\",\n        \"TSTBSC\"\n      ],\n      \"url\": \"https://eqn.news/monitor/12927\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2292\"\n    },\n    {\n      \"no\": 12074,\n      \"time\": \"2026-11-06T08:00:04.208Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"Binance推出限时现货吃单方计划促销活动（2026-11-09）\",\n      \"en\": \"Binance Launches Limited-Time Spot Taker Program Promotion (2026-11-09)\",\n      \"coins\": [\n        \"SPOT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/12074\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2291\"\n    },\n    {\n      \"no\": 11934,\n      \"time\": \"2026-11-06T03:06:26.100Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"恢复进展第9号：更多资产的提现将重新开放（2026-11-06）\",\n      \"en\": \"Recovery Update #9: Withdrawals for More Assets to Reopen (2026-11-06)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/11934\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2290\"\n    },\n    {\n      \"no\": 11894,\n      \"time\": \"2026-11-06T01:00:41.634Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"Binance将通过bStocks支持International Business Machines Corporation (IBM)、Apple Inc. (AAPL)、Corning Incorporated (GLW)和Eli Lilly and Company (LLY)的现金股息发放\",\n      \"en\": \"Binance Will Support the International Business Machines Corporation (IBM), Apple Inc. (AAPL), Corning Incorporated (GLW), and Eli Lilly and Company (LLY) Cash Dividend Distribution via bStocks\",\n      \"coins\": [\n        \"AAPL\",\n        \"GLW\",\n        \"GLWB\",\n        \"IBMB\",\n        \"IBM\",\n        \"LLYB\",\n        \"LLY\"\n      ],\n      \"url\": \"https://eqn.news/monitor/11894\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2289\"\n    },\n    {\n      \"no\": 11513,\n      \"time\": \"2026-11-05T10:00:07.666Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"11 月联盟双星计划：联盟奖励高达 12,000 USDC，新推荐奖励高达 10 USDC！\",\n      \"en\": \"November Affiliate Dual-Star Program: Affiliate Rewards Up to 12,000 USDC & New Referral Rewards Up to 10 USDC!\",\n      \"coins\": [\n        \"DUAL\",\n        \"UPROBINHOOD\"\n      ],\n      \"url\": \"https://eqn.news/monitor/11513\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2288\"\n    },\n    {\n      \"no\": 11509,\n      \"time\": \"2026-11-05T09:30:15.538Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"11月推荐锦标赛：邀请好友，攀登双人排行榜，赢取高达3000 USDC奖励\",\n      \"en\": \"November Referral Tournament: Invite Friends, Climb the Dual Leaderboards & Earn Up to 3,000 USDC\",\n      \"coins\": [\n        \"DUAL\",\n        \"UPROBINHOOD\"\n      ],\n      \"url\": \"https://eqn.news/monitor/11509\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2287\"\n    },\n    {\n      \"no\": 11475,\n      \"time\": \"2026-11-05T08:00:09.250Z\",\n      \"channels\": [\n        \"binance\",\n        \"earn\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"币安社区回馈第二轮奖励活动\",\n      \"en\": \"Binance’s Community Appreciation 2nd Earn Campaign\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/11475\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2286\"\n    },\n    {\n      \"no\": 11454,\n      \"time\": \"2026-11-05T07:00:07.963Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"关于三星USDT TradFi永续合约股息调整流程的重要更新（2026年11月6日）\",\n      \"en\": \"Important Updates on Dividend Adjustment Process of SAMSUNGUSDT TradFi Perpetual Contract (2026-11-06)\",\n      \"coins\": [\n        \"SAMSUNG\"\n      ],\n      \"url\": \"https://eqn.news/monitor/11454\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2285\"\n    },\n    {\n      \"no\": 11410,\n      \"time\": \"2026-11-05T03:04:51.734Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"安全事件 | 恢复更新 #8：更多资产提款将重新开放（2026-11-05）\",\n      \"en\": \"Security Incident | Recovery Update #8: Withdrawals for More Assets to Reopen (2026-11-05)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/11410\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2284\"\n    },\n    {\n      \"no\": 11262,\n      \"time\": \"2026-11-04T15:23:55.860Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"安全事件 | 恢复更新 #7：98% 的被盗资产已恢复，新的 PoR 快照已扩大覆盖范围 (2026-11-04)\",\n      \"en\": \"Security Incident | Recovery Update #7: 98% of Stolen Assets Replenished and New PoR Snapshot With Expanded Coverage (2026-11-04)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/11262\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2283\"\n    },\n    {\n      \"no\": 11151,\n      \"time\": \"2026-11-04T06:00:02.597Z\",\n      \"channels\": [\n        \"binance\"\n      ],\n      \"source\": \"Binance EN\",\n      \"zh\": \"币安期货更新：TradFi Perps交易手续费折扣（2026年11月4日）\",\n      \"en\": \"Binance Futures Updates Trading Fee Discount for TradFi Perps (2026-11-04)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/11151\",\n      \"source_url\": \"https://api.eqn.news/public/archive/bn-2282\"\n    }\n  ],\n  \"next_cursor\": \"1793772002597-11151\"\n}",
+    "type": "text"
+   }
+  ],
+  "isError": false,
+  "structuredContent": {
+   "items": [
+    {
+     "no": 15366,
+     "time": "2026-11-17T02:00:12.758Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "币安生活方式黑色星期五新用户及推荐活动：最高可赚取26 USDT！",
+     "en": "Binance Lifestyle Black Friday New User & Referral Campaign: Earn Up to 26 USDT!",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15366",
+     "source_url": "https://api.eqn.news/public/archive/bn-2331"
+    },
+    {
+     "no": 15279,
+     "time": "2026-11-16T13:00:06.235Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "推出 Binance Pay Later：无需卖出加密货币即可消费，并在下月1日前享受0%利息",
+     "en": "Introducing Binance Pay Later: Spend Without Selling Your Crypto and Enjoy 0% Interest Until the First of Next Month",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15279",
+     "source_url": "https://api.eqn.news/public/archive/bn-2330"
+    },
+    {
+     "no": 15232,
+     "time": "2026-11-16T09:00:14.363Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "交易合约赢大奖：完成任务瓜分200 BNB奖励！",
+     "en": "Trade Futures & Win: Complete Tasks to Share 200 BNB in Rewards!",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15232",
+     "source_url": "https://api.eqn.news/public/archive/bn-2329"
+    },
+    {
+     "no": 15179,
+     "time": "2026-11-16T04:30:05.217Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "Binance x Pick n Pay：从黑色星期五到新年，以USDC赚取20%返现！",
+     "en": "Binance x Pick n Pay: From Black Friday to New Year, Earn 20% Cashback in USDC!",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15179",
+     "source_url": "https://api.eqn.news/public/archive/bn-2328"
+    },
+    {
+     "no": 15150,
+     "time": "2026-11-16T03:00:12.489Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "每日一词：参与“股票期权更胜一筹”知识问答，解锁BNB奖励！",
+     "en": "Word of the Day: Test Your Knowledge on “Stock Options Got Better” to Unlock BNB Rewards!",
+     "coins": [
+      "TSTBSC",
+      "TST"
+     ],
+     "url": "https://eqn.news/monitor/15150",
+     "source_url": "https://api.eqn.news/public/archive/bn-2327"
+    },
+    {
+     "no": 15139,
+     "time": "2026-11-16T02:00:11.930Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "非洲移动货币买币：解锁 USDC 简单赚币活期的 20% 奖励阶梯 APR",
+     "en": "Africa Mobile Money Buy Crypto: Unlock a 20% Bonus Tiered APR on USDC Simple Earn Flexible",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15139",
+     "source_url": "https://api.eqn.news/public/archive/bn-2326"
+    },
+    {
+     "no": 15121,
+     "time": "2026-11-16T01:00:13.762Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "Binance 将通过 bStocks 支持 Microsoft Corporation (MSFT) 和 Applied Materials, Inc. (AMAT) 的现金股息发放",
+     "en": "Binance Will Support the Microsoft Corporation (MSFT) and Applied Materials, Inc. (AMAT) Cash Dividend Distribution via bStocks",
+     "coins": [
+      "AMATB",
+      "AMAT",
+      "MSFT"
+     ],
+     "url": "https://eqn.news/monitor/15121",
+     "source_url": "https://api.eqn.news/public/archive/bn-2325"
+    },
+    {
+     "no": 15054,
+     "time": "2026-11-15T15:15:04.890Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "币安合约将调整USDⓈ-本位ANTHROPICUSDT盘前永续合约的合约单位，并将交易对名称更改为USDⓈ-本位ANTUSDT盘前永续合约（2026-11-17）",
+     "en": "Binance Futures Will Adjust The Contract Size of USDⓈ-Margined ANTHROPICUSDT Pre-IPO Perp and Rename The Ticker to USDⓈ-Margined ANTUSDT Pre-IPO Perp (2026-11-17)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15054",
+     "source_url": "https://api.eqn.news/public/archive/bn-2324"
+    },
+    {
+     "no": 14704,
+     "time": "2026-11-14T03:52:41.029Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "恢复进展：更多网络的提现已重新开放（2026-11-14）",
+     "en": "Recovery Update: Withdrawals Reopened for More Networks (2026-11-14)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14704",
+     "source_url": "https://api.eqn.news/public/archive/bn-2323"
+    },
+    {
+     "no": 14407,
+     "time": "2026-11-13T11:30:14.727Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "关于USDⓈ保证金ANTHROPICUSDT Pre-IPO永续合约份数基准的公告",
+     "en": "Notice on Share Count Basis of USDⓈ-Margined ANTHROPICUSDT Pre-IPO Perp",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14407",
+     "source_url": "https://api.eqn.news/public/archive/bn-2322"
+    },
+    {
+     "no": 14402,
+     "time": "2026-11-13T11:00:08.775Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "Binance Alpha交易竞赛：交易Fanable (COLLECT)并瓜分价值20万美元的奖励（2026-11-13）",
+     "en": "Binance Alpha Trading Competition: Trade Collect on Fanable (COLLECT) and Share $200K Worth of Rewards (2026-11-13)",
+     "coins": [
+      "COLLECT"
+     ],
+     "url": "https://eqn.news/monitor/14402",
+     "source_url": "https://api.eqn.news/public/archive/bn-2321"
+    },
+    {
+     "no": 14171,
+     "time": "2026-11-12T16:54:12.719Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "币安完成安全事件受影响资产的覆盖；发布新的储备金证明",
+     "en": "Binance Completes Coverage of Assets Impacted in Security Incident; New Proof of Reserves Published",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14171",
+     "source_url": "https://api.eqn.news/public/archive/bn-2320"
+    },
+    {
+     "no": 14085,
+     "time": "2026-11-12T13:15:07.481Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "Binance Stocks University：交易 bStocks 瓜分 2,000 USDC！",
+     "en": "Binance Stocks University: Trade bStocks to Share 2,000 USDC!",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14085",
+     "source_url": "https://api.eqn.news/public/archive/bn-2319"
+    },
+    {
+     "no": 14060,
+     "time": "2026-11-12T12:00:17.506Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "币安广场排行榜上线：发现顶尖交易者并分享你的成就",
+     "en": "Introducing Binance Square Leaderboards: Discover Top Traders and Share Your Achievements",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14060",
+     "source_url": "https://api.eqn.news/public/archive/bn-2318"
+    },
+    {
+     "no": 14058,
+     "time": "2026-11-12T11:00:23.695Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "Binance Alpha交易竞赛：交易LAB (LAB) 瓜分价值20万美元奖励（2026-11-12）",
+     "en": "Binance Alpha Trading Competition: Trade LAB (LAB) and Share $200K Worth of Rewards (2026-11-12)",
+     "coins": [
+      "LAB"
+     ],
+     "url": "https://eqn.news/monitor/14058",
+     "source_url": "https://api.eqn.news/public/archive/bn-2317"
+    },
+    {
+     "no": 14038,
+     "time": "2026-11-12T10:00:21.814Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "关于币安股票交易美股ADR费用的通知 - 2026年10月",
+     "en": "Notice on ADR Fees for US Stocks on Binance Stock Trading - October 2026",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14038",
+     "source_url": "https://api.eqn.news/public/archive/bn-2316"
+    },
+    {
+     "no": 14026,
+     "time": "2026-11-12T09:00:09.552Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "币安 Lite Loan 活动延期：享受简单借贷，服务费五折优惠！（2026-11-13）",
+     "en": "Binance Lite Loan Promotion Extended: Enjoy Simple Borrowing with 50% Off Service Fee! (2026-11-13)",
+     "coins": [
+      "LITE"
+     ],
+     "url": "https://eqn.news/monitor/14026",
+     "source_url": "https://api.eqn.news/public/archive/bn-2315"
+    },
+    {
+     "no": 14009,
+     "time": "2026-11-12T08:30:17.787Z",
+     "channels": [
+      "binance",
+      "earn"
+     ],
+     "source": "Binance EN",
+     "zh": "Binance Earn：双币投资支持 HYPE",
+     "en": "Binance Earn: Dual Investment Supports HYPE",
+     "coins": [
+      "DUAL",
+      "HYPE"
+     ],
+     "url": "https://eqn.news/monitor/14009",
+     "source_url": "https://api.eqn.news/public/archive/bn-2314"
+    },
+    {
+     "no": 13995,
+     "time": "2026-11-12T08:00:10.234Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "Binance Button Game：参与游戏赢取价值3万美元的Anthropic bStocks或USDC！",
+     "en": "Binance Button Game: Play to Win $30,000 in Anthropic bStocks or USDC!",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13995",
+     "source_url": "https://api.eqn.news/public/archive/bn-2313"
+    },
+    {
+     "no": 13962,
+     "time": "2026-11-12T06:00:07.075Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "币安更新商品期权结算价格规则",
+     "en": "Binance Updates Commodity Options Settlement Price Rule",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13962",
+     "source_url": "https://api.eqn.news/public/archive/bn-2312"
+    },
+    {
+     "no": 13929,
+     "time": "2026-11-12T03:00:11.651Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "现货交易对步长更新（2026-11-19）",
+     "en": "Updates on Step Size for Spot Trading Pairs (2026-11-19)",
+     "coins": [
+      "SPOT"
+     ],
+     "url": "https://eqn.news/monitor/13929",
+     "source_url": "https://api.eqn.news/public/archive/bn-2311"
+    },
+    {
+     "no": 13921,
+     "time": "2026-11-12T02:00:11.789Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "Binance Wallet 将停止支持 Blast",
+     "en": "Binance Wallet to Discontinue Support for Blast",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13921",
+     "source_url": "https://api.eqn.news/public/archive/bn-2310"
+    },
+    {
+     "no": 13780,
+     "time": "2026-11-11T10:00:12.996Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "Binance Convert与Buy/Sell现已支持法币购买bStocks",
+     "en": "Binance Convert and Buy/Sell Now Support Fiat Purchases of bStocks",
+     "coins": [
+      "NOW"
+     ],
+     "url": "https://eqn.news/monitor/13780",
+     "source_url": "https://api.eqn.news/public/archive/bn-2309"
+    },
+    {
+     "no": 13775,
+     "time": "2026-11-11T09:45:20.261Z",
+     "channels": [
+      "main",
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "币安合约将上线多个 TradFi 以 USDⓈ 为保证金的永续合约（2026-11-12）",
+     "en": "Binance Futures Will Launch Multiple TradFi USDⓈ-Margined Perpetual Contracts (2026-11-12)",
+     "coins": [],
+     "url": "https://eqn.news/main/13775",
+     "source_url": "https://api.eqn.news/public/archive/bn-2308"
+    },
+    {
+     "no": 13714,
+     "time": "2026-11-11T08:00:04.561Z",
+     "channels": [
+      "binance",
+      "earn"
+     ],
+     "source": "Binance EN",
+     "zh": "为您的首次定期购买注资 - 存入 USD 并赚取奖励",
+     "en": "Fund Your First Recurring Buy - Deposit USD and Earn Rewards",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13714",
+     "source_url": "https://api.eqn.news/public/archive/bn-2307"
+    },
+    {
+     "no": 13678,
+     "time": "2026-11-11T05:00:32.803Z",
+     "channels": [
+      "main",
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "币安合约将上线以USDⓈ为保证金的HYPEUSDC和TRXUSDC永续合约（2026-11-11）",
+     "en": "Binance Futures Will Launch USDⓈ-Margined HYPEUSDC and TRXUSDC Perpetual Contracts (2026-11-11)",
+     "coins": [],
+     "url": "https://eqn.news/main/13678",
+     "source_url": "https://api.eqn.news/public/archive/bn-2306"
+    },
+    {
+     "no": 13672,
+     "time": "2026-11-11T04:00:12.863Z",
+     "channels": [
+      "binance",
+      "earn"
+     ],
+     "source": "Binance EN",
+     "zh": "Binance Earn 收益竞技场：本周全新限时优惠，最高可享 20% APR！（2026-11-11）",
+     "en": "Binance Earn Yield Arena: Earn Up to 20% APR With This Week’s New Limited-Time Offers! (2026-11-11)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13672",
+     "source_url": "https://api.eqn.news/public/archive/bn-2305"
+    },
+    {
+     "no": 13661,
+     "time": "2026-11-11T03:00:06.373Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "币安将通过 bStocks 支持 Sandisk Corporation (SNDK) 的 1 拆 8 正向股票拆分",
+     "en": "Binance Will Support Sandisk Corporation (SNDK) 8-for-1 Forward Stock Split via bStocks",
+     "coins": [
+      "SNDK"
+     ],
+     "url": "https://eqn.news/monitor/13661",
+     "source_url": "https://api.eqn.news/public/archive/bn-2304"
+    },
+    {
+     "no": 13658,
+     "time": "2026-11-11T02:30:28.730Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "币安合约将调整U本位SNDKUSDT永续合约的合约单位（2026-11-20）",
+     "en": "Binance Futures Will Adjust The Contract Size of USDⓈ-Margined SNDKUSDT Perpetual Contract (2026-11-20)",
+     "coins": [
+      "SNDK"
+     ],
+     "url": "https://eqn.news/monitor/13658",
+     "source_url": "https://api.eqn.news/public/archive/bn-2303"
+    },
+    {
+     "no": 13646,
+     "time": "2026-11-11T00:00:37.175Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "币安学院比特币页面：2026年11月完成测验，赢取BTC奖励！",
+     "en": "Binance Academy Bitcoin Page: Complete Quiz to Earn BTC Rewards This November 2026!",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13646",
+     "source_url": "https://api.eqn.news/public/archive/bn-2302"
+    },
+    {
+     "no": 13444,
+     "time": "2026-11-10T10:31:21.675Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "币安合约将于2026年11月10日结束USDⓈ保证金BULLAUSDT永续合约的最后价格保护期",
+     "en": "Binance Futures Will End Last Price Protected Period on USDⓈ-Margined BULLAUSDT Perpetual Contract (2026-11-10)",
+     "coins": [
+      "BULLA"
+     ],
+     "url": "https://eqn.news/monitor/13444",
+     "source_url": "https://api.eqn.news/public/archive/bn-2300"
+    },
+    {
+     "no": 13410,
+     "time": "2026-11-10T09:00:04.149Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "全仓保证金与组合保证金抵押率更新（2026-11-13）",
+     "en": "Update on the Collateral Ratio Under Cross Margin and Portfolio Margin (2026-11-13)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13410",
+     "source_url": "https://api.eqn.news/public/archive/bn-2299"
+    },
+    {
+     "no": 13406,
+     "time": "2026-11-10T08:30:10.193Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "重要提示：与某些加密平台的交易",
+     "en": "Important: Transactions with Certain Crypto Platforms",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13406",
+     "source_url": "https://api.eqn.news/public/archive/bn-2301"
+    },
+    {
+     "no": 13395,
+     "time": "2026-11-10T08:00:11.244Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "币安推出限时合约吃单方活动推广（2026-11-10）",
+     "en": "Binance Launches Limited-Time Futures Taker Program Promotion (2026-11-10)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13395",
+     "source_url": "https://api.eqn.news/public/archive/bn-2298"
+    },
+    {
+     "no": 13385,
+     "time": "2026-11-10T07:00:04.699Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "庆祝新年：成为币安VIP，解锁专属好礼",
+     "en": "Celebrating the New Year: Become A Binance VIP To Unlock Exclusive Gifts",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13385",
+     "source_url": "https://api.eqn.news/public/archive/bn-2297"
+    },
+    {
+     "no": 13324,
+     "time": "2026-11-10T03:00:05.592Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "多个USDⓈ-M永续合约最小价格变动单位更新（2026-11-11）",
+     "en": "Updates on Tick Size for Multiple USDⓈ-M Perpetual Futures Contracts (2026-11-11)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13324",
+     "source_url": "https://api.eqn.news/public/archive/bn-2296"
+    },
+    {
+     "no": 13319,
+     "time": "2026-11-10T02:30:21.231Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "币安合约将于2026年11月19日调整USDⓈ本位BITOUSDT永续合约的合约单位",
+     "en": "Binance Futures Will Adjust The Contract Size of USDⓈ-Margined BITOUSDT Perpetual Contract (2026-11-19)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13319",
+     "source_url": "https://api.eqn.news/public/archive/bn-2295"
+    },
+    {
+     "no": 13299,
+     "time": "2026-11-10T01:00:05.992Z",
+     "channels": [
+      "binance",
+      "earn"
+     ],
+     "source": "Binance EN",
+     "zh": "币安社区第三届感恩活动",
+     "en": "Binance’s Community 3rd Appreciation Campaign",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13299",
+     "source_url": "https://api.eqn.news/public/archive/bn-2294"
+    },
+    {
+     "no": 12980,
+     "time": "2026-11-09T06:00:24.744Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "推出子联盟：在Binance上灵活共享佣金",
+     "en": "Introducing Sub-Affiliate: Flexible Commission Sharing on Binance",
+     "coins": [],
+     "url": "https://eqn.news/monitor/12980",
+     "source_url": "https://api.eqn.news/public/archive/bn-2293"
+    },
+    {
+     "no": 12927,
+     "time": "2026-11-09T02:00:10.860Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "每日一词：参与“Choose Your Binance AI”知识问答，解锁BNB奖励！",
+     "en": "Word of the Day: Test Your Knowledge on “Choose Your Binance AI” to Unlock BNB Rewards!",
+     "coins": [
+      "TST",
+      "TSTBSC"
+     ],
+     "url": "https://eqn.news/monitor/12927",
+     "source_url": "https://api.eqn.news/public/archive/bn-2292"
+    },
+    {
+     "no": 12074,
+     "time": "2026-11-06T08:00:04.208Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "Binance推出限时现货吃单方计划促销活动（2026-11-09）",
+     "en": "Binance Launches Limited-Time Spot Taker Program Promotion (2026-11-09)",
+     "coins": [
+      "SPOT"
+     ],
+     "url": "https://eqn.news/monitor/12074",
+     "source_url": "https://api.eqn.news/public/archive/bn-2291"
+    },
+    {
+     "no": 11934,
+     "time": "2026-11-06T03:06:26.100Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "恢复进展第9号：更多资产的提现将重新开放（2026-11-06）",
+     "en": "Recovery Update #9: Withdrawals for More Assets to Reopen (2026-11-06)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/11934",
+     "source_url": "https://api.eqn.news/public/archive/bn-2290"
+    },
+    {
+     "no": 11894,
+     "time": "2026-11-06T01:00:41.634Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "Binance将通过bStocks支持International Business Machines Corporation (IBM)、Apple Inc. (AAPL)、Corning Incorporated (GLW)和Eli Lilly and Company (LLY)的现金股息发放",
+     "en": "Binance Will Support the International Business Machines Corporation (IBM), Apple Inc. (AAPL), Corning Incorporated (GLW), and Eli Lilly and Company (LLY) Cash Dividend Distribution via bStocks",
+     "coins": [
+      "AAPL",
+      "GLW",
+      "GLWB",
+      "IBMB",
+      "IBM",
+      "LLYB",
+      "LLY"
+     ],
+     "url": "https://eqn.news/monitor/11894",
+     "source_url": "https://api.eqn.news/public/archive/bn-2289"
+    },
+    {
+     "no": 11513,
+     "time": "2026-11-05T10:00:07.666Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "11 月联盟双星计划：联盟奖励高达 12,000 USDC，新推荐奖励高达 10 USDC！",
+     "en": "November Affiliate Dual-Star Program: Affiliate Rewards Up to 12,000 USDC & New Referral Rewards Up to 10 USDC!",
+     "coins": [
+      "DUAL",
+      "UPROBINHOOD"
+     ],
+     "url": "https://eqn.news/monitor/11513",
+     "source_url": "https://api.eqn.news/public/archive/bn-2288"
+    },
+    {
+     "no": 11509,
+     "time": "2026-11-05T09:30:15.538Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "11月推荐锦标赛：邀请好友，攀登双人排行榜，赢取高达3000 USDC奖励",
+     "en": "November Referral Tournament: Invite Friends, Climb the Dual Leaderboards & Earn Up to 3,000 USDC",
+     "coins": [
+      "DUAL",
+      "UPROBINHOOD"
+     ],
+     "url": "https://eqn.news/monitor/11509",
+     "source_url": "https://api.eqn.news/public/archive/bn-2287"
+    },
+    {
+     "no": 11475,
+     "time": "2026-11-05T08:00:09.250Z",
+     "channels": [
+      "binance",
+      "earn"
+     ],
+     "source": "Binance EN",
+     "zh": "币安社区回馈第二轮奖励活动",
+     "en": "Binance’s Community Appreciation 2nd Earn Campaign",
+     "coins": [],
+     "url": "https://eqn.news/monitor/11475",
+     "source_url": "https://api.eqn.news/public/archive/bn-2286"
+    },
+    {
+     "no": 11454,
+     "time": "2026-11-05T07:00:07.963Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "关于三星USDT TradFi永续合约股息调整流程的重要更新（2026年11月6日）",
+     "en": "Important Updates on Dividend Adjustment Process of SAMSUNGUSDT TradFi Perpetual Contract (2026-11-06)",
+     "coins": [
+      "SAMSUNG"
+     ],
+     "url": "https://eqn.news/monitor/11454",
+     "source_url": "https://api.eqn.news/public/archive/bn-2285"
+    },
+    {
+     "no": 11410,
+     "time": "2026-11-05T03:04:51.734Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "安全事件 | 恢复更新 #8：更多资产提款将重新开放（2026-11-05）",
+     "en": "Security Incident | Recovery Update #8: Withdrawals for More Assets to Reopen (2026-11-05)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/11410",
+     "source_url": "https://api.eqn.news/public/archive/bn-2284"
+    },
+    {
+     "no": 11262,
+     "time": "2026-11-04T15:23:55.860Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "安全事件 | 恢复更新 #7：98% 的被盗资产已恢复，新的 PoR 快照已扩大覆盖范围 (2026-11-04)",
+     "en": "Security Incident | Recovery Update #7: 98% of Stolen Assets Replenished and New PoR Snapshot With Expanded Coverage (2026-11-04)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/11262",
+     "source_url": "https://api.eqn.news/public/archive/bn-2283"
+    },
+    {
+     "no": 11151,
+     "time": "2026-11-04T06:00:02.597Z",
+     "channels": [
+      "binance"
+     ],
+     "source": "Binance EN",
+     "zh": "币安期货更新：TradFi Perps交易手续费折扣（2026年11月4日）",
+     "en": "Binance Futures Updates Trading Fee Discount for TradFi Perps (2026-11-04)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/11151",
+     "source_url": "https://api.eqn.news/public/archive/bn-2282"
+    }
+   ],
+   "next_cursor": "1793772002597-11151"
+  }
+ }
+}

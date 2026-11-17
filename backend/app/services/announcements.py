@@ -37,7 +37,10 @@ logger = logging.getLogger(__name__)
 GATE_DIRECT_BACKOFF_SECONDS = 300
 GATE_FETCH_BUDGET_SECONDS = 17.0
 
-ANNOUNCEMENT_EXCHANGES = ("binance", "okx", "bybit", "gate", "bitget", "hyperliquid")
+ANNOUNCEMENT_EXCHANGES = (
+    "binance", "okx", "bybit", "gate", "bitget", "hyperliquid",
+    "upbit", "bithumb", "mexc", "aster",
+)
 ANNOUNCEMENT_EXCHANGE_OPTIONS = [
     {"label": "Binance", "value": "binance"},
     {"label": "OKX", "value": "okx"},
@@ -45,6 +48,10 @@ ANNOUNCEMENT_EXCHANGE_OPTIONS = [
     {"label": "Gate", "value": "gate"},
     {"label": "Bitget", "value": "bitget"},
     {"label": "Hyperliquid", "value": "hyperliquid"},
+    {"label": "Upbit", "value": "upbit"},
+    {"label": "Bithumb", "value": "bithumb"},
+    {"label": "MEXC", "value": "mexc"},
+    {"label": "Aster", "value": "aster"},
 ]
 
 LAUNCHPOOL_KEYWORDS = (
@@ -1112,7 +1119,7 @@ def build_announcement_alert_message(announcement: ExchangeAnnouncement) -> str:
         AnnouncementKind.OTHER: "公告",
     }[announcement.kind]
     lines = [
-        f"[{announcement.exchange.upper()}] {kind_label}公告",
+        f"[{announcement.exchange.upper()}{'（eqn.news）' if announcement.source == 'eqn' else ''}] {kind_label}公告",
         f"{'监测时间' if announcement.exchange == 'hyperliquid' else '公告时间'}: {_display_time(announcement.published_at)} UTC+8",
     ]
     delay_minutes = int(max(0, (
@@ -1153,7 +1160,7 @@ def build_announcement_event_reminder_message(
         AnnouncementKind.OTHER: "公告",
     }[announcement.kind]
     lines = [
-        f"[{announcement.exchange.upper()}] {kind_label}快到时间提醒",
+        f"[{announcement.exchange.upper()}{'（eqn.news）' if announcement.source == 'eqn' else ''}] {kind_label}快到时间提醒",
         f"提醒窗口: 提前 {minutes_before} 分钟",
     ]
     if announcement.event_time:
@@ -1205,6 +1212,14 @@ class AnnouncementProvider:
         return await self.fetch()
 
 
+def announcement_http_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(10.0, connect=3.0, read=8.0),
+        follow_redirects=True,
+        headers={"User-Agent": "taoli1-radar/0.1"},
+    )
+
+
 class HttpAnnouncementProvider(AnnouncementProvider):
     def __init__(
         self,
@@ -1212,11 +1227,7 @@ class HttpAnnouncementProvider(AnnouncementProvider):
         *,
         now_fn: Callable[[], datetime] | None = None,
     ) -> None:
-        self.client = client or httpx.AsyncClient(
-            timeout=httpx.Timeout(10.0, connect=3.0, read=8.0),
-            follow_redirects=True,
-            headers={"User-Agent": "taoli1-radar/0.1"},
-        )
+        self.client = client or announcement_http_client()
         self._owns_client = client is None
         self._now_fn = now_fn or utc_now
         self._localization = AnnouncementLocalizationService(self.exchange, self.client)
@@ -2537,6 +2548,9 @@ class AnnouncementMonitor:
         self.alert_sender = alert_sender
         self.asset_researcher = asset_researcher
         self._now_fn = now_fn or utc_now
+        # Polling and enrichment share this monitor. Lock only lookup + insert;
+        # network sends and asset research must not block other sources.
+        self._ingest_lock = asyncio.Lock()
 
     async def process(
         self,
@@ -2610,7 +2624,19 @@ class AnnouncementMonitor:
             if historical_sync and not should_alert_on_bootstrap and alert_status == "pending":
                 alert_status = "muted"
             candidate = announcement.model_copy(update={"alert_status": alert_status})
-            inserted = await self.repository.create_if_new(candidate)
+            async with self._ingest_lock:
+                duplicate = await self.repository.find_cross_source_duplicate(candidate)
+                if duplicate is not None:
+                    candidate = candidate.model_copy(update={
+                        "alert_status": "duplicate", "event_reminder_status": "not_applicable",
+                    })
+                inserted = await self.repository.create_if_new(candidate)
+            if inserted is not None and duplicate is not None:
+                logger.info(
+                    "announcement cross_source exchange=%s first_source=%s second_source=%s lead_seconds=%.1f",
+                    inserted.exchange, duplicate.source, inserted.source,
+                    (_as_utc(inserted.fetched_at) - _as_utc(duplicate.fetched_at)).total_seconds(),
+                )
             if inserted is not None and inserted.alert_status == "pending":
                 next_status = await self._send_alert(inserted)
                 if next_status != inserted.alert_status:
@@ -2633,6 +2659,7 @@ class AnnouncementMonitor:
 
             if (
                 research_target is not None
+                and research_target.alert_status != "duplicate"
                 and self.asset_researcher is not None
                 and not bootstrap
                 and research_target.kind == AnnouncementKind.LISTING
@@ -2748,7 +2775,11 @@ class AnnouncementMonitor:
 def default_announcement_provider(
     repository: AnnouncementRepository | None = None,
 ) -> MultiAnnouncementProvider:
-    return MultiAnnouncementProvider(
+    from app.core.config import get_settings
+    from app.services.announcement_eqn import EqnAnnouncementProvider
+
+    settings = get_settings()
+    provider = MultiAnnouncementProvider(
         [
             BinanceAnnouncementProvider(),
             OKXAnnouncementProvider(),
@@ -2760,6 +2791,11 @@ def default_announcement_provider(
             HyperliquidOfficialAnnouncementProvider(),
         ]
     )
+    if settings.eqn_news_enabled:
+        provider.providers.append(EqnAnnouncementProvider(
+            poll_interval_seconds=settings.eqn_news_poll_seconds,
+        ))
+    return provider
 
 
 async def run_announcement_loop(

@@ -38,6 +38,8 @@ class Settings:
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     database_url: str = "sqlite:///./data/radar.db"
     poll_interval_seconds: float = 5.0
+    eqn_news_enabled: bool = True
+    eqn_news_poll_seconds: float = 10.0
     hl_bbo_enabled: bool = True
     hl_bbo_max_age_seconds: float = 10.0
     hl_bbo_max_coins: int = 450
@@ -131,6 +133,9 @@ class Settings:
         from app.services.execution_routes import validate_shadow_settings
 
         validate_shadow_settings(self)
+        if not math.isfinite(self.eqn_news_poll_seconds):
+            raise ValueError("EQN_NEWS_POLL_SECONDS must be finite")
+        object.__setattr__(self, "eqn_news_poll_seconds", max(5.0, self.eqn_news_poll_seconds))
         for name in ("gate_bbo_enabled", "gate_batch_quotes_executable"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name.upper()} must be boolean")
@@ -298,6 +303,8 @@ def get_settings() -> Settings:
         cors_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"),
         database_url=database_url,
         poll_interval_seconds=float(os.getenv("POLL_INTERVAL_SECONDS", "5")),
+        eqn_news_enabled=bool_env("EQN_NEWS_ENABLED", True),
+        eqn_news_poll_seconds=float(os.getenv("EQN_NEWS_POLL_SECONDS", "10")),
         hl_bbo_enabled=bool_env("HL_BBO_ENABLED", True),
         hl_bbo_max_age_seconds=float(os.getenv("HL_BBO_MAX_AGE_SECONDS", "10")),
         hl_bbo_max_coins=int(os.getenv("HL_BBO_MAX_COINS", "450")),

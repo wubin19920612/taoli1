@@ -351,6 +351,8 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           ON exchange_announcements(published_at DESC);
         CREATE INDEX IF NOT EXISTS idx_exchange_announcements_exchange_time
           ON exchange_announcements(exchange, published_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_exchange_announcements_cross_source_time
+          ON exchange_announcements(exchange, julianday(published_at));
         CREATE INDEX IF NOT EXISTS idx_exchange_announcements_kind_time
           ON exchange_announcements(kind, published_at DESC);
 

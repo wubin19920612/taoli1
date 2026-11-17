@@ -1,0 +1,702 @@
+{
+ "jsonrpc": "2.0",
+ "id": 2,
+ "result": {
+  "content": [
+   {
+    "text": "{\n  \"items\": [\n    {\n      \"no\": 15284,\n      \"time\": \"2026-11-16T14:04:06.098Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bitget Announcements\",\n      \"zh\": \"Bitget将上线DXYUSDT（美元指数）TradFi永续合约\",\n      \"en\": \"Bitget to list DXYUSDT (U.S. Dollar Index) TradFi perpetual futures\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15284\",\n      \"source_url\": \"https://www.bitget.com/en/support/articles/12560603900699\"\n    },\n    {\n      \"no\": 15280,\n      \"time\": \"2026-11-16T13:28:02.304Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bitget Announcements\",\n      \"zh\": \"Bitget 合约跟单已支持 DXYUSDT 永续合约\",\n      \"en\": \"Bitget 合约跟单已支持 DXYUSDT 永续合约\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15280\",\n      \"source_url\": \"https://www.bitget.com/en/support/articles/12560603900698\"\n    },\n    {\n      \"no\": 15277,\n      \"time\": \"2026-11-16T12:56:00.244Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bybit Announcements\",\n      \"zh\": \"部分永续合约风险限额调整 LITUSDT（2026年11月17日）\",\n      \"en\": \"Risk limit adjustment for selected Perpetual Contracts LITUSDT(Nov 17, 2026)\",\n      \"coins\": [\n        \"LIT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15277\",\n      \"source_url\": \"https://announcements.bybit.com/en-US/article/risk-limit-adjustment-for-selected-perpetual-contracts-litusdt-nov-17-2026--artb93c4fa3c8bc/\"\n    },\n    {\n      \"no\": 15268,\n      \"time\": \"2026-11-16T12:00:39.009Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bybit Announcements\",\n      \"zh\": \"Bybit将于2026年11月23日下架8个交易对\",\n      \"en\": \"Bybit to Delist 8 Trading Pair(s) on Nov 23, 2026\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15268\",\n      \"source_url\": \"https://announcements.bybit.com/en-US/article/bybit-to-delist-8-trading-pair-s-on-nov-23-2026--art31ff7bd4430e/\"\n    },\n    {\n      \"no\": 15259,\n      \"time\": \"2026-11-16T11:00:54.754Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"OKX Announcements\",\n      \"zh\": \"OKX将上线JCTUSD X-Perp\",\n      \"en\": \"OKX to list JCTUSD X-Perp\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15259\",\n      \"source_url\": \"https://www.okx.com/help/okx-to-list-jctusd-x-perp\"\n    },\n    {\n      \"no\": 15236,\n      \"time\": \"2026-11-16T09:16:05.970Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bitget Announcements\",\n      \"zh\": \"Bitget将调整HYPEUSDC永续合约的资金费率间隔\",\n      \"en\": \"Bitget to adjust funding rate interval for HYPEUSDC perpetual futures\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15236\",\n      \"source_url\": \"https://www.bitget.com/en/support/articles/12560603900693\"\n    },\n    {\n      \"no\": 15235,\n      \"time\": \"2026-11-16T09:13:50.282Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bybit Announcements\",\n      \"zh\": \"[重要] 保证金交易仓位档位将于2026年11月20日更新\",\n      \"en\": \"[Important] Margin Trading Position Tier Updates On Nov 20, 2026\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15235\",\n      \"source_url\": \"https://announcements.bybit.com/en-US/article/important-margin-trading-position-tier-updates-on-nov-20-2026--artfd4de844a107/\"\n    },\n    {\n      \"no\": 15234,\n      \"time\": \"2026-11-16T09:03:23.192Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"OKX Announcements\",\n      \"zh\": \"OKX将上线统一代币化股票xNVO、xPANW等，开放现货交易\",\n      \"en\": \"OKX to list Unified Tokenized Stocks xNVO, xPANW and more for spot trading\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15234\",\n      \"source_url\": \"https://www.okx.com/help/okx-to-list-unified-tokenized-stocks-xnvo-xpanw-and-more-for-spot-trading\"\n    },\n    {\n      \"no\": 15233,\n      \"time\": \"2026-11-16T09:02:47.089Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bybit Announcements\",\n      \"zh\": \"Bybit Card 现已提供机场贵宾厅服务\",\n      \"en\": \"Airport Lounge Access Is Now Available with Bybit Card\",\n      \"coins\": [\n        \"NOW\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15233\",\n      \"source_url\": \"https://announcements.bybit.com/en-US/article/airport-lounge-access-is-now-available-with-bybit-card--art7fabd4d6f134/\"\n    },\n    {\n      \"no\": 15226,\n      \"time\": \"2026-11-16T08:04:05.624Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bitget Announcements\",\n      \"zh\": \"rROKU/USDT 现货交易对下架通知\",\n      \"en\": \"Notice of Delisting rROKU/USDT Spot Trading Pair\",\n      \"coins\": [\n        \"SPOT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15226\",\n      \"source_url\": \"https://www.bitget.com/en/support/articles/12560603900675\"\n    },\n    {\n      \"no\": 15198,\n      \"time\": \"2026-11-16T06:00:30.157Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"OKX Announcements\",\n      \"zh\": \"OKX将上线JCT永续合约\",\n      \"en\": \"OKX to list perpetual future for JCT crypto\",\n      \"coins\": [\n        \"JCT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15198\",\n      \"source_url\": \"https://www.okx.com/help/okx-to-list-perpetual-future-for-janction-crypto\"\n    },\n    {\n      \"no\": 15189,\n      \"time\": \"2026-11-16T05:00:50.275Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"OKX Announcements\",\n      \"zh\": \"OKX将上线代币化股票xTTWO的USDC交易对\",\n      \"en\": \"OKX to list USDC trading pairs for Tokenized Stocks xTTWO\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15189\",\n      \"source_url\": \"https://www.okx.com/help/okx-to-list-usdc-trading-pairs-for-tokenized-stocks-xttwo\"\n    },\n    {\n      \"no\": 15180,\n      \"time\": \"2026-11-16T04:30:43.874Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"OKX Announcements\",\n      \"zh\": \"OKX将上线TTWOUSD股票永续合约\",\n      \"en\": \"OKX to list TTWOUSD Equity X-Perps\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/15180\",\n      \"source_url\": \"https://www.okx.com/help/okx-to-list-ttwousd-equity-x-perps\"\n    },\n    {\n      \"no\": 15165,\n      \"time\": \"2026-11-16T04:04:07.239Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bitget Announcements\",\n      \"zh\": \"Bitget 将支持 Clearpool (CPOOL) 代币置换及品牌升级为 Clearpool (CLEAR)\",\n      \"en\": \"Bitget Will Support the Clearpool (CPOOL) Token Swap and Rebranding to Clearpool (CLEAR)\",\n      \"coins\": [\n        \"CPOOL\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15165\",\n      \"source_url\": \"https://www.bitget.com/en/support/articles/12560603900583\"\n    },\n    {\n      \"no\": 15038,\n      \"time\": \"2026-11-15T12:20:05.641Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bitget Announcements\",\n      \"zh\": \"Bitget将调整SOPHUSDT永续合约的资金费率间隔\",\n      \"en\": \"Bitget to adjust funding rate interval for SOPHUSDT perpetual futures\",\n      \"coins\": [\n        \"SOPH\"\n      ],\n      \"url\": \"https://eqn.news/monitor/15038\",\n      \"source_url\": \"https://www.bitget.com/en/support/articles/12560603900565\"\n    },\n    {\n      \"no\": 14409,\n      \"time\": \"2026-11-13T11:40:57.392Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bybit Announcements\",\n      \"zh\": \"重要通知：ANTHROPICUSDT 拆分并更名（11月16日）\",\n      \"en\": \"IMPORTANT: ANTHROPICUSDT Split and Rename (Nov 16)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14409\",\n      \"source_url\": \"https://announcements.bybit.com/en-US/article/important-anthropicusdt-split-and-rename-nov-16--artfe526916e960/\"\n    },\n    {\n      \"no\": 14401,\n      \"time\": \"2026-11-13T10:47:42.046Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bybit Announcements\",\n      \"zh\": \"交易服务器迁移已成功完成\",\n      \"en\": \"Trading Server Migration Successfully Completed\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14401\",\n      \"source_url\": \"https://announcements.bybit.com/en-US/article/trading-server-migration-successfully-completed--art507fb9e78e20/\"\n    },\n    {\n      \"no\": 14396,\n      \"time\": \"2026-11-13T10:04:05.680Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bitget Announcements\",\n      \"zh\": \"Bitget将于2026年11月20日下架MANTRA/USDT现货交易对\",\n      \"en\": \"Bitget Will Delist MANTRA/USDT Spot Trading Pair on November 20, 2026\",\n      \"coins\": [\n        \"MANTRA\",\n        \"SPOT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14396\",\n      \"source_url\": \"https://www.bitget.com/en/support/articles/12560603900511\"\n    },\n    {\n      \"no\": 14393,\n      \"time\": \"2026-11-13T09:55:26.097Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bybit Announcements\",\n      \"zh\": \"新上线：创新区 IDOLUSDT 永续合约，最高 20 倍杠杆\",\n      \"en\": \"New listing: IDOLUSDT Perpetual Contract in Innovation Zone, with up to 20x leverage\",\n      \"coins\": [\n        \"IDOL\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14393\",\n      \"source_url\": \"https://announcements.bybit.com/en-US/article/new-listing-idolusdt-perpetual-contract-in-innovation-zone-with-up-to-20x-leverage--artffa6047fb3e8/\"\n    },\n    {\n      \"no\": 14392,\n      \"time\": \"2026-11-13T09:55:24.128Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bybit Announcements\",\n      \"zh\": \"新上线：创新区 OROCHIUSDT 永续合约，最高 50 倍杠杆\",\n      \"en\": \"New listing: OROCHIUSDT Perpetual Contract in Innovation Zone, with up to 50x leverage\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14392\",\n      \"source_url\": \"https://announcements.bybit.com/en-US/article/new-listing-orochiusdt-perpetual-contract-in-innovation-zone-with-up-to-50x-leverage--art43ad358a137f/\"\n    },\n    {\n      \"no\": 14363,\n      \"time\": \"2026-11-13T08:04:07.984Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bitget Announcements\",\n      \"zh\": \"关于Bitget应用强制更新的通知（11月13日）\",\n      \"en\": \"Notice on mandatory update of the Bitget app (November 13)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14363\",\n      \"source_url\": \"https://www.bitget.com/en/support/articles/12560603900506\"\n    },\n    {\n      \"no\": 14056,\n      \"time\": \"2026-11-12T10:38:45.633Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bybit Announcements\",\n      \"zh\": \"Bybit 将支持 Clearpool (CPOOL) 代币置换并更名为 CLEAR\",\n      \"en\": \"Bybit Will Support the Clearpool (CPOOL) Token Swap and Rebranding to CLEAR\",\n      \"coins\": [\n        \"CPOOL\"\n      ],\n      \"url\": \"https://eqn.news/monitor/14056\",\n      \"source_url\": \"https://announcements.bybit.com/en-US/article/bybit-will-support-the-clearpool-cpool-token-swap-and-rebranding-to-clear--art864ad3460a46/\"\n    },\n    {\n      \"no\": 14055,\n      \"time\": \"2026-11-12T10:32:02.893Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bitget Announcements\",\n      \"zh\": \"Bitget 合约跟单已支持 FRHCUSDT 永续合约\",\n      \"en\": \"Bitget 合约跟单已支持 FRHCUSDT 永续合约\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/14055\",\n      \"source_url\": \"https://www.bitget.com/en/support/articles/12560603900485\"\n    },\n    {\n      \"no\": 13768,\n      \"time\": \"2026-11-11T09:31:45.454Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"OKX Announcements\",\n      \"zh\": \"OKX将上线AERO/USDC现货交易\",\n      \"en\": \"OKX will launch AERO/USDC for spot trading\",\n      \"coins\": [\n        \"AERO\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13768\",\n      \"source_url\": \"https://www.okx.com/help/okx-will-launch-aero-usdc-for-spot-trading\"\n    },\n    {\n      \"no\": 13763,\n      \"time\": \"2026-11-11T09:18:50.040Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bybit Announcements\",\n      \"zh\": \"新上线：DANGOTEUSDT 将于2026年11月11日11:00 UTC在 Bybit Pre-IPO Tradfi 永续合约上线\",\n      \"en\": \"New listing: Listing of DANGOTEUSDT on Bybit Pre-IPO Tradfi Perpetual on Nov 11, 2026, 11:00AM UTC\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13763\",\n      \"source_url\": \"https://announcements.bybit.com/en-US/article/new-listing-listing-of-dangoteusdt-on-bybit-pre-ipo-tradfi-perpetual-on-nov-11-2026-11-00am-utc--art6ad921fb4a95/\"\n    },\n    {\n      \"no\": 13751,\n      \"time\": \"2026-11-11T09:01:54.696Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bybit Announcements\",\n      \"zh\": \"4STOCKUSDT永续合约下架\",\n      \"en\": \"Delisting of 4STOCKUSDT Perpetual Contract\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13751\",\n      \"source_url\": \"https://announcements.bybit.com/en-US/article/delisting-of-4stockusdt-perpetual-contract--art52c4cf790adc/\"\n    },\n    {\n      \"no\": 13750,\n      \"time\": \"2026-11-11T09:01:52.570Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bybit Announcements\",\n      \"zh\": \"HAJIMIUSDT永续合约下架\",\n      \"en\": \"Delisting of HAJIMIUSDT Perpetual Contract\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13750\",\n      \"source_url\": \"https://announcements.bybit.com/en-US/article/delisting-of-hajimiusdt-perpetual-contract--art7266681607d5/\"\n    },\n    {\n      \"no\": 13749,\n      \"time\": \"2026-11-11T09:01:49.994Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bybit Announcements\",\n      \"zh\": \"AGIUSDT永续合约下架\",\n      \"en\": \"Delisting of AGIUSDT Perpetual Contract\",\n      \"coins\": [\n        \"AGI\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13749\",\n      \"source_url\": \"https://announcements.bybit.com/en-US/article/delisting-of-agiusdt-perpetual-contract--art7816e6629a54/\"\n    },\n    {\n      \"no\": 13747,\n      \"time\": \"2026-11-11T09:01:06.446Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"OKX Announcements\",\n      \"zh\": \"OKX将上线统一代币化股票xCEG、xCVNA等，开放现货交易\",\n      \"en\": \"OKX to list Unified Tokenized Stocks xCEG, xCVNA and more for spot trading\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13747\",\n      \"source_url\": \"https://www.okx.com/help/okx-to-list-unified-tokenized-stocks-xceg-xcvna-and-more-for-spot-trading\"\n    },\n    {\n      \"no\": 13720,\n      \"time\": \"2026-11-11T08:07:15.810Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"OKX Announcements\",\n      \"zh\": \"OKX 将对 ANTHROPIC 永续合约和 X-Perp 执行再平衡\",\n      \"en\": \"OKX to execute a rebase on ANTHROPIC perpetuals and X-Perp\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13720\",\n      \"source_url\": \"https://www.okx.com/help/okx-to-execute-a-rebase-on-anthropic-perpetuals-and-x-perp\"\n    },\n    {\n      \"no\": 13580,\n      \"time\": \"2026-11-10T16:16:03.357Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bitget Announcements\",\n      \"zh\": \"Bitget将调整INITUSDT永续合约的资金费率间隔及最大/最小限额\",\n      \"en\": \"Bitget to adjust funding rate interval and maximum/minimum limits for INITUSDT perpetual futures\",\n      \"coins\": [\n        \"INIT\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13580\",\n      \"source_url\": \"https://www.bitget.com/en/support/articles/12560603900276\"\n    },\n    {\n      \"no\": 13386,\n      \"time\": \"2026-11-10T07:00:27.387Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bybit Announcements\",\n      \"zh\": \"停止将 POL 作为抵押品和借贷资产\",\n      \"en\": \"Discontinuation of POL  as Collateral and Lending Asset\",\n      \"coins\": [\n        \"POL\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13386\",\n      \"source_url\": \"https://announcements.bybit.com/en-US/article/discontinuation-of-pol-as-collateral-and-lending-asset--art1dbdc3a555a5/\"\n    },\n    {\n      \"no\": 13371,\n      \"time\": \"2026-11-10T06:01:41.544Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"OKX Announcements\",\n      \"zh\": \"OKX 已完成 VELODROME 代币迁移\",\n      \"en\": \"OKX completed VELODROME token migration\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13371\",\n      \"source_url\": \"https://www.okx.com/help/okx-completed-velodrome-token-migration\"\n    },\n    {\n      \"no\": 13346,\n      \"time\": \"2026-11-10T04:16:53.832Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"OKX Announcements\",\n      \"zh\": \"OKX将上线代币化股票xORCL的USDC交易对\",\n      \"en\": \"OKX to list USDC trading pairs for Tokenized Stocks xORCL\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13346\",\n      \"source_url\": \"https://www.okx.com/help/okx-to-list-usdc-trading-pairs-for-tokenized-stocks-xorcl\"\n    },\n    {\n      \"no\": 13345,\n      \"time\": \"2026-11-10T04:04:05.707Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bitget Announcements\",\n      \"zh\": \"[上线] Bitget将上线Matrix (MTX)\",\n      \"en\": \"[Initial Listing] Bitget to list Matrix (MTX)\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13345\",\n      \"source_url\": \"https://www.bitget.com/en/support/articles/12560603900217\"\n    },\n    {\n      \"no\": 13325,\n      \"time\": \"2026-11-10T03:00:26.191Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"OKX Announcements\",\n      \"zh\": \"OKX将上线ONDSUSD和DDOGUSD股票X-Perps\",\n      \"en\": \"OKX to list ONDSUSD and DDOGUSD Equity X-Perps\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13325\",\n      \"source_url\": \"https://www.okx.com/help/okx-to-list-ondsusd-and-ddogusd-equity-x-perps\"\n    },\n    {\n      \"no\": 13208,\n      \"time\": \"2026-11-09T16:24:31.659Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bybit Announcements\",\n      \"zh\": \"使用高级筛选器评估大师交易员表现\",\n      \"en\": \"Evaluate Master Trader Performance with Advanced Filters\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13208\",\n      \"source_url\": \"https://announcements.bybit.com/en-US/article/evaluate-master-trader-performance-with-advanced-filters--art5a4cd2b818e1/\"\n    },\n    {\n      \"no\": 13115,\n      \"time\": \"2026-11-09T12:00:58.583Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bybit Announcements\",\n      \"zh\": \"Bybit将于2026年11月16日下架12个交易对\",\n      \"en\": \"Bybit to Delist 12 Trading Pair(s) on Nov 16, 2026\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13115\",\n      \"source_url\": \"https://announcements.bybit.com/en-US/article/bybit-to-delist-12-trading-pair-s-on-nov-16-2026--artcfc6f4821c48/\"\n    },\n    {\n      \"no\": 13054,\n      \"time\": \"2026-11-09T09:36:14.528Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bybit Announcements\",\n      \"zh\": \"探索 Bybit Lite Loan：30 天内无清算\",\n      \"en\": \"Explore Bybit Lite Loan: No Liquidation for 30 days\",\n      \"coins\": [\n        \"LITE\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13054\",\n      \"source_url\": \"https://announcements.bybit.com/en-US/article/explore-bybit-lite-loan-no-liquidation-for-30-days--art06367d0c958e/\"\n    },\n    {\n      \"no\": 13039,\n      \"time\": \"2026-11-09T09:02:16.365Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"OKX Announcements\",\n      \"zh\": \"OKX将上线Unified Tokenized Stocks xNVDL、xSKDD等代币进行现货交易\",\n      \"en\": \"OKX to list Unified Tokenized Stocks xNVDL, xSKDD and more for spot trading\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/13039\",\n      \"source_url\": \"https://www.okx.com/help/okx-to-list-unified-tokenized-stocks-xnvdl-xskdd-and-more-for-spot-trading\"\n    },\n    {\n      \"no\": 13016,\n      \"time\": \"2026-11-09T07:25:29.970Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bybit Announcements\",\n      \"zh\": \"部分永续合约 STRKUSDT、ZROUSDT……风险限额调整（2026年11月10日）\",\n      \"en\": \"Risk limit adjustment for selected Perpetual Contracts STRKUSDT,ZROUSDT...(Nov 10, 2026)\",\n      \"coins\": [\n        \"ZRO\",\n        \"STRK\"\n      ],\n      \"url\": \"https://eqn.news/monitor/13016\",\n      \"source_url\": \"https://announcements.bybit.com/en-US/article/risk-limit-adjustment-for-selected-perpetual-contracts-strkusdt-zrousdt-nov-10-2026--art19b4542fe5b6/\"\n    },\n    {\n      \"no\": 12970,\n      \"time\": \"2026-11-09T05:11:29.454Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bybit Announcements\",\n      \"zh\": \"Bybit UTA 自动还款功能现已上线：以旧换新、轻松还款、节省利息\",\n      \"en\": \"Bybit UTA Auto-Repayment Now Available: Trade, Repay, and Save on Interest\",\n      \"coins\": [\n        \"NOW\"\n      ],\n      \"url\": \"https://eqn.news/monitor/12970\",\n      \"source_url\": \"https://announcements.bybit.com/en-US/article/bybit-uta-auto-repayment-now-available-trade-repay-and-save-on-interest--art1412cf3a943f/\"\n    },\n    {\n      \"no\": 12940,\n      \"time\": \"2026-11-09T03:00:30.283Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"OKX Announcements\",\n      \"zh\": \"OKX将上线代币化股票xBSP的USDC交易对\",\n      \"en\": \"OKX to list USDC trading pairs for Tokenized Stocks xBSP\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/12940\",\n      \"source_url\": \"https://www.okx.com/help/okx-to-list-usdc-trading-pairs-for-tokenized-stocks-xbsp\"\n    },\n    {\n      \"no\": 12938,\n      \"time\": \"2026-11-09T02:48:31.333Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"OKX Announcements\",\n      \"zh\": \"OKX将上线LUNRUSD和MARAUSD股票X-Perps\",\n      \"en\": \"OKX to list LUNRUSD and MARAUSD Equity X-Perps\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/12938\",\n      \"source_url\": \"https://www.okx.com/help/okx-to-list-lunrusd-and-marausd-equity-x-perps\"\n    },\n    {\n      \"no\": 12898,\n      \"time\": \"2026-11-08T22:40:02.662Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bitget Announcements\",\n      \"zh\": \"Bitget 现货跟单现已支持 rTLK/USDT\",\n      \"en\": \"Bitget spot copy trade now supports rTLK/USDT\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/12898\",\n      \"source_url\": \"https://www.bitget.com/en/support/articles/12560603900062\"\n    },\n    {\n      \"no\": 12822,\n      \"time\": \"2026-11-08T20:44:01.478Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bitget Announcements\",\n      \"zh\": \"Bitget 现货跟单现已支持 rMCY/USDT\",\n      \"en\": \"Bitget spot copy trade now supports rMCY/USDT\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/12822\",\n      \"source_url\": \"https://www.bitget.com/en/support/articles/12560603900059\"\n    },\n    {\n      \"no\": 12758,\n      \"time\": \"2026-11-08T14:40:02.105Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bitget Announcements\",\n      \"zh\": \"Bitget 现货跟单现已支持 rALHC/USDT\",\n      \"en\": \"Bitget spot copy trade now supports rALHC/USDT\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/12758\",\n      \"source_url\": \"https://www.bitget.com/en/support/articles/12560603900055\"\n    },\n    {\n      \"no\": 12743,\n      \"time\": \"2026-11-08T13:44:04.442Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bitget Announcements\",\n      \"zh\": \"Bitget 现货跟单现已支持 rCE/USDT\",\n      \"en\": \"Bitget spot copy trade now supports rCE/USDT\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/12743\",\n      \"source_url\": \"https://www.bitget.com/en/support/articles/12560603900051\"\n    },\n    {\n      \"no\": 12691,\n      \"time\": \"2026-11-08T11:36:03.931Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bitget Announcements\",\n      \"zh\": \"Bitget 现货跟单现已支持 rMPT/USDT\",\n      \"en\": \"Bitget spot copy trade now supports rMPT/USDT\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/12691\",\n      \"source_url\": \"https://www.bitget.com/en/support/articles/12560603900048\"\n    },\n    {\n      \"no\": 12656,\n      \"time\": \"2026-11-08T09:40:02.368Z\",\n      \"channels\": [\n        \"tier2\"\n      ],\n      \"source\": \"Bitget Announcements\",\n      \"zh\": \"Bitget 现货跟单现已支持 rWES/USDT\",\n      \"en\": \"Bitget spot copy trade now supports rWES/USDT\",\n      \"coins\": [],\n      \"url\": \"https://eqn.news/monitor/12656\",\n      \"source_url\": \"https://www.bitget.com/en/support/articles/12560603900046\"\n    }\n  ],\n  \"next_cursor\": \"1794130802368-12656\"\n}",
+    "type": "text"
+   }
+  ],
+  "isError": false,
+  "structuredContent": {
+   "items": [
+    {
+     "no": 15284,
+     "time": "2026-11-16T14:04:06.098Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bitget Announcements",
+     "zh": "Bitget将上线DXYUSDT（美元指数）TradFi永续合约",
+     "en": "Bitget to list DXYUSDT (U.S. Dollar Index) TradFi perpetual futures",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15284",
+     "source_url": "https://www.bitget.com/en/support/articles/12560603900699"
+    },
+    {
+     "no": 15280,
+     "time": "2026-11-16T13:28:02.304Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bitget Announcements",
+     "zh": "Bitget 合约跟单已支持 DXYUSDT 永续合约",
+     "en": "Bitget 合约跟单已支持 DXYUSDT 永续合约",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15280",
+     "source_url": "https://www.bitget.com/en/support/articles/12560603900698"
+    },
+    {
+     "no": 15277,
+     "time": "2026-11-16T12:56:00.244Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bybit Announcements",
+     "zh": "部分永续合约风险限额调整 LITUSDT（2026年11月17日）",
+     "en": "Risk limit adjustment for selected Perpetual Contracts LITUSDT(Nov 17, 2026)",
+     "coins": [
+      "LIT"
+     ],
+     "url": "https://eqn.news/monitor/15277",
+     "source_url": "https://announcements.bybit.com/en-US/article/risk-limit-adjustment-for-selected-perpetual-contracts-litusdt-nov-17-2026--artb93c4fa3c8bc/"
+    },
+    {
+     "no": 15268,
+     "time": "2026-11-16T12:00:39.009Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bybit Announcements",
+     "zh": "Bybit将于2026年11月23日下架8个交易对",
+     "en": "Bybit to Delist 8 Trading Pair(s) on Nov 23, 2026",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15268",
+     "source_url": "https://announcements.bybit.com/en-US/article/bybit-to-delist-8-trading-pair-s-on-nov-23-2026--art31ff7bd4430e/"
+    },
+    {
+     "no": 15259,
+     "time": "2026-11-16T11:00:54.754Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "OKX Announcements",
+     "zh": "OKX将上线JCTUSD X-Perp",
+     "en": "OKX to list JCTUSD X-Perp",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15259",
+     "source_url": "https://www.okx.com/help/okx-to-list-jctusd-x-perp"
+    },
+    {
+     "no": 15236,
+     "time": "2026-11-16T09:16:05.970Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bitget Announcements",
+     "zh": "Bitget将调整HYPEUSDC永续合约的资金费率间隔",
+     "en": "Bitget to adjust funding rate interval for HYPEUSDC perpetual futures",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15236",
+     "source_url": "https://www.bitget.com/en/support/articles/12560603900693"
+    },
+    {
+     "no": 15235,
+     "time": "2026-11-16T09:13:50.282Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bybit Announcements",
+     "zh": "[重要] 保证金交易仓位档位将于2026年11月20日更新",
+     "en": "[Important] Margin Trading Position Tier Updates On Nov 20, 2026",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15235",
+     "source_url": "https://announcements.bybit.com/en-US/article/important-margin-trading-position-tier-updates-on-nov-20-2026--artfd4de844a107/"
+    },
+    {
+     "no": 15234,
+     "time": "2026-11-16T09:03:23.192Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "OKX Announcements",
+     "zh": "OKX将上线统一代币化股票xNVO、xPANW等，开放现货交易",
+     "en": "OKX to list Unified Tokenized Stocks xNVO, xPANW and more for spot trading",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15234",
+     "source_url": "https://www.okx.com/help/okx-to-list-unified-tokenized-stocks-xnvo-xpanw-and-more-for-spot-trading"
+    },
+    {
+     "no": 15233,
+     "time": "2026-11-16T09:02:47.089Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bybit Announcements",
+     "zh": "Bybit Card 现已提供机场贵宾厅服务",
+     "en": "Airport Lounge Access Is Now Available with Bybit Card",
+     "coins": [
+      "NOW"
+     ],
+     "url": "https://eqn.news/monitor/15233",
+     "source_url": "https://announcements.bybit.com/en-US/article/airport-lounge-access-is-now-available-with-bybit-card--art7fabd4d6f134/"
+    },
+    {
+     "no": 15226,
+     "time": "2026-11-16T08:04:05.624Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bitget Announcements",
+     "zh": "rROKU/USDT 现货交易对下架通知",
+     "en": "Notice of Delisting rROKU/USDT Spot Trading Pair",
+     "coins": [
+      "SPOT"
+     ],
+     "url": "https://eqn.news/monitor/15226",
+     "source_url": "https://www.bitget.com/en/support/articles/12560603900675"
+    },
+    {
+     "no": 15198,
+     "time": "2026-11-16T06:00:30.157Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "OKX Announcements",
+     "zh": "OKX将上线JCT永续合约",
+     "en": "OKX to list perpetual future for JCT crypto",
+     "coins": [
+      "JCT"
+     ],
+     "url": "https://eqn.news/monitor/15198",
+     "source_url": "https://www.okx.com/help/okx-to-list-perpetual-future-for-janction-crypto"
+    },
+    {
+     "no": 15189,
+     "time": "2026-11-16T05:00:50.275Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "OKX Announcements",
+     "zh": "OKX将上线代币化股票xTTWO的USDC交易对",
+     "en": "OKX to list USDC trading pairs for Tokenized Stocks xTTWO",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15189",
+     "source_url": "https://www.okx.com/help/okx-to-list-usdc-trading-pairs-for-tokenized-stocks-xttwo"
+    },
+    {
+     "no": 15180,
+     "time": "2026-11-16T04:30:43.874Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "OKX Announcements",
+     "zh": "OKX将上线TTWOUSD股票永续合约",
+     "en": "OKX to list TTWOUSD Equity X-Perps",
+     "coins": [],
+     "url": "https://eqn.news/monitor/15180",
+     "source_url": "https://www.okx.com/help/okx-to-list-ttwousd-equity-x-perps"
+    },
+    {
+     "no": 15165,
+     "time": "2026-11-16T04:04:07.239Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bitget Announcements",
+     "zh": "Bitget 将支持 Clearpool (CPOOL) 代币置换及品牌升级为 Clearpool (CLEAR)",
+     "en": "Bitget Will Support the Clearpool (CPOOL) Token Swap and Rebranding to Clearpool (CLEAR)",
+     "coins": [
+      "CPOOL"
+     ],
+     "url": "https://eqn.news/monitor/15165",
+     "source_url": "https://www.bitget.com/en/support/articles/12560603900583"
+    },
+    {
+     "no": 15038,
+     "time": "2026-11-15T12:20:05.641Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bitget Announcements",
+     "zh": "Bitget将调整SOPHUSDT永续合约的资金费率间隔",
+     "en": "Bitget to adjust funding rate interval for SOPHUSDT perpetual futures",
+     "coins": [
+      "SOPH"
+     ],
+     "url": "https://eqn.news/monitor/15038",
+     "source_url": "https://www.bitget.com/en/support/articles/12560603900565"
+    },
+    {
+     "no": 14409,
+     "time": "2026-11-13T11:40:57.392Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bybit Announcements",
+     "zh": "重要通知：ANTHROPICUSDT 拆分并更名（11月16日）",
+     "en": "IMPORTANT: ANTHROPICUSDT Split and Rename (Nov 16)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14409",
+     "source_url": "https://announcements.bybit.com/en-US/article/important-anthropicusdt-split-and-rename-nov-16--artfe526916e960/"
+    },
+    {
+     "no": 14401,
+     "time": "2026-11-13T10:47:42.046Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bybit Announcements",
+     "zh": "交易服务器迁移已成功完成",
+     "en": "Trading Server Migration Successfully Completed",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14401",
+     "source_url": "https://announcements.bybit.com/en-US/article/trading-server-migration-successfully-completed--art507fb9e78e20/"
+    },
+    {
+     "no": 14396,
+     "time": "2026-11-13T10:04:05.680Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bitget Announcements",
+     "zh": "Bitget将于2026年11月20日下架MANTRA/USDT现货交易对",
+     "en": "Bitget Will Delist MANTRA/USDT Spot Trading Pair on November 20, 2026",
+     "coins": [
+      "MANTRA",
+      "SPOT"
+     ],
+     "url": "https://eqn.news/monitor/14396",
+     "source_url": "https://www.bitget.com/en/support/articles/12560603900511"
+    },
+    {
+     "no": 14393,
+     "time": "2026-11-13T09:55:26.097Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bybit Announcements",
+     "zh": "新上线：创新区 IDOLUSDT 永续合约，最高 20 倍杠杆",
+     "en": "New listing: IDOLUSDT Perpetual Contract in Innovation Zone, with up to 20x leverage",
+     "coins": [
+      "IDOL"
+     ],
+     "url": "https://eqn.news/monitor/14393",
+     "source_url": "https://announcements.bybit.com/en-US/article/new-listing-idolusdt-perpetual-contract-in-innovation-zone-with-up-to-20x-leverage--artffa6047fb3e8/"
+    },
+    {
+     "no": 14392,
+     "time": "2026-11-13T09:55:24.128Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bybit Announcements",
+     "zh": "新上线：创新区 OROCHIUSDT 永续合约，最高 50 倍杠杆",
+     "en": "New listing: OROCHIUSDT Perpetual Contract in Innovation Zone, with up to 50x leverage",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14392",
+     "source_url": "https://announcements.bybit.com/en-US/article/new-listing-orochiusdt-perpetual-contract-in-innovation-zone-with-up-to-50x-leverage--art43ad358a137f/"
+    },
+    {
+     "no": 14363,
+     "time": "2026-11-13T08:04:07.984Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bitget Announcements",
+     "zh": "关于Bitget应用强制更新的通知（11月13日）",
+     "en": "Notice on mandatory update of the Bitget app (November 13)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14363",
+     "source_url": "https://www.bitget.com/en/support/articles/12560603900506"
+    },
+    {
+     "no": 14056,
+     "time": "2026-11-12T10:38:45.633Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bybit Announcements",
+     "zh": "Bybit 将支持 Clearpool (CPOOL) 代币置换并更名为 CLEAR",
+     "en": "Bybit Will Support the Clearpool (CPOOL) Token Swap and Rebranding to CLEAR",
+     "coins": [
+      "CPOOL"
+     ],
+     "url": "https://eqn.news/monitor/14056",
+     "source_url": "https://announcements.bybit.com/en-US/article/bybit-will-support-the-clearpool-cpool-token-swap-and-rebranding-to-clear--art864ad3460a46/"
+    },
+    {
+     "no": 14055,
+     "time": "2026-11-12T10:32:02.893Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bitget Announcements",
+     "zh": "Bitget 合约跟单已支持 FRHCUSDT 永续合约",
+     "en": "Bitget 合约跟单已支持 FRHCUSDT 永续合约",
+     "coins": [],
+     "url": "https://eqn.news/monitor/14055",
+     "source_url": "https://www.bitget.com/en/support/articles/12560603900485"
+    },
+    {
+     "no": 13768,
+     "time": "2026-11-11T09:31:45.454Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "OKX Announcements",
+     "zh": "OKX将上线AERO/USDC现货交易",
+     "en": "OKX will launch AERO/USDC for spot trading",
+     "coins": [
+      "AERO"
+     ],
+     "url": "https://eqn.news/monitor/13768",
+     "source_url": "https://www.okx.com/help/okx-will-launch-aero-usdc-for-spot-trading"
+    },
+    {
+     "no": 13763,
+     "time": "2026-11-11T09:18:50.040Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bybit Announcements",
+     "zh": "新上线：DANGOTEUSDT 将于2026年11月11日11:00 UTC在 Bybit Pre-IPO Tradfi 永续合约上线",
+     "en": "New listing: Listing of DANGOTEUSDT on Bybit Pre-IPO Tradfi Perpetual on Nov 11, 2026, 11:00AM UTC",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13763",
+     "source_url": "https://announcements.bybit.com/en-US/article/new-listing-listing-of-dangoteusdt-on-bybit-pre-ipo-tradfi-perpetual-on-nov-11-2026-11-00am-utc--art6ad921fb4a95/"
+    },
+    {
+     "no": 13751,
+     "time": "2026-11-11T09:01:54.696Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bybit Announcements",
+     "zh": "4STOCKUSDT永续合约下架",
+     "en": "Delisting of 4STOCKUSDT Perpetual Contract",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13751",
+     "source_url": "https://announcements.bybit.com/en-US/article/delisting-of-4stockusdt-perpetual-contract--art52c4cf790adc/"
+    },
+    {
+     "no": 13750,
+     "time": "2026-11-11T09:01:52.570Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bybit Announcements",
+     "zh": "HAJIMIUSDT永续合约下架",
+     "en": "Delisting of HAJIMIUSDT Perpetual Contract",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13750",
+     "source_url": "https://announcements.bybit.com/en-US/article/delisting-of-hajimiusdt-perpetual-contract--art7266681607d5/"
+    },
+    {
+     "no": 13749,
+     "time": "2026-11-11T09:01:49.994Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bybit Announcements",
+     "zh": "AGIUSDT永续合约下架",
+     "en": "Delisting of AGIUSDT Perpetual Contract",
+     "coins": [
+      "AGI"
+     ],
+     "url": "https://eqn.news/monitor/13749",
+     "source_url": "https://announcements.bybit.com/en-US/article/delisting-of-agiusdt-perpetual-contract--art7816e6629a54/"
+    },
+    {
+     "no": 13747,
+     "time": "2026-11-11T09:01:06.446Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "OKX Announcements",
+     "zh": "OKX将上线统一代币化股票xCEG、xCVNA等，开放现货交易",
+     "en": "OKX to list Unified Tokenized Stocks xCEG, xCVNA and more for spot trading",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13747",
+     "source_url": "https://www.okx.com/help/okx-to-list-unified-tokenized-stocks-xceg-xcvna-and-more-for-spot-trading"
+    },
+    {
+     "no": 13720,
+     "time": "2026-11-11T08:07:15.810Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "OKX Announcements",
+     "zh": "OKX 将对 ANTHROPIC 永续合约和 X-Perp 执行再平衡",
+     "en": "OKX to execute a rebase on ANTHROPIC perpetuals and X-Perp",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13720",
+     "source_url": "https://www.okx.com/help/okx-to-execute-a-rebase-on-anthropic-perpetuals-and-x-perp"
+    },
+    {
+     "no": 13580,
+     "time": "2026-11-10T16:16:03.357Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bitget Announcements",
+     "zh": "Bitget将调整INITUSDT永续合约的资金费率间隔及最大/最小限额",
+     "en": "Bitget to adjust funding rate interval and maximum/minimum limits for INITUSDT perpetual futures",
+     "coins": [
+      "INIT"
+     ],
+     "url": "https://eqn.news/monitor/13580",
+     "source_url": "https://www.bitget.com/en/support/articles/12560603900276"
+    },
+    {
+     "no": 13386,
+     "time": "2026-11-10T07:00:27.387Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bybit Announcements",
+     "zh": "停止将 POL 作为抵押品和借贷资产",
+     "en": "Discontinuation of POL  as Collateral and Lending Asset",
+     "coins": [
+      "POL"
+     ],
+     "url": "https://eqn.news/monitor/13386",
+     "source_url": "https://announcements.bybit.com/en-US/article/discontinuation-of-pol-as-collateral-and-lending-asset--art1dbdc3a555a5/"
+    },
+    {
+     "no": 13371,
+     "time": "2026-11-10T06:01:41.544Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "OKX Announcements",
+     "zh": "OKX 已完成 VELODROME 代币迁移",
+     "en": "OKX completed VELODROME token migration",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13371",
+     "source_url": "https://www.okx.com/help/okx-completed-velodrome-token-migration"
+    },
+    {
+     "no": 13346,
+     "time": "2026-11-10T04:16:53.832Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "OKX Announcements",
+     "zh": "OKX将上线代币化股票xORCL的USDC交易对",
+     "en": "OKX to list USDC trading pairs for Tokenized Stocks xORCL",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13346",
+     "source_url": "https://www.okx.com/help/okx-to-list-usdc-trading-pairs-for-tokenized-stocks-xorcl"
+    },
+    {
+     "no": 13345,
+     "time": "2026-11-10T04:04:05.707Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bitget Announcements",
+     "zh": "[上线] Bitget将上线Matrix (MTX)",
+     "en": "[Initial Listing] Bitget to list Matrix (MTX)",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13345",
+     "source_url": "https://www.bitget.com/en/support/articles/12560603900217"
+    },
+    {
+     "no": 13325,
+     "time": "2026-11-10T03:00:26.191Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "OKX Announcements",
+     "zh": "OKX将上线ONDSUSD和DDOGUSD股票X-Perps",
+     "en": "OKX to list ONDSUSD and DDOGUSD Equity X-Perps",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13325",
+     "source_url": "https://www.okx.com/help/okx-to-list-ondsusd-and-ddogusd-equity-x-perps"
+    },
+    {
+     "no": 13208,
+     "time": "2026-11-09T16:24:31.659Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bybit Announcements",
+     "zh": "使用高级筛选器评估大师交易员表现",
+     "en": "Evaluate Master Trader Performance with Advanced Filters",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13208",
+     "source_url": "https://announcements.bybit.com/en-US/article/evaluate-master-trader-performance-with-advanced-filters--art5a4cd2b818e1/"
+    },
+    {
+     "no": 13115,
+     "time": "2026-11-09T12:00:58.583Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bybit Announcements",
+     "zh": "Bybit将于2026年11月16日下架12个交易对",
+     "en": "Bybit to Delist 12 Trading Pair(s) on Nov 16, 2026",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13115",
+     "source_url": "https://announcements.bybit.com/en-US/article/bybit-to-delist-12-trading-pair-s-on-nov-16-2026--artcfc6f4821c48/"
+    },
+    {
+     "no": 13054,
+     "time": "2026-11-09T09:36:14.528Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bybit Announcements",
+     "zh": "探索 Bybit Lite Loan：30 天内无清算",
+     "en": "Explore Bybit Lite Loan: No Liquidation for 30 days",
+     "coins": [
+      "LITE"
+     ],
+     "url": "https://eqn.news/monitor/13054",
+     "source_url": "https://announcements.bybit.com/en-US/article/explore-bybit-lite-loan-no-liquidation-for-30-days--art06367d0c958e/"
+    },
+    {
+     "no": 13039,
+     "time": "2026-11-09T09:02:16.365Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "OKX Announcements",
+     "zh": "OKX将上线Unified Tokenized Stocks xNVDL、xSKDD等代币进行现货交易",
+     "en": "OKX to list Unified Tokenized Stocks xNVDL, xSKDD and more for spot trading",
+     "coins": [],
+     "url": "https://eqn.news/monitor/13039",
+     "source_url": "https://www.okx.com/help/okx-to-list-unified-tokenized-stocks-xnvdl-xskdd-and-more-for-spot-trading"
+    },
+    {
+     "no": 13016,
+     "time": "2026-11-09T07:25:29.970Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bybit Announcements",
+     "zh": "部分永续合约 STRKUSDT、ZROUSDT……风险限额调整（2026年11月10日）",
+     "en": "Risk limit adjustment for selected Perpetual Contracts STRKUSDT,ZROUSDT...(Nov 10, 2026)",
+     "coins": [
+      "ZRO",
+      "STRK"
+     ],
+     "url": "https://eqn.news/monitor/13016",
+     "source_url": "https://announcements.bybit.com/en-US/article/risk-limit-adjustment-for-selected-perpetual-contracts-strkusdt-zrousdt-nov-10-2026--art19b4542fe5b6/"
+    },
+    {
+     "no": 12970,
+     "time": "2026-11-09T05:11:29.454Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bybit Announcements",
+     "zh": "Bybit UTA 自动还款功能现已上线：以旧换新、轻松还款、节省利息",
+     "en": "Bybit UTA Auto-Repayment Now Available: Trade, Repay, and Save on Interest",
+     "coins": [
+      "NOW"
+     ],
+     "url": "https://eqn.news/monitor/12970",
+     "source_url": "https://announcements.bybit.com/en-US/article/bybit-uta-auto-repayment-now-available-trade-repay-and-save-on-interest--art1412cf3a943f/"
+    },
+    {
+     "no": 12940,
+     "time": "2026-11-09T03:00:30.283Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "OKX Announcements",
+     "zh": "OKX将上线代币化股票xBSP的USDC交易对",
+     "en": "OKX to list USDC trading pairs for Tokenized Stocks xBSP",
+     "coins": [],
+     "url": "https://eqn.news/monitor/12940",
+     "source_url": "https://www.okx.com/help/okx-to-list-usdc-trading-pairs-for-tokenized-stocks-xbsp"
+    },
+    {
+     "no": 12938,
+     "time": "2026-11-09T02:48:31.333Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "OKX Announcements",
+     "zh": "OKX将上线LUNRUSD和MARAUSD股票X-Perps",
+     "en": "OKX to list LUNRUSD and MARAUSD Equity X-Perps",
+     "coins": [],
+     "url": "https://eqn.news/monitor/12938",
+     "source_url": "https://www.okx.com/help/okx-to-list-lunrusd-and-marausd-equity-x-perps"
+    },
+    {
+     "no": 12898,
+     "time": "2026-11-08T22:40:02.662Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bitget Announcements",
+     "zh": "Bitget 现货跟单现已支持 rTLK/USDT",
+     "en": "Bitget spot copy trade now supports rTLK/USDT",
+     "coins": [],
+     "url": "https://eqn.news/monitor/12898",
+     "source_url": "https://www.bitget.com/en/support/articles/12560603900062"
+    },
+    {
+     "no": 12822,
+     "time": "2026-11-08T20:44:01.478Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bitget Announcements",
+     "zh": "Bitget 现货跟单现已支持 rMCY/USDT",
+     "en": "Bitget spot copy trade now supports rMCY/USDT",
+     "coins": [],
+     "url": "https://eqn.news/monitor/12822",
+     "source_url": "https://www.bitget.com/en/support/articles/12560603900059"
+    },
+    {
+     "no": 12758,
+     "time": "2026-11-08T14:40:02.105Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bitget Announcements",
+     "zh": "Bitget 现货跟单现已支持 rALHC/USDT",
+     "en": "Bitget spot copy trade now supports rALHC/USDT",
+     "coins": [],
+     "url": "https://eqn.news/monitor/12758",
+     "source_url": "https://www.bitget.com/en/support/articles/12560603900055"
+    },
+    {
+     "no": 12743,
+     "time": "2026-11-08T13:44:04.442Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bitget Announcements",
+     "zh": "Bitget 现货跟单现已支持 rCE/USDT",
+     "en": "Bitget spot copy trade now supports rCE/USDT",
+     "coins": [],
+     "url": "https://eqn.news/monitor/12743",
+     "source_url": "https://www.bitget.com/en/support/articles/12560603900051"
+    },
+    {
+     "no": 12691,
+     "time": "2026-11-08T11:36:03.931Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bitget Announcements",
+     "zh": "Bitget 现货跟单现已支持 rMPT/USDT",
+     "en": "Bitget spot copy trade now supports rMPT/USDT",
+     "coins": [],
+     "url": "https://eqn.news/monitor/12691",
+     "source_url": "https://www.bitget.com/en/support/articles/12560603900048"
+    },
+    {
+     "no": 12656,
+     "time": "2026-11-08T09:40:02.368Z",
+     "channels": [
+      "tier2"
+     ],
+     "source": "Bitget Announcements",
+     "zh": "Bitget 现货跟单现已支持 rWES/USDT",
+     "en": "Bitget spot copy trade now supports rWES/USDT",
+     "coins": [],
+     "url": "https://eqn.news/monitor/12656",
+     "source_url": "https://www.bitget.com/en/support/articles/12560603900046"
+    }
+   ],
+   "next_cursor": "1794130802368-12656"
+  }
+ }
+}
