@@ -285,6 +285,7 @@ class Engine:
             try:
                 limits.books(books,self.clock())
                 check_mapping_ratio(common,books)
+                self.universe.check_identity_prices(instruments,books)
                 if interests is None:
                     interests=self.market.open_interests(instruments,books)
                 # Public OI reads also consume the opening book age budget.

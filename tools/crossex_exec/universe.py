@@ -5,6 +5,7 @@ import json
 from itertools import combinations
 import re
 import time
+from types import MappingProxyType
 
 from tools.fill_sim.core import dec
 from .policy import Instrument
@@ -66,9 +67,22 @@ def check_mapping_ratio(instruments, books):
 class Universe:
     def __init__(self, store, clock=time.time):
         self.store, self.clock = store, clock
+        self._inheritance_cache = None
 
     def catalog(self):
         return {k: Instrument.load(v) for k, v in (self.store.meta('mapping', {}) or {}).get('instruments', {}).items()}
+
+    def _inheritance_catalog(self):
+        """Read-only decoded catalog; decisions and incoming legs stay uncached."""
+        # The mapping blob is ~2MB (~43ms to read on prod); reading it only to compare
+        # `at` costs as much as a rebuild. Refreshes are hourly, so a pure 5s TTL bounds staleness.
+        now = self.clock()
+        cached = self._inheritance_cache
+        if cached is None or not 0 <= now-cached[1] < 5:
+            mapping = self.store.meta('mapping', {}) or {}
+            catalog = MappingProxyType({k: Instrument.load(v) for k, v in mapping.get('instruments', {}).items()})
+            cached = self._inheritance_cache = (mapping.get('at'), now, catalog)
+        return cached[2]
 
     def _decisions(self):
         return self.store.meta('universe_decisions', {})
@@ -132,18 +146,54 @@ class Universe:
         return decisions[base]
 
     def eligibility(self, i):
-        choice = self._decisions().get(i.spec.base, {})
-        if choice.get('excluded') or self._decisions().get(i.base, {}).get('excluded'):
+        result = self.eligibility_details(i)
+        return result['category'], result['underlying_market']
+
+    def eligibility_details(self, i, *, catalog=None, decisions=None):
+        """Resolve a category for admission without rewriting raw metadata."""
+        decisions = self._decisions() if decisions is None else decisions
+        choice = decisions.get(i.spec.base, {})
+        if choice.get('excluded') or decisions.get(i.base, {}).get('excluded'):
             raise ValueError('excluded')
         if i.trading_blocked or i.category in FORBIDDEN or choice.get('category') in FORBIDDEN or alias(i.spec.base)[0] in PRE_IPO_BASES|COMMODITY_BASES:
             raise ValueError('category_unconfirmed')
         if i.market.key in choice.get('markets', []):
-            return choice['category'], choice.get('underlying_market')
+            return dict(category=choice['category'], underlying_market=choice.get('underlying_market'), category_source='admin')
         if choice.get('category') == 'listed_equity':
             raise ValueError('category_unconfirmed')
         if i.category == 'crypto':
-            return 'crypto', None
+            return dict(category='crypto', underlying_market=None, category_source='metadata')
+        # Even an explicit excluded=False is an administrator decision. Only
+        # exact raw bases may inherit; aliases and canonical mappings are not proof.
+        if i.category == 'unconfirmed' and 'category' not in choice and 'excluded' not in choice:
+            catalog = self._inheritance_catalog() if catalog is None else catalog
+            same_base = [other for other in catalog.values() if other.spec.base == i.spec.base]
+            if not any(other.category in ('listed_equity', *FORBIDDEN) for other in same_base):
+                sources = sorted({other.market.exchange for other in same_base
+                                  if other.market.exchange in ('okx', 'bitget') and other.market.market_type == 'future'
+                                  and other.category == 'crypto' and not other.trading_blocked})
+                if sources:
+                    return dict(category='crypto', underlying_market=None, category_source='inherited:'+sources[0])
         raise ValueError('category_unconfirmed')
+
+    def check_identity_prices(self, instruments, books):
+        """Inherited identities require <=5% deviation in already-common units."""
+        if not any(self.eligibility_details(i)['category_source'].startswith('inherited:') for i in instruments):
+            return
+        try:
+            if len(instruments) != 2 or len(books) != 2:
+                raise ValueError('missing_book')
+            mids = []
+            for book in books:
+                bid, ask = dec(book.bids[0][0]), dec(book.asks[0][0])
+                if not 0 < bid <= ask:
+                    raise ValueError('invalid_mid')
+                mids.append((bid+ask)/2)
+            # Match the symmetric ratio convention of check_mapping_ratio.
+            if max(mids)/min(mids)-1 > dec('.05'):
+                raise ValueError('bad_ratio')
+        except (ValueError, IndexError, TypeError, AttributeError, ArithmeticError):
+            raise ValueError('identity_price_mismatch') from None
 
     def discover(self):
         # Discovery is also a mapping writer: serialize across SQLite connections
@@ -270,14 +320,17 @@ class Universe:
                 category=decision.get('category', i.category), underlying_market=decision.get('underlying_market'), markets=[]))
             quote = quotes.get(i.market.key, {})
             try:
-                effective,market = self.eligibility(i)
+                details = self.eligibility_details(i, catalog=catalog, decisions=decisions)
+                effective,market = details['category'],details['underlying_market']
+                source = details['category_source']
                 eligible = True
             except ValueError:
                 effective,market,eligible = decision.get('category',i.category),decision.get('underlying_market'),False
+                source = 'admin' if 'category' in decision else 'metadata'
             row['markets'].append(dict(market_key=i.market.key, raw_symbol=i.market.raw_symbol, exchange=i.market.exchange,
                 category=i.category, rule_type=i.rule_type, trading_blocked=i.trading_blocked,
                 volume_usd=quote.get('volume') if 0 <= self.clock()-quote.get('at', 0) <= 300 else None,
                 volume_basis=quote.get('volume_basis'),at=quote.get('at'),selected=i.market.key in decision.get('markets', []),
-                effective_category=effective,underlying_market=market,eligible=eligible,
+                effective_category=effective,underlying_market=market,eligible=eligible,category_source=source,
                 needs_classification=not eligible and not i.trading_blocked and effective not in FORBIDDEN and not decision.get('excluded',False)))
         return list(result.values())

@@ -18,7 +18,8 @@ MIN_VENUES = 3
 BOOK_RETRIES = 1
 SKIP_REASONS = ('book_skew', 'book_stale', 'funding_diff', 'baseline_not_flat',
                 'not_single_venue_outlier', 'too_few_venues', 'size_too_small', 'oi_missing',
-                'mapping_ratio_mismatch', 'volume_too_low', 'volume_unknown', 'category_unconfirmed')
+                'mapping_ratio_mismatch', 'volume_too_low', 'volume_unknown', 'category_unconfirmed',
+                'identity_price_mismatch')
 
 
 class AdmissionError(ValueError):

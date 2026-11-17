@@ -461,7 +461,7 @@ class ReferenceAndAPITests(unittest.TestCase):
         view=JournalView(self.path,{},clock=lambda:NOW)
         self.assertEqual(view.get('summary',{})['opening_skip_counts'],
                          dict(dict.fromkeys(REASONS,0),size_too_small=0,oi_missing=0,mapping_ratio_mismatch=0,
-                              volume_too_low=0,volume_unknown=0,category_unconfirmed=0))
+                              volume_too_low=0,volume_unknown=0,category_unconfirmed=0,identity_price_mismatch=0))
         for reason in REASONS:
             self.store.claim(reason,{'received_at':NOW})
             self.store.skip(reason,reason)
@@ -471,7 +471,7 @@ class ReferenceAndAPITests(unittest.TestCase):
                 reopened.skip(reason,reason)
         self.assertEqual(view.get('summary',{})['opening_skip_counts'],
                          dict(dict.fromkeys(REASONS,1),size_too_small=0,oi_missing=0,mapping_ratio_mismatch=0,
-                              volume_too_low=0,volume_unknown=0,category_unconfirmed=0))
+                              volume_too_low=0,volume_unknown=0,category_unconfirmed=0,identity_price_mismatch=0))
         self.assertEqual(len([e for e in self.store.events() if e['kind']=='SKIP']),6)
 
     def test_skip_counter_trigger_marker_and_event_commit_atomically(self):
