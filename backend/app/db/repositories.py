@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import unicodedata
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
 
 import aiosqlite
 
@@ -809,12 +811,29 @@ class AnnouncementRepository:
     async def find_cross_source_duplicate(
         self, announcement: ExchangeAnnouncement,
     ) -> ExchangeAnnouncement | None:
+        def normalize_url(value: str | None) -> str:
+            if not value:
+                return ""
+            try:
+                parsed = urlsplit(value)
+            except ValueError:
+                return ""
+            host = parsed.netloc.lower().removeprefix("www.")
+            segments = parsed.path.rstrip("/").split("/")
+            path = "/".join(
+                segment for index, segment in enumerate(segments)
+                if index == len(segments) - 1
+                or not re.fullmatch(r"[a-z]{2}(-[a-z]{2,4})?", segment, re.IGNORECASE)
+            )
+            return host + path
+
         def normalize_title(value: str | None) -> str:
             return "".join(
                 char for char in (value or "").lower()
                 if not char.isspace() and not unicodedata.category(char).startswith("P")
             )
 
+        url_key = normalize_url(announcement.url)
         titles = {normalize_title(announcement.title), normalize_title(announcement.title_zh)} - {""}
         published_at = announcement.published_at
         if published_at.tzinfo is None:
@@ -831,7 +850,7 @@ class AnnouncementRepository:
              (published_at + timedelta(hours=6)).isoformat()),
         )
         for row in await cursor.fetchall():
-            if row["url"] == announcement.url or titles.intersection({
+            if (url_key and normalize_url(row["url"]) == url_key) or titles.intersection({
                 normalize_title(row["title"]), normalize_title(row["title_zh"]),
             }):
                 return self._announcement_from_db(row)

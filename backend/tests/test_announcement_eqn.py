@@ -280,6 +280,54 @@ async def test_cross_source_duplicate_has_no_side_effects(repo, first_source, se
         assert NEW_EXCHANGES <= {option["value"] for option in options}
 
 
+@pytest.mark.parametrize("exchange,official_url,eqn_url,expected_duplicate", [
+    ("okx", "https://www.okx.com/zh-hans/help/new-listing",
+     "https://www.okx.com/help/new-listing", True),
+    ("okx", "https://www.okx.com/zh-hans/help/new-listing",
+     "https://www.okx.com/help/another-listing", False),
+    ("bitget", "https://www.bitget.com/en/support/articles/123",
+     "https://www.bitget.com/zh-CN/support/articles/123", True),
+    ("okx", "https://www.okx.com/help/new-listing",
+     "https://other.example/help/new-listing", False),
+    ("okx", "https://WWW.OKX.COM/zh-HANS/help/new-listing/?from=official#details",
+     "https://okx.com/help/new-listing?from=eqn#summary", True),
+    ("okx", "https://www.okx.com/help/en",
+     "https://www.okx.com/help/ja", False),
+    ("okx", "https://www.okx.com/help/en/",
+     "https://www.okx.com/help", False),
+    ("okx", "https://www.okx.com/english/help/new-listing",
+     "https://www.okx.com/help/new-listing", False),
+    ("okx", "https://www.okx.com/zh-hans-extra/help/new-listing",
+     "https://www.okx.com/help/new-listing", False),
+    ("okx", "https://www.okx.com/help/New-Listing",
+     "https://www.okx.com/help/new-listing", False),
+    ("okx", "", "", False),
+    ("okx", "", "https://www.okx.com/help/new-listing", False),
+    ("okx", "https://www.okx.com/help/new-listing", "", False),
+] + [
+    ("okx", f"https://www.okx.com/{locale}/help/new-listing",
+     "https://www.okx.com/help/new-listing", True)
+    for locale in ("zh-cn", "zh-tw", "en", "en-us", "en-gb", "ko", "ja")
+] + [
+    ("okx", "https://www.okx.com/zh-hans/help/en-us/new-listing",
+     "https://www.okx.com/help/new-listing", True),
+])
+async def test_cross_source_duplicate_by_locale_agnostic_url(
+    repo, exchange, official_url, eqn_url, expected_duplicate,
+):
+    monitor = AnnouncementMonitor(repo, now_fn=lambda: NOW)
+    settings = AnnouncementSettings()
+    await monitor.process([
+        notice(exchange=exchange, title="即将上线新币", title_zh=None, url=official_url),
+    ], settings)
+
+    created = await monitor.process([
+        notice("eqn", exchange=exchange, title="A new token listing", title_zh=None, url=eqn_url),
+    ], settings)
+
+    assert (created[0].alert_status == "duplicate") is expected_duplicate
+
+
 @pytest.mark.parametrize("case", ["same_source", "different_exchange", "older", "newer", "unrelated"])
 async def test_dedup_boundaries(repo, case):
     first = notice()
