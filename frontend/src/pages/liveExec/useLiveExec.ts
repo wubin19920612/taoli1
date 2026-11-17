@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { getLiveExec, type LiveExecResult, type LiveResource, type LiveResources, type LiveSummary, type LiveTrade } from "../../api/liveExec";
 import { isPageHidden } from "../../utils/pageVisibility";
+import { usePollingHealth } from "./usePollingHealth";
 
 type Results = { [K in LiveResource]?: LiveExecResult<LiveResources[K]> };
 const resources: LiveResource[] = ["summary", "positions", "trades", "stats"];
@@ -12,6 +14,7 @@ function mergeTrades(previous: LiveTrade[], next: LiveTrade[]): LiveTrade[] {
 }
 
 export function useLiveExec() {
+  const { health, record, invalidate, writesBlocked } = usePollingHealth(resources);
   const [results, setResults] = useState<Results>({});
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
@@ -28,24 +31,33 @@ export function useLiveExec() {
       pending.get(resource)?.abort();
       const controller = new AbortController();
       pending.set(resource, controller);
+      if (force) {
+        setResults(previous => ({ ...previous, [resource]: undefined }));
+        invalidate([resource]);
+      }
       if (before) { paginated = true; setLoadingMore(true); }
       const result = await getLiveExec(resource, controller.signal, before);
       const accepted = active && !controller.signal.aborted && !isPageHidden();
       if (accepted) {
-        setResults(previous => {
-          if (resource !== "trades" || !result.available) return { ...previous, [resource]: result };
-          const incoming = (result.data ?? []) as LiveTrade[];
-          const old = previous.trades?.available ? previous.trades.data ?? [] : [];
-          return { ...previous, trades: { available: true, data: mergeTrades(old, incoming) } };
-        });
+        const publish = () => {
+          record(resource, result.available ? undefined : result.error);
+          setResults(previous => {
+            if (!result.available) return previous;
+            if (resource !== "trades") return { ...previous, [resource]: result };
+            const incoming = (result.data ?? []) as LiveTrade[];
+            const old = previous.trades?.available ? previous.trades.data ?? [] : [];
+            return { ...previous, trades: { available: true, data: mergeTrades(old, incoming) } };
+          });
+        };
+        // A write preflight reads the latest disabled ref after this promise resolves.
+        // Commit the forced result and its health before returning that evidence.
+        if (force) flushSync(publish);
+        else publish();
         if (resource === "trades" && result.available) {
           const rows = (result.data ?? []) as LiveTrade[];
           // A cursor must move backwards; an empty/repeated page ends pagination.
           if (before) setHasMore(rows.some(row => row.closed_at && row.closed_at < before));
           else if (!paginated) setHasMore(rows.length > 0);
-        } else if (resource === "trades") {
-          paginated = false;
-          setHasMore(true);
         }
       }
       if (pending.get(resource) === controller) {
@@ -75,17 +87,16 @@ export function useLiveExec() {
       pending.forEach(controller => controller.abort());
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, []);
+  }, [record, invalidate]);
 
-  const failure = resources.map(key => results[key]).find(result => result?.available === false);
-  const error = failure && !failure.available ? failure.error : null;
+  const error = resources.map(key => health[key]).find(state => state.failures >= 2)?.error ?? null;
   const data = <K extends LiveResource>(key: K): LiveResources[K] | null => {
     const result = results[key];
-    return !error && result?.available ? result.data : null;
+    return result?.available ? result.data : null;
   };
   const trades = data("trades") ?? [];
   const cursor = trades[trades.length - 1]?.closed_at;
   return { summary: data("summary"), positions: data("positions") ?? [], trades, stats: data("stats"),
-    error, loadingMore, refreshSummary, canLoadMore: hasMore && Boolean(cursor) && !error,
+    error, health, writesBlocked, loadingMore, refreshSummary, canLoadMore: hasMore && Boolean(cursor) && !health.trades.unsafe,
     loadMore: () => { if (cursor) loadMoreRef.current(cursor); } };
 }

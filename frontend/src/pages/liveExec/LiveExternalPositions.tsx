@@ -1,3 +1,5 @@
+import { PollingStatus } from "./PollingStatus";
+import type { PollingHealth } from "./usePollingHealth";
 import { Alert, Button, Card, Descriptions, Input, Modal, Space, Table, Tag, Typography } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { LiveAdminConflictError, liveAdminReadError, writeLiveExecAdmin,
@@ -22,8 +24,8 @@ const actionLabel = (action: "register" | "unregister") => action === "register"
 const hasStatus = (value: string | undefined): value is string => typeof value === "string"
   && value.length === 67 && /^x1:[0-9a-f]{64}$/.test(value);
 
-export function LiveExternalPositions({ registry, rows, error, remoteError, notice, refresh, snapshot, now = Date.now(), cancellable = [] }: {
-  registry: Registry | null; rows: ExternalPositionRow[] | null; error?: string; notice?: string;
+export function LiveExternalPositions({ health, writesBlocked = false, registry, rows, error, remoteError, notice, refresh, snapshot, now = Date.now(), cancellable = [] }: {
+  health?: PollingHealth; writesBlocked?: boolean; registry: Registry | null; rows: ExternalPositionRow[] | null; error?: string; notice?: string;
   remoteError?: string; snapshot: LiveRemotePositions | null; now?: number; cancellable?: ExternalPositionRow[];
   refresh: () => Promise<void>;
 }) {
@@ -49,7 +51,7 @@ export function LiveExternalPositions({ registry, rows, error, remoteError, noti
     // Once invalid, reverting to the old observation cannot revive the old consent.
     if (changed && !busy) { setInvalidated(true); setModalError(null); }
   }, [changed, busy]);
-  const actionCurrent = (identity: LiveExternalIdentity, action: "register" | "unregister") => !error && !remoteError
+  const actionCurrent = (identity: LiveExternalIdentity, action: "register" | "unregister") => !writesBlocked && !error && !remoteError
     && hasStatus(registry?.status) && !isPageHidden() && remoteSnapshotFresh(snapshot, Date.now())
     && [...(rows ?? []), ...cancellable].some(row => row.action === action && row.identity && identityKey(row.identity) === identityKey(identity));
   const prepare = (row: ExternalPositionRow) => {
@@ -80,25 +82,25 @@ export function LiveExternalPositions({ registry, rows, error, remoteError, noti
       } else setModalError(cause instanceof Error ? cause.message : "操作失败，请刷新核实操作结果");
     } finally { writing.current = false; setBusy(false); }
   };
-  return <Card title="外部持仓">
+  return <Card title={<><span>外部持仓</span><PollingStatus health={health} /></>}>
     <Space direction="vertical" style={{ width: "100%" }}>
-      {error && <Alert type="warning" showIcon message={`外部持仓读取失败：${liveAdminReadError(error)}`} />}
-      {remoteError && <Alert type="warning" showIcon message={`远端持仓读取失败：${liveAdminReadError(remoteError)}`} />}
+      <div className="live-notice-slot">{error && <Alert type="warning" showIcon message={`外部持仓读取失败：${liveAdminReadError(error)}`} />}</div>
+      <div className="live-notice-slot">{remoteError && <Alert type="warning" showIcon message={`远端持仓读取失败：${liveAdminReadError(remoteError)}`} />}</div>
       {notice && <Alert type="warning" showIcon message={notice} />}
       <>
         <Descriptions size="small" column={2}>
           <Descriptions.Item label="快照时间（UTC）">{snapshot?.snapshot_at ?? "—"}</Descriptions.Item>
           <Descriptions.Item label="快照版本">{snapshot?.snapshot_version ?? "—"}</Descriptions.Item>
         </Descriptions>
-        {!snapshot || !snapshot.available
+        <div className="live-notice-slot">{!snapshot || !snapshot.available
           ? <Alert type="warning" showIcon message="尚无完整远端快照，不能确认账户为空；登记操作不可用" />
           : !fresh ? <Alert type="warning" showIcon message="快照已过期或无法核实新鲜度；以下为历史观测，登记操作不可用" />
-            : <Typography.Text type="secondary">完整快照，10 秒内有效；显示的是快照时点的持仓。</Typography.Text>}
+            : <Typography.Text type="secondary">完整快照，10 秒内有效；显示的是快照时点的持仓。</Typography.Text>}</div>
       </>
       {failure && <Alert type="error" showIcon message={failure} />}
       {success && <Alert type="success" showIcon message="外仓登记状态已更新，已请求刷新账户与管理数据" />}
       <Typography.Paragraph type="secondary">以下保留交易所、原始合约代码、方向和 DEX。登记按精确合约覆盖多空两个方向，永久禁止程序交易。归属、风险和可开仓状态以执行服务核实结果为准；USD 浮盈亏使用上游保守下界，缺失显示“—”。</Typography.Paragraph>
-      <Table<ExternalPositionRow> size="small" rowKey="key" pagination={false} dataSource={rows ?? []} scroll={{ x: 1400 }}
+      <Table<ExternalPositionRow> tableLayout="fixed" size="small" rowKey="key" pagination={false} dataSource={rows ?? []} scroll={{ x: 1400 }}
         locale={{ emptyText: rows === null ? "远端持仓数据不可用，无法确认账户是否为空"
           : !fresh ? "快照已过期，无法确认当前是否空仓" : "账户无远端持仓" }} columns={[
           { title: "交易所 / 通道", render: (_, row) => <>{row.exchange ?? "—"}<br />{row.route ?? "—"}</> },
@@ -111,11 +113,11 @@ export function LiveExternalPositions({ registry, rows, error, remoteError, noti
           { title: "浮盈亏（USD）", render: (_, row) => typeof row.usdUpnl === "string" ? `${row.usdUpnl} USD`
             : row.usdUpnl == null || !Number.isFinite(row.usdUpnl) ? "—" : `${row.usdUpnl.toFixed(2)} USD` },
           { title: "折算状态", dataIndex: "conversion", render: value => value ?? "—" },
-          { title: "操作", render: (_, row) => row.action ? <Button disabled={busy || !fresh || !!error || !!remoteError || !row.identity || !hasStatus(registry?.status)}
+          { title: "操作", render: (_, row) => row.action ? <Button disabled={writesBlocked || busy || !fresh || !!error || !!remoteError || !row.identity || !hasStatus(registry?.status)}
             aria-label={`${actionLabel(row.action)} ${row.symbol} ${direction(row)}`} onClick={() => prepare(row)}>{actionLabel(row.action)}</Button> : "—" },
         ]} />
       <Typography.Text>登记记录（不代表当前远端仓位）</Typography.Text>
-      <Table size="small" rowKey="key" pagination={false} scroll={{ x: 900 }}
+      <Table tableLayout="fixed" size="small" rowKey="key" pagination={false} scroll={{ x: 900 }}
         dataSource={(registry?.contracts ?? []).map((record, index) => ({ ...record, key: `${JSON.stringify(record.identity)}:${index}` }))}
         locale={{ emptyText: registry ? "暂无登记记录" : "登记记录不可用" }} columns={[
           { title: "交易所 / 通道", render: (_, row) => <>{row.identity.exchange_type}<br />{row.identity.route}</> },
@@ -125,7 +127,7 @@ export function LiveExternalPositions({ registry, rows, error, remoteError, noti
           { title: "程序交易限制", render: (_, row) => row.forbidden === true ? "永久禁单（多、空）" : "—" },
           { title: "操作", render: (_, record) => {
             const row = cancellable.find(item => item.identity && identityKey(item.identity) === identityKey(record.identity));
-            return row ? <Button disabled={busy || !fresh || !!error || !!remoteError || !hasStatus(registry?.status)}
+            return row ? <Button disabled={writesBlocked || busy || !fresh || !!error || !!remoteError || !hasStatus(registry?.status)}
               aria-label={`取消登记 ${row.symbol} 多、空均无仓位`} onClick={() => prepare(row)}>取消登记</Button> : "—";
           } },
         ]} />

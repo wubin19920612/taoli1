@@ -248,17 +248,18 @@ export async function getLiveExecAdmin<K extends LiveAdminResource>(
 
 // Read access may use the development bypass; only this existing session-only
 // endpoint establishes that the browser can perform administrator writes.
-export async function hasLiveExecAdminSession(signal: AbortSignal): Promise<boolean> {
+export async function hasLiveExecAdminSession(signal: AbortSignal): Promise<boolean | null> {
   try {
     // A missing admin session must not redirect visitors who can still read.
     const response = await fetch(new URL("/api/auth/sessions", window.location.origin).toString(), {
       signal, credentials: "same-origin", cache: "no-store",
     });
-    if (!response.ok) return false;
+    if (response.status === 401 || response.status === 403) return false;
+    if (!response.ok) return null;
     const sessions: unknown = await response.json();
-    return Array.isArray(sessions) && sessions.some(row => isObject(row) && row.current === true);
+    return Array.isArray(sessions) && sessions.some(row => isObject(row) && row.current === true) ? true : null;
   } catch {
-    return false;
+    return null;
   }
 }
 

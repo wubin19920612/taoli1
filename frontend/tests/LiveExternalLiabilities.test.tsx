@@ -5,7 +5,7 @@ import type { LiveExternalLiabilities as Registry, LiveSummary } from "../src/ap
 import { LiveExecPage } from "../src/pages/LiveExecPage";
 import { LiveExternalLiabilities } from "../src/pages/liveExec/LiveExternalLiabilities";
 import { useLiveExecAdmin } from "../src/pages/liveExec/useLiveExecAdmin";
-import { fixtures } from "./liveExecAdminFixtures";
+import { fixtures, freshAdminSnapshot } from "./liveExecAdminFixtures";
 import { liveFixtures } from "./liveExecFixtures";
 
 let registry: Registry;
@@ -75,7 +75,8 @@ beforeEach(() => {
       if (readResult) return response(readResult.status, readResult.body);
       return response(200, { available: true, data: structuredClone(registry) });
     }
-    const data = path === "summary" ? summary : fixtures[path as keyof typeof fixtures] ?? liveFixtures[path as keyof typeof liveFixtures];
+    const data = path === "remote-positions" ? freshAdminSnapshot() : path === "summary" ? summary
+      : fixtures[path as keyof typeof fixtures] ?? liveFixtures[path as keyof typeof liveFixtures];
     return response(200, { available: true, data: structuredClone(data) });
   }));
 });
@@ -301,7 +302,8 @@ describe("外部负债额度", () => {
     expect(screen.getAllByText("超额度")).toHaveLength(2);
     readResult = { status: 200, body: { available: true, data: null } };
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
-    expect(screen.getByText("负债额度数据不可用")).toBeTruthy();
+    expect(screen.getByText(/负债额度读取失败/)).toBeTruthy();
+    expect(screen.getAllByText("超额度")).toHaveLength(2);
     expect(screen.queryByText("暂无负债额度登记")).toBeNull();
     expect((screen.getByRole("button", { name: "登记额度" }) as HTMLButtonElement).disabled).toBe(true);
   });

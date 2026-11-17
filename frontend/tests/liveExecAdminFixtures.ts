@@ -1,7 +1,10 @@
 export const mappingId = "0123456789abcdef01234567";
 export const markets = ["binance|future|SKHYNIXUSDT", "bitget|future|SKHYNIXUSDT"];
 export const universeStatus = "u1:" + "a".repeat(64);
+export const freshAdminSnapshot = () => ({ available: true, positions: [], stale: false,
+  snapshot_at: new Date().toISOString(), snapshot_version: 1 });
 export const fixtures = {
+  "remote-positions": { available: false, positions: [] },
   "external-liabilities": { revision: 0, items: [] },
   "external-positions": { status: "x1:" + "a".repeat(64), contracts: [], income: null, flatten_status: null, projection: null },
   config: { version: 2, fallback: false, values: { order_usd_max: 50, min_venues: 3 }, schema: {

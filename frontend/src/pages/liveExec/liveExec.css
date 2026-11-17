@@ -1,0 +1,31 @@
+.live-exec-page {
+  font-variant-numeric: tabular-nums;
+}
+
+.live-exec-page .ant-card-body {
+  min-height: 180px;
+}
+
+.live-exec-page .live-summary > .ant-card-body {
+  min-height: 850px;
+}
+
+.live-exec-page .ant-table-cell {
+  overflow-wrap: anywhere;
+}
+
+.live-exec-page .live-notice-slot {
+  position: relative;
+  height: 40px;
+}
+
+.live-exec-page .live-notice-slot > .ant-alert {
+  position: absolute;
+  inset: 0;
+  padding: 6px 12px;
+  overflow: auto;
+}
+
+.live-exec-page .ant-card-head-title {
+  white-space: nowrap;
+}

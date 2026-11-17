@@ -10,8 +10,8 @@ function openingPaused(data: LiveSummary | null): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
 
-export function LiveOpeningControl({ data, hasAdminSession, refreshSummary }: {
-  data: LiveSummary | null;
+export function LiveOpeningControl({ data, hasAdminSession, refreshSummary, writesBlocked = false }: {
+  writesBlocked?: boolean; data: LiveSummary | null;
   hasAdminSession: boolean;
   refreshSummary: () => Promise<LiveSummary | null>;
 }) {
@@ -22,7 +22,9 @@ export function LiveOpeningControl({ data, hasAdminSession, refreshSummary }: {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
   const writing = useRef(false);
-  const disabled = !hasAdminSession || paused === null || (paused && mode !== "live" && mode !== "shadow");
+  const disabled = writesBlocked || !hasAdminSession || paused === null || (paused && mode !== "live" && mode !== "shadow");
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
   const actionLabel = paused ? "恢复开仓" : "暂停开仓";
   const pendingLabel = pending?.paused ? "恢复开仓" : "暂停开仓";
 
@@ -42,6 +44,10 @@ export function LiveOpeningControl({ data, hasAdminSession, refreshSummary }: {
       if (pending.paused !== openingPaused(latest) || pending.mode !== (latest.mode ?? null)) {
         setPending(null);
         setNotice({ type: "warning", message: "状态已变化，请重新确认" });
+        return;
+      }
+      if (disabledRef.current) {
+        setModalError("数据或会话状态已变化，写操作已禁用，请刷新后重新确认");
         return;
       }
       await writeLiveExecAdmin({ resource: "opening", action: pending.paused ? "resume" : "pause",

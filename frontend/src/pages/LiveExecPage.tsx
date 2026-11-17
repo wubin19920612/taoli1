@@ -11,6 +11,9 @@ import { useLiveExecAdmin } from "./liveExec/useLiveExecAdmin";
 import { LiveExternalPositions } from "./liveExec/LiveExternalPositions";
 import { LiveExternalLiabilities } from "./liveExec/LiveExternalLiabilities";
 import { LiveProgramRisk } from "./liveExec/LiveProgramRisk";
+import { PollingStatus, oldestHealth } from "./liveExec/PollingStatus";
+import type { PollingHealth } from "./liveExec/usePollingHealth";
+import "./liveExec/liveExec.css";
 import { remotePositionView } from "./liveExec/remotePositionView";
 
 const reasons: Record<string, string> = {
@@ -89,12 +92,12 @@ function Account({ name, data }: { name: string; data: LiveAccount | null }) {
     </>}
   </Card>;
 }
-function Summary({ data, flatten, hasAdminSession, refreshSummary }: {
-  data: LiveSummary | null; flatten?: LiveFlattenStatus | null;
+function Summary({ data, flatten, hasAdminSession, refreshSummary, health, writesBlocked }: {
+  health?: PollingHealth; writesBlocked: boolean; data: LiveSummary | null; flatten?: LiveFlattenStatus | null;
   hasAdminSession: boolean; refreshSummary: () => Promise<LiveSummary | null>;
 }) {
-  return <Card title="执行汇总">
-    <LiveOpeningControl data={data} hasAdminSession={hasAdminSession} refreshSummary={refreshSummary} />
+  return <Card className="live-summary" title={<><span>执行汇总</span><PollingStatus health={health} /></>}>
+    <LiveOpeningControl writesBlocked={writesBlocked} data={data} hasAdminSession={hasAdminSession} refreshSummary={refreshSummary} />
     {!data ? <Empty description="暂无汇总数据" /> : <Space direction="vertical" style={{ width: "100%" }}>
       <Space wrap>
         <Tag color={data.halted ? "red" : undefined}>{data.halted ? "熔断" : data.halted === false ? "未熔断" : "熔断状态未知"}{data.halt_reason ? `：${data.halt_reason}` : ""}</Tag>
@@ -143,7 +146,7 @@ const tradeColumns: ColumnsType<LiveTrade> = [
   { title: "币种 / 交易对", key: "symbol", render: (_, row) => <><div>{row.symbol ?? "—"}</div><small>{row.pair ?? "—"}</small></> },
   { title: "开仓 / 平仓时间", key: "time", render: (_, row) => <><div>{date(row.opened_at)}</div><div>{date(row.closed_at)}</div></> },
   { title: "持有时长", dataIndex: "held_seconds", render: duration },
-  { title: "两腿均价（开 → 平）", key: "legs", render: (_, row) => row.legs?.map((leg, index) => <div key={index}>{leg.exchange ?? "—"} · {side(leg.side)} · {price(leg.qty)}：{price(leg.entry_vwap)} → {price(leg.exit_vwap)}</div>) ?? "—" },
+  { width: 360, title: "两腿均价（开 → 平）", key: "legs", render: (_, row) => row.legs?.map((leg, index) => <div key={index}>{leg.exchange ?? "—"} · {side(leg.side)} · {price(leg.qty)}：{price(leg.entry_vwap)} → {price(leg.exit_vwap)}</div>) ?? "—" },
   { title: "开仓价差（bp）", dataIndex: "entry_spread_bps", render: (v: number | null) => number(v) },
   { title: "开仓基准（bp）", dataIndex: "baseline_bps", render: (v: number | null | undefined) => number(v) },
   { title: "开仓超额价差（bp）", dataIndex: "excess_bps", render: (v: number | null | undefined) => number(v) },
@@ -168,13 +171,14 @@ function GroupTable({ title, rows, exitReason = false }: { title: string; rows: 
     { title: "平均净收益（bp）", dataIndex: "mean_bps", render: (v: number | null) => number(v) },
     { title: "胜率", dataIndex: "win_rate", render: percentage },
   ];
-  return <Card size="small" title={title}><Table size="small" rowKey={row => row.key ?? "unknown"} columns={columns}
+  return <Card size="small" title={title}><Table tableLayout="fixed" size="small" rowKey={row => row.key ?? "unknown"} columns={columns}
     dataSource={rows ?? []} pagination={false} scroll={{ x: 500 }} locale={{ emptyText: "暂无分组统计" }} /></Card>;
 }
 
 export function LiveExecPage() {
-  const { summary, positions, trades, stats, error, loadingMore, canLoadMore, loadMore, refreshSummary } = useLiveExec();
+  const { summary, positions, trades, stats, error, health, writesBlocked, loadingMore, canLoadMore, loadMore, refreshSummary } = useLiveExec();
   const management = useLiveExecAdmin();
+  const allWritesBlocked = writesBlocked || management.writesBlocked;
   const [now, setNow] = useState(Date.now);
   const remote = management.data["remote-positions"];
   const external = remotePositionView(remote, management.data["external-positions"], now);
@@ -184,7 +188,7 @@ export function LiveExecPage() {
   }, []);
   const positionColumns: ColumnsType<LivePosition> = [
     { title: "币种", dataIndex: "symbol", render: (value: string | null) => value ?? "—" },
-    { title: "两腿（交易所 / 通道 / 方向 / 数量 / 开仓价 / 标记价）", key: "legs", render: (_, row) => row.legs?.map((leg, index) => <div key={index}>{leg.exchange ?? "—"} / {leg.route ?? "—"} / {side(leg.side)} / {price(leg.qty)} / {price(leg.entry_price)} / {price(leg.mark_price)}</div>) ?? "—" },
+    { width: 440, title: "两腿（交易所 / 通道 / 方向 / 数量 / 开仓价 / 标记价）", key: "legs", render: (_, row) => row.legs?.map((leg, index) => <div key={index}>{leg.exchange ?? "—"} / {leg.route ?? "—"} / {side(leg.side)} / {price(leg.qty)} / {price(leg.entry_price)} / {price(leg.mark_price)}</div>) ?? "—" },
     { title: "开仓 / 当前价差（bp）", key: "spread", render: (_, row) => `${number(row.entry_spread_bps)} / ${number(row.current_spread_bps)}` },
     { title: "开仓基准（bp）", dataIndex: "baseline_bps", render: (v: number | null | undefined) => number(v) },
     { title: "开仓超额价差（bp）", dataIndex: "excess_bps", render: (v: number | null | undefined) => number(v) },
@@ -192,36 +196,36 @@ export function LiveExecPage() {
     { title: "开仓盘口时间差（毫秒）", dataIndex: "open_book_skew_ms", render: (v: number | null | undefined) => number(v, 0) },
     { title: "平仓盘口时间差（毫秒）", dataIndex: "close_book_skew_ms", render: (v: number | null | undefined) => number(v, 0) },
     { title: "浮动盈亏", key: "pnl", render: (_, row) => <Profit usd={row.unrealized_usd} bps={row.unrealized_bps} /> },
-    { title: "已持有时长", key: "held", render: (_, row) => duration(row.opened_at && Number.isFinite(Date.parse(row.opened_at)) ? (now - Date.parse(row.opened_at)) / 1000 : row.held_seconds) },
-    { title: "距资金费结算", key: "funding", render: (_, row) => countdown(row.next_funding_at, now) },
+    { width: 180, title: "已持有时长", key: "held", render: (_, row) => duration(row.opened_at && Number.isFinite(Date.parse(row.opened_at)) ? (now - Date.parse(row.opened_at)) / 1000 : row.held_seconds) },
+    { width: 180, title: "距资金费结算", key: "funding", render: (_, row) => countdown(row.next_funding_at, now) },
     { title: "距止损（bp）", dataIndex: "stop_distance_bps", render: (v: number | null) => number(v) },
-    { title: "距最长持仓到期", key: "expiry", render: (_, row) => countdown(row.max_hold_at, now) },
+    { width: 180, title: "距最长持仓到期", key: "expiry", render: (_, row) => countdown(row.max_hold_at, now) },
     { title: "状态", dataIndex: "status", render: (value: LivePosition["status"]) => value ? <Tag color={value === "one_leg" ? "red" : "blue"}>{states[value] ?? "未知状态"}</Tag> : "—" },
   ];
   const vs = stats?.vs_sim;
-  return <Space direction="vertical" size="middle" style={{ width: "100%", padding: 16 }}>
+  return <Space className="live-exec-page" direction="vertical" size="middle" style={{ width: "100%", padding: 16 }}>
     <Typography.Title level={3}>实盘</Typography.Title>
-    {error && <Alert type="warning" showIcon message={`实盘服务未连接（${failureLabel(error)}）`} />}
-    <Summary data={summary} flatten={management.data["external-positions"]?.flatten_status}
+    <div className="live-notice-slot">{error && <Alert type="warning" showIcon message={`实盘服务未连接（${failureLabel(error)}）`} />}</div>
+    <Summary health={health.summary} writesBlocked={allWritesBlocked} data={summary} flatten={management.data["external-positions"]?.flatten_status}
       hasAdminSession={management.hasAdminSession} refreshSummary={refreshSummary} />
-    <LiveProgramRisk summary={summary} registry={management.data["external-positions"]} snapshot={remote} now={now} />
-    <LiveExternalPositions registry={management.data["external-positions"]} rows={external.rows}
+    <LiveProgramRisk health={oldestHealth(health.summary, management.health["external-positions"], management.health["remote-positions"])} summary={summary} registry={management.data["external-positions"]} snapshot={remote} now={now} />
+    <LiveExternalPositions health={oldestHealth(management.health["external-positions"], management.health["remote-positions"])} writesBlocked={allWritesBlocked} registry={management.data["external-positions"]} rows={external.rows}
       snapshot={remote} now={now} cancellable={external.cancellable}
       error={management.errors["external-positions"]}
       remoteError={management.errors["remote-positions"]}
       refresh={() => management.refresh(true)} />
-    <LiveExternalLiabilities registry={management.data["external-liabilities"]} summary={summary}
+    <LiveExternalLiabilities health={management.health["external-liabilities"]} writesBlocked={allWritesBlocked} registry={management.data["external-liabilities"]} summary={summary}
       error={management.errors["external-liabilities"]} hasAdminSession={management.hasAdminSession}
       refresh={() => management.refresh(true)} />
     <Typography.Paragraph type="secondary">基准、超额价差和预估两小时资金费成本均为开仓复核快照；开仓超额价差尚未扣除费用，预估成本不等于实际已付资金费。盘口时间差不代表订单发送或成交时间差；平仓盘口时间差可能远超 300 毫秒。历史快照缺失时显示“—”。</Typography.Paragraph>
-    <Card title="当前持仓"><Table rowKey="id" size="small" columns={positionColumns} dataSource={positions}
+    <Card title={<><span>当前持仓</span><PollingStatus health={health.positions} /></>}><Table tableLayout="fixed" rowKey="id" size="small" columns={positionColumns} dataSource={positions}
       pagination={false} scroll={{ x: 2800 }} locale={{ emptyText: "暂无当前持仓" }} /></Card>
-    <Card title="已平仓记录">
-      <Table rowKey="id" size="small" columns={tradeColumns} dataSource={trades}
+    <Card title={<><span>已平仓记录</span><PollingStatus health={health.trades} /></>}>
+      <Table tableLayout="fixed" rowKey="id" size="small" columns={tradeColumns} dataSource={trades}
         pagination={false} scroll={{ x: 3400 }} locale={{ emptyText: "暂无已平仓记录" }} />
       <Button style={{ marginTop: 12 }} disabled={!canLoadMore} loading={loadingMore} onClick={loadMore}>加载更多</Button>
     </Card>
-    <Card title={`利润分布（近 ${stats?.days ?? "—"} 天，共 ${stats?.n ?? "—"} 笔）`}>
+    <Card title={<><span>{`利润分布（近 ${stats?.days ?? "—"} 天，共 ${stats?.n ?? "—"} 笔）`}</span><PollingStatus health={health.stats} /></>}>
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={10}><Typography.Text>净收益（bp） / 笔数</Typography.Text><ProfitHistogram bins={stats?.histogram} /></Col>
         <Col xs={24} xl={14}><Row gutter={[12, 12]}>
@@ -232,7 +236,7 @@ export function LiveExecPage() {
         </Row></Col>
       </Row>
     </Card>
-    <Card title="实盘与模拟对比">{!vs ? <Empty description="暂无模拟对比数据" /> : <Descriptions column={{ xs: 1, md: 2, xl: 3 }}>
+    <Card title={<><span>实盘与模拟对比</span><PollingStatus health={health.stats} /></>}>{!vs ? <Empty description="暂无模拟对比数据" /> : <Descriptions column={{ xs: 1, md: 2, xl: 3 }}>
       <Descriptions.Item label="对比笔数">{number(vs.n, 0)}</Descriptions.Item>
       <Descriptions.Item label="滑点中位数">{number(vs.slippage_bps_p50)} bp</Descriptions.Item>
       <Descriptions.Item label="滑点第 90 百分位">{number(vs.slippage_bps_p90)} bp</Descriptions.Item>
@@ -240,6 +244,6 @@ export function LiveExecPage() {
       <Descriptions.Item label="两腿成交间隔第 90 百分位">{number(vs.leg_fill_gap_ms_p90, 0)} 毫秒</Descriptions.Item>
       <Descriptions.Item label="单腿事件率">{percentage(vs.one_leg_rate)}</Descriptions.Item>
     </Descriptions>}</Card>
-    <LiveExecAdmin management={management} />
+    <LiveExecAdmin writesBlocked={allWritesBlocked} management={management} />
   </Space>;
 }

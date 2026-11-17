@@ -32,6 +32,8 @@ beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(new Date(remoteAt)); visibility("visible");
   remote = structuredClone(remoteSnapshot); registry = structuredClone(remoteRegistry); remoteError = null; writes = [];
   fetchMock = vi.fn(async (input: string, options: RequestInit = {}) => {
+    if (new URL(input).pathname === "/api/auth/sessions")
+      return { ok: true, status: 200, json: async () => [{ current: true }] };
     const path = new URL(input).pathname.replace("/api/live-exec/", "");
     if (options.method) {
       writes.push({ path, body: JSON.parse(String(options.body)), options });

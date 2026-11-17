@@ -1,3 +1,5 @@
+import { PollingStatus } from "./PollingStatus";
+import type { PollingHealth } from "./usePollingHealth";
 import { Alert, Button, Card, Descriptions, Input, Modal, Select, Space, Table, Tag, Typography } from "antd";
 import { useRef, useState } from "react";
 import { LiveAdminConflictError, LiveAdminSessionError, liveAdminReadError, validLiabilityCap, writeLiveExecAdmin,
@@ -9,8 +11,8 @@ const exchangeValid = (value: string) => /^[A-Z][A-Z0-9_]{0,39}$/.test(value) &&
 const coinValid = (value: string) => /^[A-Za-z0-9][A-Za-z0-9._:-]{0,39}$/.test(value) && !/\s/.test(value);
 const responsibility = "登记后，该负债在额度内不会再阻止程序开仓；负债由你自行负责，超出额度程序仍会停开。";
 
-export function LiveExternalLiabilities({ registry, summary, error, hasAdminSession, refresh }: {
-  registry: Registry | null; summary: LiveSummary | null; error?: string; hasAdminSession: boolean;
+export function LiveExternalLiabilities({ health, writesBlocked = false, registry, summary, error, hasAdminSession, refresh }: {
+  health?: PollingHealth; writesBlocked?: boolean; registry: Registry | null; summary: LiveSummary | null; error?: string; hasAdminSession: boolean;
   refresh: () => Promise<void>;
 }) {
   const [selectedExchange, setSelectedExchange] = useState<string>();
@@ -33,7 +35,7 @@ export function LiveExternalLiabilities({ registry, summary, error, hasAdminSess
   const exchange = selectedExchange ?? defaultExchange;
   // Bind the draft to its displayed exchange, including an empty selection until the user chooses one.
   const lockExchange = () => setSelectedExchange(current => current ?? exchange ?? "");
-  const unavailable = !hasAdminSession || sessionRejected || !registry || !!error;
+  const unavailable = writesBlocked || !hasAdminSession || sessionRejected || !registry || !!error;
   const disabled = unavailable || busy || pending !== null;
 
   const register = () => {
@@ -79,14 +81,14 @@ export function LiveExternalLiabilities({ registry, summary, error, hasAdminSess
   const noticeText = notice === "conflict" ? (refreshed ? "已被修改，已刷新" : "已被修改，刷新失败，请稍后重试")
     : `${notice === "registered" ? "额度已登记" : "额度已注销"}，${refreshed ? "已刷新" : "刷新失败，请稍后核实"}`;
 
-  return <Card title="外部负债额度">
+  return <Card title={<><span>外部负债额度</span><PollingStatus health={health} /></>}>
     <Space direction="vertical" style={{ width: "100%" }}>
       <Typography.Paragraph type="secondary">额度和当前负债均为对应币种的原生数量。额度内负债由你自行负责；超额仍会停开，其他开仓限制继续生效。</Typography.Paragraph>
-      {error && <Alert type="warning" showIcon message={`负债额度读取失败：${liveAdminReadError(error)}`} />}
+      <div className="live-notice-slot">{error && <Alert type="warning" showIcon message={`负债额度读取失败：${liveAdminReadError(error)}`} />}</div>
       {(!hasAdminSession || sessionRejected) && <Typography.Text type="secondary">管理员会话未验证，负债额度写操作不可用</Typography.Text>}
       {failure && <Alert type="error" showIcon message={failure} />}
       {notice && <Alert type={notice === "conflict" || !refreshed ? "warning" : "success"} showIcon message={noticeText} />}
-      <Table<LiveExternalLiability> size="small" rowKey={row => JSON.stringify([row.exchange_type, row.coin])}
+      <Table<LiveExternalLiability> tableLayout="fixed" size="small" rowKey={row => JSON.stringify([row.exchange_type, row.coin])}
         pagination={false} dataSource={registry?.items ?? []} scroll={{ x: 1050 }}
         locale={{ emptyText: registry ? "暂无负债额度登记" : "负债额度数据不可用" }} columns={[
           { title: "交易所", dataIndex: "exchange_type" },

@@ -1,12 +1,13 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_REQUIRED_EVENT } from "../src/api/auth";
+import type { LiveSummary } from "../src/api/liveExec";
 import { AuthGate } from "../src/components/AuthGate";
 import { LiveExecPage } from "../src/pages/LiveExecPage";
 import { LiveOpeningControl } from "../src/pages/liveExec/LiveOpeningControl";
 import { useLiveExec } from "../src/pages/liveExec/useLiveExec";
 import { useLiveExecAdmin } from "../src/pages/liveExec/useLiveExecAdmin";
-import { fixtures } from "./liveExecAdminFixtures";
+import { fixtures, freshAdminSnapshot } from "./liveExecAdminFixtures";
 import { liveFixtures } from "./liveExecFixtures";
 
 let summary: Record<string, unknown>;
@@ -53,7 +54,7 @@ beforeEach(() => {
       return response(200, { available: true, data: { paused: summary.opening_paused } });
     }
     reads.push({ path, options });
-    const data = structuredClone(path === "summary" ? summary
+    const data = structuredClone(path === "remote-positions" ? freshAdminSnapshot() : path === "summary" ? summary
       : fixtures[path as keyof typeof fixtures] ?? liveFixtures[path as keyof typeof liveFixtures]);
     if (path === "summary" && summaryGate) await summaryGate;
     return response(200, { available: true, data });
@@ -65,6 +66,31 @@ afterEach(() => {
 });
 
 describe("开仓暂停与恢复", () => {
+  it.each(["writesBlocked", "session"])("rechecks %s after the preflight wait before sending resume", async reason => {
+    let release!: (value: LiveSummary) => void;
+    const data = { ...liveFixtures.summary, opening_paused: true } as LiveSummary;
+    const refreshSummary = vi.fn(() => new Promise<LiveSummary>(resolve => { release = resolve; }));
+    const { rerender } = render(<LiveOpeningControl data={data} hasAdminSession refreshSummary={refreshSummary} />);
+    await click("恢复开仓"); await confirm("确认恢复开仓");
+    expect(refreshSummary).toHaveBeenCalledTimes(1);
+    rerender(<LiveOpeningControl data={data} hasAdminSession={reason !== "session"}
+      writesBlocked={reason === "writesBlocked"} refreshSummary={refreshSummary} />);
+    await act(async () => { release(data); });
+    expect(writes).toHaveLength(0);
+    expect(dialog().getByText("数据或会话状态已变化，写操作已禁用，请刷新后重新确认")).toBeTruthy();
+  });
+
+  it("resumes after a delayed successful preflight on the full page", async () => {
+    summary.opening_paused = true;
+    render(<LiveExecPage />); await flush(); await click("恢复开仓");
+    let release!: () => void;
+    summaryGate = new Promise<void>(resolve => { release = resolve; });
+    await confirm("确认恢复开仓");
+    expect(writes).toHaveLength(0);
+    summaryGate = null; release(); await flush();
+    expect(writes.map(write => write.path)).toEqual(["opening/resume"]);
+  });
+
   it("integrates the control into the live summary", async () => {
     render(<LiveExecPage />); await flush();
     const card = within(screen.getByText("执行汇总").closest<HTMLElement>(".ant-card")!);

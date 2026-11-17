@@ -2,6 +2,7 @@ import { Alert, Button, Card, Checkbox, Input, Modal, Space, Table, Tag, Typogra
 import { useRef, useState, type ReactNode } from "react";
 import { hasMappingPrecondition, hasUniversePrecondition, LiveAdminConflictError, liveAdminReadError, writeLiveExecAdmin, type LiveAdminWrite, type LiveCategory,
   type LiveMapping, type LiveUniverse } from "../../api/liveExec";
+import { PollingStatus } from "./PollingStatus";
 import type { useLiveExecAdmin } from "./useLiveExecAdmin";
 
 const labels: Record<string, string> = {
@@ -35,7 +36,7 @@ function MappingDetails({ mapping }: { mapping: LiveMapping }) {
 }
 
 type Pending = { update: LiveAdminWrite; title: string; details: ReactNode; configVersion?: number };
-export function LiveExecAdmin({ management }: { management: ReturnType<typeof useLiveExecAdmin> }) {
+export function LiveExecAdmin({ management, writesBlocked = management.writesBlocked }: { management: ReturnType<typeof useLiveExecAdmin>; writesBlocked?: boolean }) {
   const { data, errors, refresh } = management;
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [pending, setPending] = useState<Pending | null>(null);
@@ -49,10 +50,10 @@ export function LiveExecAdmin({ management }: { management: ReturnType<typeof us
   const [busy, setBusy] = useState(false);
   const writing = useRef(false);
   const config = data.config;
-  const prepare = (value: Pending) => { setError(null); setModalError(null); setSuccess(false); setPending(value); };
+  const prepare = (value: Pending) => { if (writesBlocked) return; setError(null); setModalError(null); setSuccess(false); setPending(value); };
   const prepareConfig = () => {
     setError(null); setSuccess(false);
-    if (!config) return;
+    if (writesBlocked || !config) return;
     const changes: Record<string, number> = {};
     for (const [key, raw] of Object.entries(draft)) {
       const value = Number(raw), rule = config.schema[key];
@@ -75,7 +76,7 @@ export function LiveExecAdmin({ management }: { management: ReturnType<typeof us
     await refresh(true);
   };
   const submit = async (update: LiveAdminWrite) => {
-    if (writing.current) return;
+    if (writesBlocked || writing.current) return;
     writing.current = true; setBusy(true); setModalError(null);
     try {
       await writeLiveExecAdmin(update);
@@ -95,6 +96,7 @@ export function LiveExecAdmin({ management }: { management: ReturnType<typeof us
     void submit(pending.update);
   };
   const openClassification = (row: LiveUniverse) => {
+    if (writesBlocked) return;
     setError(null); setSuccess(false); setModalError(null); setClassification(row);
     setCategory(row.category); setMarket(row.underlying_market ?? "");
     setSelected(row.markets.filter(item => item.selected).map(item => item.market_key));
@@ -108,18 +110,18 @@ export function LiveExecAdmin({ management }: { management: ReturnType<typeof us
       expected_status: classification.status,
       classification: { category, markets: selected, ...(category === "listed_equity" && market ? { underlying_market: market } : {}) } });
   };
-  const readFailure = (resource: keyof typeof data, label: string) => errors[resource]
-    ? <Alert type="warning" showIcon message={`${label}读取失败：${liveAdminReadError(errors[resource]!)}`} /> : null;
+  const readFailure = (resource: keyof typeof data, label: string) => <div className="live-notice-slot">{errors[resource]
+    ? <Alert type="warning" showIcon message={`${label}读取失败：${liveAdminReadError(errors[resource]!)}`} /> : null}</div>;
   return <Space direction="vertical" size="middle" style={{ width: "100%" }}>
     <Space wrap><Button disabled={busy} onClick={() => void refresh(true)}>刷新管理数据</Button>
       <Typography.Text type="secondary">管理数据每 30 秒刷新；成交额为各精确合约 24 小时 USDT 报价成交额，超过 5 分钟或未知显示“—”。</Typography.Text></Space>
     {error && <Alert type="error" showIcon message={error} />}
     {success && <Alert type="success" showIcon message="操作成功，已请求刷新管理数据" />}
-    <Card title="参数">
+    <Card title={<><span>参数</span><PollingStatus health={management.health.config} /></>}>
       {readFailure("config", "参数")}
       {config?.fallback && <Alert type="warning" message="参数存储不可读，当前使用默认值；请先检查实盘服务" />}
       <Typography.Paragraph>配置版本：{config?.version ?? "—"}。比例参数按小数填写；上下限由服务端约束，修改只在确认后提交。</Typography.Paragraph>
-      <Table size="small" rowKey="key" pagination={false} scroll={{ x: 900 }} locale={{ emptyText: "暂无参数" }}
+      <Table tableLayout="fixed" size="small" rowKey="key" pagination={false} scroll={{ x: 900 }} locale={{ emptyText: "暂无参数" }}
         dataSource={config ? Object.entries(config.schema).map(([key, rule]) => ({ key, ...rule })) : []}
         columns={[
           { title: "参数", dataIndex: "key", render: (key: string) => <><div>{labels[key] ?? key}</div><small>{key}</small></> },
@@ -127,16 +129,16 @@ export function LiveExecAdmin({ management }: { management: ReturnType<typeof us
           { title: "默认值", dataIndex: "default", render: num }, { title: "下限", dataIndex: "min", render: num },
           { title: "上限", dataIndex: "max", render: value => value === null ? "无代码上限" : num(value) },
           { title: "修改值", render: (_, row) => <Input aria-label={`修改 ${row.key}`} inputMode="decimal" style={{ minWidth: 130 }}
-            disabled={busy} value={draft[row.key] ?? String(config?.values[row.key] ?? "")}
+            disabled={writesBlocked || busy} value={draft[row.key] ?? String(config?.values[row.key] ?? "")}
             onChange={event => setDraft(old => ({ ...old, [row.key]: event.target.value }))} /> },
         ]} />
-      <Button type="primary" style={{ marginTop: 12 }} disabled={!config || config.fallback || busy} onClick={prepareConfig}>提交参数修改</Button>
+      <Button type="primary" style={{ marginTop: 12 }} disabled={writesBlocked || !config || config.fallback || busy} onClick={prepareConfig}>提交参数修改</Button>
     </Card>
-    <Card title="交易范围">
+    <Card title={<><span>交易范围</span><PollingStatus health={management.health.universe} /></>}>
       {readFailure("universe", "交易范围")}
       {data.universe?.some(row => !hasUniversePrecondition(row)) && <Alert type="warning" message="交易范围缺少并发校验状态，请更新实盘服务后刷新" />}
       <Typography.Paragraph type="secondary">资格通过仅代表类别与所选择允许参与，仍需满足全部开仓风控。股票须确认同一标的市场及精确合约；取消排除不会自动确认类别或映射。</Typography.Paragraph>
-      <Table size="small" rowKey="base" pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 1100 }}
+      <Table tableLayout="fixed" size="small" rowKey="base" pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 1100 }}
         dataSource={data.universe ?? []} locale={{ emptyText: "暂无交易范围" }} columns={[
           { title: "基础币 / 类别", render: (_, row) => <><div>{row.base}</div><div>{categoryLabel(row.category)}</div>
             <div>{row.underlying_market ?? "—"}</div><Tag color={row.excluded ? "red" : undefined}>{row.excluded ? "已排除" : "未排除"}</Tag></> },
@@ -146,35 +148,35 @@ export function LiveExecAdmin({ management }: { management: ReturnType<typeof us
             <small>采集时间：{date(item.at)}；{item.selected ? "已人工选择" : "未人工选择"}；{item.eligible ? "类别资格通过" : "类别资格未通过"}{item.needs_classification ? "；待人工判断" : ""}</small>
           </div>)}</Space> },
           { title: "操作", render: (_, row) => <Space direction="vertical">
-            <Button disabled={busy || !hasUniversePrecondition(row)} aria-label={`${row.excluded ? "取消排除" : "排除"} ${row.base}`} onClick={() => prepare({
+            <Button disabled={writesBlocked || busy || !hasUniversePrecondition(row)} aria-label={`${row.excluded ? "取消排除" : "排除"} ${row.base}`} onClick={() => prepare({
               title: `确认${row.excluded ? "取消排除" : "排除"} ${row.base}`,
               update: { resource: "universe", base: row.base, action: row.excluded ? "unexclude" : "exclude", expected_status: row.status },
               details: <p>{row.excluded ? "取消排除不会自动确认类别或映射。" : "排除后禁止该币新开仓，已有持仓保留减仓能力。"}</p>,
             })}>{row.excluded ? "取消排除" : "排除"}</Button>
-            <Button disabled={busy || !hasUniversePrecondition(row)} aria-label={`判断类别 ${row.base}`} onClick={() => openClassification(row)}>判断类别</Button>
+            <Button disabled={writesBlocked || busy || !hasUniversePrecondition(row)} aria-label={`判断类别 ${row.base}`} onClick={() => openClassification(row)}>判断类别</Button>
           </Space> },
         ]} />
     </Card>
-    <Card title="映射确认">
+    <Card title={<><span>映射确认</span><PollingStatus health={management.health.mappings} /></>}>
       {readFailure("mappings", "映射")}
       {data.mappings?.some(row => !hasMappingPrecondition(row)) && <Alert type="warning" message="映射缺少并发校验状态或倍率，请更新实盘服务后刷新" />}
       <Typography.Paragraph type="secondary">公共数量 = 原生数量 × 倍率，公共价格 = 原生价格 ÷ 倍率。价格比是发现时快照，采集超过 5 分钟不可确认；服务端开仓前会用新鲜盘口再次复核。</Typography.Paragraph>
-      <Table size="small" rowKey="id" pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 950 }}
+      <Table tableLayout="fixed" size="small" rowKey="id" pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 950 }}
         dataSource={data.mappings ?? []} locale={{ emptyText: "暂无映射候选" }} columns={[
           { title: "公共基础币 / 状态", render: (_, row) => <>{row.base}<br /><Tag>{statuses[row.status] ?? "未知状态"}</Tag></> },
           { title: "各所写法 / 数量倍率 / 价格比", render: (_, row) => <MappingDetails mapping={row} /> },
           { title: "操作", render: (_, row) => <Space>{(["confirm", "reject"] as const).map(action => <Button key={action}
-            disabled={busy || !hasMappingPrecondition(row)} danger={action === "reject"} aria-label={`${action === "confirm" ? "确认" : "拒绝"}映射 ${row.base}`}
+            disabled={writesBlocked || busy || !hasMappingPrecondition(row)} danger={action === "reject"} aria-label={`${action === "confirm" ? "确认" : "拒绝"}映射 ${row.base}`}
             onClick={() => prepare({ title: `${action === "confirm" ? "确认" : "拒绝"}映射 ${row.base}`,
               update: { resource: "mappings", id: row.id, action, expected_status: row.status, expected_multiplier: row.multiplier }, details: <><MappingDetails mapping={row} />
                 <p>{action === "confirm" ? "请确认以上合约确为同一基础币且倍率正确。" : "拒绝后不能用此映射新开仓；已有持仓仍可减仓。"}</p></> })}>
             {action === "confirm" ? "确认" : "拒绝"}</Button>)}</Space> },
         ]} />
     </Card>
-    <Card title="参数审计记录">
+    <Card title={<><span>参数审计记录</span><PollingStatus health={management.health["config/audit"]} /></>}>
       {readFailure("config/audit", "参数审计")}
       <Typography.Paragraph type="secondary">最近最多 500 条记录，按时间从旧到新排列。</Typography.Paragraph>
-      <Table size="small" rowKey="key" dataSource={(data["config/audit"] ?? []).map((row, index) => ({
+      <Table tableLayout="fixed" size="small" rowKey="key" dataSource={(data["config/audit"] ?? []).map((row, index) => ({
         ...row, key: `${row.version}:${row.at}:${index}`,
       }))} pagination={{ pageSize: 10, showSizeChanger: false }} scroll={{ x: 650 }}
         locale={{ emptyText: "暂无参数审计记录" }} columns={[
@@ -186,20 +188,20 @@ export function LiveExecAdmin({ management }: { management: ReturnType<typeof us
         ]} />
     </Card>
     <Modal open={!!pending} title={pending?.title} okText="确认提交" cancelText="取消" confirmLoading={busy}
-      closable={!busy} maskClosable={!busy} cancelButtonProps={{ disabled: busy }} onOk={confirmPending} onCancel={() => { if (!busy) setPending(null); }}>
+      okButtonProps={{ disabled: writesBlocked || busy }} closable={!busy} maskClosable={!busy} cancelButtonProps={{ disabled: busy }} onOk={confirmPending} onCancel={() => { if (!busy) setPending(null); }}>
       {pending?.details}{modalError && <Alert type="error" showIcon message={modalError} />}
     </Modal>
     <Modal open={!!classification} title={`人工判断 ${classification?.base ?? ""}`} okText="确认分类" cancelText="取消" confirmLoading={busy}
-      closable={!busy} maskClosable={!busy} cancelButtonProps={{ disabled: busy }} onOk={confirmClassification} onCancel={() => { if (!busy) setClassification(null); }}>
+      okButtonProps={{ disabled: writesBlocked || busy }} closable={!busy} maskClosable={!busy} cancelButtonProps={{ disabled: busy }} onOk={confirmClassification} onCancel={() => { if (!busy) setClassification(null); }}>
       <Space direction="vertical" style={{ width: "100%" }}>
-        <label>类别 <select aria-label="类别" disabled={busy} value={category} onChange={event => setCategory(event.target.value as LiveCategory)}>
+        <label>类别 <select aria-label="类别" disabled={writesBlocked || busy} value={category} onChange={event => setCategory(event.target.value as LiveCategory)}>
           {Object.entries(categories).map(([value, label]) => <option value={value} key={value}>{label}</option>)}
         </select></label>
-        {category === "listed_equity" && <label>标的市场 <select aria-label="标的市场" disabled={busy} value={market} onChange={event => setMarket(event.target.value as typeof market)}>
+        {category === "listed_equity" && <label>标的市场 <select aria-label="标的市场" disabled={writesBlocked || busy} value={market} onChange={event => setMarket(event.target.value as typeof market)}>
           <option value="">请选择</option><option value="US">US（NYSE / Nasdaq）</option><option value="KRX">KRX（韩交所）</option>
         </select></label>}
         <Typography.Text>仅选择跟踪同一标的的精确合约：</Typography.Text>
-        {classification?.markets.map(item => <Checkbox key={item.market_key} disabled={busy} checked={selected.includes(item.market_key)}
+        {classification?.markets.map(item => <Checkbox key={item.market_key} disabled={writesBlocked || busy} checked={selected.includes(item.market_key)}
           onChange={event => setSelected(old => event.target.checked ? [...old, item.market_key] : old.filter(key => key !== item.market_key))}>{item.market_key}</Checkbox>)}
         <Typography.Text type="secondary">上市前资产及商品不交易；不能通过改为加密币绕过已识别类别限制。</Typography.Text>
         {modalError && <Alert type="error" showIcon message={modalError} />}

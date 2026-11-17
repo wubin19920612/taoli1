@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LiveExecPage } from "../src/pages/LiveExecPage";
 import { liveFixtures } from "./liveExecFixtures";
 
-import { fixtures, mappingId, markets, universeStatus } from "./liveExecAdminFixtures";
+import { fixtures, freshAdminSnapshot, mappingId, markets, universeStatus } from "./liveExecAdminFixtures";
 
 let reads: typeof fixtures;
 let writes: { path: string; options: RequestInit }[];
@@ -18,6 +18,8 @@ beforeEach(() => {
   Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
   reads = structuredClone(fixtures); writes = []; writeError = null;
   fetchMock = vi.fn(async (input: string, options: RequestInit = {}) => {
+    if (new URL(input).pathname === "/api/auth/sessions")
+      return { ok: true, status: 200, json: async () => [{ current: true }] };
     const path = new URL(input).pathname.replace("/api/live-exec/", "");
     if (options.method && options.method !== "GET") {
       writes.push({ path, options });
@@ -39,7 +41,8 @@ beforeEach(() => {
       if (path.startsWith("universe/")) reads.universe[0].status = "u1:" + "b".repeat(64);
       return { ok: true, status: 200, json: async () => ({ available: true, data: {} }) };
     }
-    const data = reads[path as keyof typeof reads] ?? liveFixtures[path as keyof typeof liveFixtures];
+    const data = path === "remote-positions" ? freshAdminSnapshot()
+      : reads[path as keyof typeof reads] ?? liveFixtures[path as keyof typeof liveFixtures];
     return { ok: true, status: 200, json: async () => ({ available: true, data: structuredClone(data) }) };
   });
   vi.stubGlobal("fetch", fetchMock);

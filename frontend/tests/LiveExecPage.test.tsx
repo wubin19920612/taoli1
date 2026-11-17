@@ -213,16 +213,16 @@ describe("实盘契约页面", () => {
     expect(adminCounts()).toEqual([1, 1, 1, 1, 1]);
   });
 
-  it("shows a disconnected empty state and clears previously displayed data", async () => {
+  it("shows disconnection after repeated errors and preserves previously displayed data", async () => {
     render(<LiveExecPage />); await flush();
     fetchMock.mockImplementation(async () => ({ ok: true, status: 200,
       json: async () => ({ available: false, error: "not_configured" }) }));
     await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
     expect(screen.getByText(/实盘服务未连接（未配置）/)).toBeTruthy();
-    expect(screen.queryByText(/最近错误示例/)).toBeNull();
-    expect(screen.queryByText("JCTUSDT")).toBeNull();
-    expect(screen.getByText("暂无当前持仓")).toBeTruthy();
-    expect(screen.getByText("暂无已平仓记录")).toBeTruthy();
+    expect(screen.getByText(/最近错误示例/)).toBeTruthy();
+    expect(screen.getAllByText("JCTUSDT").length).toBeGreaterThan(0);
+    expect(screen.queryByText("暂无当前持仓")).toBeNull();
+    expect(screen.queryByText("暂无已平仓记录")).toBeNull();
   });
 
   it("handles network errors, nullable fields and missing simulation safely", async () => {
@@ -233,7 +233,7 @@ describe("实盘契约页面", () => {
       return original(input, options);
     });
     render(<LiveExecPage />); await flush();
-    expect(screen.getByText(/实盘服务未连接/)).toBeTruthy();
+    expect(screen.queryByText(/实盘服务未连接/)).toBeNull();
     expect(screen.queryByText("offline")).toBeNull();
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     expect(screen.getByText("实盘模式")).toBeTruthy();
