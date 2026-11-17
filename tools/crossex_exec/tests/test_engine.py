@@ -206,6 +206,16 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(p['state'],'OPEN')
         self.assertEqual(len(self.store.all_orders()),2)
 
+    def test_production_pair_symbol_matches_base(self):
+        # taoli1 sends symbol='BTCUSDT'; the bare-base fixture hid a total open block.
+        p=self.engine.ingest(dict(trigger(),symbol='BTCUSDT'))
+        self.assertEqual(p['state'],'OPEN')
+
+    def test_foreign_pair_symbol_still_rejected(self):
+        self.engine.ingest(dict(trigger('shadow-x'),symbol='ETHUSDT'))
+        self.assertFalse(self.store.all_orders())
+        self.assertFalse(self.gate.calls+self.bg.calls)
+
     def test_single_leg_excess_reduced_only(self):
         self.bg.fill='0.4'
         p=self.engine.ingest(trigger())

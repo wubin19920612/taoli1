@@ -1032,7 +1032,8 @@ class Engine:
             base=instruments[0].base
             if self.bases and base not in self.bases:
                 raise ValueError('base_not_whitelisted')
-            if payload['symbol']!=base:
+            # taoli1 triggers carry the pair symbol (e.g. BTWUSDT); accept it or the bare base.
+            if payload['symbol'] not in (base,base+instruments[0].spec.quote):
                 raise ValueError('trigger_base_mismatch')
             active=self.store.pairs(active=True)
             if len(active)>=min(3,values['max_open_pairs']) or any(p['base']==base for p in active):
