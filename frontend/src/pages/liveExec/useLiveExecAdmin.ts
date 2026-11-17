@@ -4,11 +4,11 @@ import { AUTH_REQUIRED_EVENT } from "../../api/auth";
 import { isPageHidden } from "../../utils/pageVisibility";
 
 type Data = { [K in LiveAdminResource]: LiveAdminResources[K] | null };
-const resources: LiveAdminResource[] = ["config", "universe", "mappings", "config/audit", "external-positions", "remote-positions"];
+const resources: LiveAdminResource[] = ["config", "universe", "mappings", "config/audit", "external-positions", "remote-positions", "external-liabilities"];
 
 export function useLiveExecAdmin() {
   const [data, setData] = useState<Data>({ config: null, universe: null, mappings: null, "config/audit": null,
-    "external-positions": null, "remote-positions": null });
+    "external-positions": null, "remote-positions": null, "external-liabilities": null });
   const [errors, setErrors] = useState<Partial<Record<LiveAdminResource, string>>>({});
   const [hasAdminSession, setHasAdminSession] = useState(false);
   const current = useRef<AbortController | null>(null);
@@ -19,7 +19,7 @@ export function useLiveExecAdmin() {
     const controller = new AbortController();
     current.current = controller;
     // An explicit post-write/conflict refresh must revoke old action evidence immediately.
-    if (force) setData(old => ({ ...old, "external-positions": null, "remote-positions": null }));
+    if (force) setData(old => ({ ...old, "external-positions": null, "remote-positions": null, "external-liabilities": null }));
     try {
       const hasSession = await hasLiveExecAdminSession(controller.signal);
       if (controller.signal.aborted || !mounted.current) return;
@@ -47,11 +47,11 @@ export function useLiveExecAdmin() {
     };
     window.addEventListener(AUTH_REQUIRED_EVENT, expired);
     visible();
-    // Income is bound to the current ten-second snapshot. Read both every five
-    // seconds in the same serial lane, with one copy of each at the 30s boundary.
+    // Income is bound to the current ten-second snapshot. Refresh position evidence
+    // and liability observations every five seconds in the same serial lane.
     let tick = 0;
     const timer = window.setInterval(() => {
-      void refresh(false, ++tick % 6 === 0 ? resources : ["external-positions", "remote-positions"]);
+      void refresh(false, ++tick % 6 === 0 ? resources : ["external-positions", "remote-positions", "external-liabilities"]);
     }, 5000);
     document.addEventListener("visibilitychange", visible);
     return () => {

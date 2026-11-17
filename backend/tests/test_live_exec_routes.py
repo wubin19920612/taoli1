@@ -17,7 +17,7 @@ from auth_helpers import IsolatedSessionLookup, TEST_TOTP_SECRET, session_header
 
 
 TOKEN = "synthetic-live-exec-token"
-PATHS = ("summary", "positions", "trades", "stats", "remote-positions")
+PATHS = ("summary", "positions", "trades", "stats", "remote-positions", "external-liabilities")
 CONTRACT = Path(__file__).resolve().parents[2] / "docs/live-exec-contract-2026-11-11.md"
 EXAMPLES = [json.loads(block) for block in re.findall(r"```json\s*(.*?)```", CONTRACT.read_text(encoding="utf-8"), re.S)]
 PAYLOADS = dict(zip(PATHS, (EXAMPLES[0], [EXAMPLES[1]], [EXAMPLES[2]], EXAMPLES[3])))
@@ -33,6 +33,12 @@ PAYLOADS["remote-positions"] = {
     }],
 }
 REAL_ASYNC_CLIENT = httpx.AsyncClient
+PAYLOADS["external-liabilities"] = {"revision": 3, "items": [
+    {"exchange_type": "HYPERLIQUID", "coin": "USDC", "cap": "50.000000000000000001", "reason": "人工确认",
+     "registered_at": 1794873600, "liability": "28.500000000000000001", "within_cap": True},
+    {"exchange_type": "BINANCE", "coin": "USDT", "cap": "50", "reason": "人工确认",
+     "registered_at": 1794873600, "liability": None, "within_cap": None},
+]}
 
 
 @pytest.fixture
@@ -152,6 +158,7 @@ def test_query_whitelist_and_boundary_values(context):
     "summary?path=/orders", "positions?limit=1", "trades?days=7",
     "stats?before=x", "trades?limit=1&limit=2",
     "remote-positions?limit=1", "remote-positions?path=/orders", "remote-positions?a=1&a=2",
+    "external-liabilities?limit=1", "external-liabilities?path=/orders", "external-liabilities?a=1&a=2",
 ])
 def test_invalid_query_never_contacts_upstream(context, url):
     _, client, calls, _ = context
@@ -163,7 +170,7 @@ def test_invalid_query_never_contacts_upstream(context, url):
     ("timeout", "timeout"), ("connect", "unreachable"), ("status", "upstream_http_401"),
     ("redirect", "upstream_http_302"), ("json", "invalid_json"), ("nan", "invalid_json"),
 ])
-@pytest.mark.parametrize("path", ("summary", "remote-positions"))
+@pytest.mark.parametrize("path", ("summary", "remote-positions", "external-liabilities"))
 def test_failures_are_200_and_never_expose_credentials(context, caplog, kind, reason, path):
     _, client, _, install = context
 

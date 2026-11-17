@@ -9,6 +9,7 @@ import { LiveExecAdmin } from "./liveExec/LiveExecAdmin";
 import { LiveOpeningControl } from "./liveExec/LiveOpeningControl";
 import { useLiveExecAdmin } from "./liveExec/useLiveExecAdmin";
 import { LiveExternalPositions } from "./liveExec/LiveExternalPositions";
+import { LiveExternalLiabilities } from "./liveExec/LiveExternalLiabilities";
 import { LiveProgramRisk } from "./liveExec/LiveProgramRisk";
 import { remotePositionView } from "./liveExec/remotePositionView";
 
@@ -208,6 +209,9 @@ export function LiveExecPage() {
       snapshot={remote} now={now} cancellable={external.cancellable}
       error={management.errors["external-positions"]}
       remoteError={management.errors["remote-positions"]}
+      refresh={() => management.refresh(true)} />
+    <LiveExternalLiabilities registry={management.data["external-liabilities"]} summary={summary}
+      error={management.errors["external-liabilities"]} hasAdminSession={management.hasAdminSession}
       refresh={() => management.refresh(true)} />
     <Typography.Paragraph type="secondary">基准、超额价差和预估两小时资金费成本均为开仓复核快照；开仓超额价差尚未扣除费用，预估成本不等于实际已付资金费。盘口时间差不代表订单发送或成交时间差；平仓盘口时间差可能远超 300 毫秒。历史快照缺失时显示“—”。</Typography.Paragraph>
     <Card title="当前持仓"><Table rowKey="id" size="small" columns={positionColumns} dataSource={positions}

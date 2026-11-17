@@ -24,7 +24,13 @@ EXTERNAL_IDENTITY = {"route": "crossex", "exchange_type": "HYPERLIQUID", "busine
                      "symbol": "HYPERLIQUID_FUTURE_io:OAI_USDC", "quote": "USDC", "dex": "io"}
 EXTERNAL_BODY = {"identity": EXTERNAL_IDENTITY, "expected_status": EXTERNAL_STATUS,
                  "reason": "人工核对 Astro 外部持仓"}
-READS = ("config", "config/audit", "universe", "mappings", "external-positions", "remote-positions")
+LIABILITY_IDENTITY = {"exchange_type": "HYPERLIQUID", "coin": "USDC"}
+LIABILITY_BODY = {**LIABILITY_IDENTITY, "cap": "28.500000000000000001", "reason": "人工确认负债", "expected_revision": 0}
+LIABILITY_WRITES = [
+    ("POST", "external-liabilities/register", LIABILITY_BODY),
+    ("POST", "external-liabilities/unregister", {**LIABILITY_IDENTITY, "expected_revision": 1}),
+]
+READS = ("config", "config/audit", "universe", "mappings", "external-positions", "remote-positions", "external-liabilities")
 WRITES = [
     ("PUT", "config", {"order_usd_max": 30, "expected_version": 2}),
     ("POST", "universe/SKHYNIX/exclude", {"expected_status": UNIVERSE_STATUS}),
@@ -35,6 +41,7 @@ WRITES = [
     ("POST", f"mappings/{MAPPING}/reject", MAPPING_EXPECTED),
     ("POST", "external-positions/register", EXTERNAL_BODY),
     ("POST", "external-positions/unregister", EXTERNAL_BODY),
+    *LIABILITY_WRITES,
     ("POST", "opening/pause", {"expected_paused": False}),
     ("POST", "opening/resume", {"expected_paused": True}),
 ]
@@ -106,7 +113,7 @@ def test_write_requires_real_session(context, method, path, body, auth):
     assert not calls
 
 
-@pytest.mark.parametrize("method,path,body", [WRITES[0], *WRITES[-2:]])
+@pytest.mark.parametrize("method,path,body", [WRITES[0], *LIABILITY_WRITES, *WRITES[-2:]])
 @pytest.mark.parametrize("headers", [
     {}, {"Origin": CSRF["Origin"]}, {"X-Live-Exec-CSRF": "1"},
     {**CSRF, "Origin": "https://evil.test"}, {**CSRF, "Origin": "null"},
@@ -283,7 +290,7 @@ def test_no_arbitrary_write_routes(context, path):
     assert not calls
 
 
-@pytest.mark.parametrize("method,path,body", [WRITES[0], *WRITES[-2:]])
+@pytest.mark.parametrize("method,path,body", [WRITES[0], *LIABILITY_WRITES, *WRITES[-2:]])
 @pytest.mark.parametrize("status,code,chinese", [
     (400, "invalid_update", "更新无效"), (401, "unauthorized", "认证失败"),
     (403, "admin_required", "管理权限"), (503, "temporarily_unavailable", "暂不可用"),
@@ -299,7 +306,7 @@ def test_upstream_errors_keep_status_and_translate_without_secrets(context, capl
     assert READ_TOKEN not in response.text + caplog.text
 
 
-@pytest.mark.parametrize("method,path,body", [WRITES[0], *WRITES[-2:]])
+@pytest.mark.parametrize("method,path,body", [WRITES[0], *LIABILITY_WRITES, *WRITES[-2:]])
 @pytest.mark.parametrize("kind,status", [("timeout", 504), ("connect", 502), ("invalid_json", 502)])
 def test_write_transport_errors_are_safe_and_not_retried(context, caplog, kind, status, method, path, body):
     _, client, _, install = context
@@ -372,6 +379,8 @@ def test_action_preconditions_required_and_conflicts_preserved(context, caplog, 
         payload = {"error": "status_conflict", "paused": not body["expected_paused"]}
     elif path.startswith("external-positions/"):
         payload = {"error": "external_conflict", "current_status": "x1:" + "b" * 64}
+    elif path.startswith("external-liabilities/"):
+        payload = {"error": "revision_conflict", "revision": body["expected_revision"] + 1}
     elif path.startswith("universe/"):
         payload = {"error": "status_conflict", "current_status": "u1:" + "b" * 64}
     else:
@@ -555,3 +564,78 @@ def test_opening_conflict_preserves_paused_without_headers_or_retry(context, cap
     assert "set-cookie" not in response.headers and "x-secret" not in response.headers
     assert len(calls) == 1
     assert "status=409" in caplog.text and ADMIN_TOKEN not in caplog.text
+
+
+@pytest.mark.parametrize("method,path,valid", LIABILITY_WRITES)
+def test_liability_required_fields_and_body_whitelist(context, method, path, valid):
+    _, client, calls, _ = context
+    for missing in valid:
+        assert client.post(f"/api/live-exec/{path}", json={k: v for k, v in valid.items() if k != missing}).status_code == 400
+    extras = {"token": "private", "identity": {}, "route": "crossex"}
+    if path.endswith("unregister"):
+        extras.update(cap="20", reason="not accepted")
+    for key, value in extras.items():
+        assert client.post(f"/api/live-exec/{path}", json={**valid, key: value}).status_code == 400
+    assert not calls
+
+
+@pytest.mark.parametrize("field,value", [
+    *( ("cap", value) for value in (None, True, 1, [], {}, "", "0", "-1", "1000.000000000000000001",
+        "1001", "NaN", "Infinity", "1_0", "1e999999", " 20", "20\n", "1" * 81)),
+    *( ("expected_revision", value) for value in (None, True, -1, 1.0, "1", [], {})),
+    *( ("exchange_type", value) for value in (None, True, "", "hyperliquid", "BAD/EXCHANGE", "A\n", "A" * 41)),
+    *( ("coin", value) for value in (None, [], "", "USDC/../../config", "USDC\n", "A" * 41)),
+    *( ("reason", value) for value in (None, True, [], "", "   ", "x" * 201, "reason\nnew")),
+])
+def test_liability_strict_types_and_ranges(context, field, value):
+    _, client, calls, _ = context
+    body = {**LIABILITY_BODY, field: value}
+    assert client.post("/api/live-exec/external-liabilities/register", json=body).status_code == 400
+    if field in {*LIABILITY_IDENTITY, "expected_revision"}:
+        body.pop("cap")
+        body.pop("reason")
+        assert client.post("/api/live-exec/external-liabilities/unregister", json=body).status_code == 400
+    assert not calls
+
+
+@pytest.mark.parametrize("cap", ["0.000000000000000001", "28.500000000000000001", "1000", "1000.000", "1e3"])
+def test_liability_cap_preserves_native_precision_and_redacts_audit(context, caplog, cap):
+    _, client, calls, _ = context
+    body = {**LIABILITY_BODY, "cap": cap, "reason": "synthetic-private-liability-note"}
+    assert client.post("/api/live-exec/external-liabilities/register", json=body).status_code == 200
+    assert json.loads(calls[0].content) == body
+    fingerprint = hashlib.sha256(json.dumps(LIABILITY_IDENTITY, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
+    assert fingerprint in caplog.text
+    assert "synthetic-private-liability-note" not in caplog.text
+    assert "HYPERLIQUID" not in caplog.text and "USDC" not in caplog.text
+
+
+@pytest.mark.parametrize("method,path,body", LIABILITY_WRITES)
+def test_liability_conflict_preserves_bytes_without_headers_or_retry(context, caplog, method, path, body):
+    _, client, calls, install = context
+    payload = b'{ "error": "revision_conflict", "revision": 9 }'
+
+    def conflict(request):
+        calls.append(request)
+        return httpx.Response(409, content=payload, headers={"Set-Cookie": "unsafe=1", "X-Secret": ADMIN_TOKEN})
+
+    install(conflict)
+    response = client.post(f"/api/live-exec/{path}", json=body)
+    assert response.status_code == 409 and response.content == payload
+    assert "set-cookie" not in response.headers and "x-secret" not in response.headers
+    assert len(calls) == 1
+    assert "status=409" in caplog.text and ADMIN_TOKEN not in caplog.text
+
+
+@pytest.mark.parametrize("method,path,body", LIABILITY_WRITES)
+def test_liability_strict_json_query_and_method_boundary(context, method, path, body):
+    _, client, calls, _ = context
+    for raw in [b'[]', b'null', b'{', b'{"cap":NaN}', b' ' * 8193,
+                json.dumps(body).replace('"expected_revision":', '"expected_revision": 9, "expected_revision":').encode()]:
+        assert client.post(f"/api/live-exec/{path}", content=raw,
+                           headers={"Content-Type": "application/json"}).status_code in (400, 413)
+    assert client.post(f"/api/live-exec/{path}?token=private", json=body).status_code == 422
+    assert client.put(f"/api/live-exec/{path}", json=body).status_code == 405
+    for action in ("unlock", "REGISTER", "register/extra"):
+        assert client.post(f"/api/live-exec/external-liabilities/{action}", json=body).status_code in (400, 404)
+    assert not calls

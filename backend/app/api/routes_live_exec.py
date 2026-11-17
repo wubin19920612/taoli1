@@ -7,6 +7,7 @@ import math
 import re
 import sys
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from urllib.parse import urlsplit
 
 import httpx
@@ -26,6 +27,7 @@ UPSTREAM_PATHS = {
     "universe": "/api/v1/universe",
     "mappings": "/api/v1/mappings",
     "external-positions": "/api/v1/external-positions",
+    "external-liabilities": "/api/v1/external-liabilities",
     "remote-positions": "/api/v1/remote-positions",
 }
 # Uvicorn's default CLI config only enables its own loggers. Audit records must
@@ -198,6 +200,12 @@ async def get_remote_positions(request: Request, response: Response) -> dict:
     return await proxy(request, "remote-positions")
 
 
+@router.get("/external-liabilities")
+async def get_external_liabilities(request: Request) -> dict:
+    validate_query(request, set())
+    return await proxy(request, "external-liabilities")
+
+
 def _origin(value: str) -> tuple[str, str, int]:
     parsed = urlsplit(value)
     if (parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.path
@@ -261,6 +269,33 @@ async def _body(request: Request) -> dict:
 
 
 def _validate_update(resource: str, action: str, body: dict) -> None:
+    if resource == "external-liabilities":
+        fields = {"exchange_type", "coin", "expected_revision"}
+        if action == "register":
+            fields |= {"cap", "reason"}
+        if body.keys() != fields:
+            raise HTTPException(400, "负债额度操作字段不完整或包含不允许的字段")
+        for field, pattern in (("exchange_type", r"[A-Z][A-Z0-9_]{0,39}"),
+                               ("coin", r"[A-Za-z0-9][A-Za-z0-9._:-]{0,39}")):
+            if not isinstance(body[field], str) or not re.fullmatch(pattern, body[field]):
+                raise HTTPException(400, "负债交易所或币种标识无效")
+        if type(body["expected_revision"]) is not int or body["expected_revision"] < 0:
+            raise HTTPException(400, "必须提供非负整数 expected_revision")
+        if action == "register":
+            cap, reason = body["cap"], body["reason"]
+            try:
+                # Preserve native-coin decimals; float rounding must not admit a cap above 1000.
+                valid = (isinstance(cap, str) and 1 <= len(cap) <= 80
+                         and re.fullmatch(r"\+?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", cap)
+                         and Decimal(cap).is_finite() and 0 < Decimal(cap) <= 1000)
+            except InvalidOperation:
+                valid = False
+            if not valid:
+                raise HTTPException(400, "额度须为大于 0 且不超过 1000 的原生币数量字符串")
+            if (not isinstance(reason, str) or not reason.strip() or len(reason) > 200
+                    or any(ord(char) < 32 for char in reason)):
+                raise HTTPException(400, "备注须为 1 至 200 字符且不含控制字符")
+        return
     if resource == "opening":
         if body.keys() != {"expected_paused"} or type(body.get("expected_paused")) is not bool:
             raise HTTPException(400, "此操作仅接受布尔值 expected_paused")
@@ -343,6 +378,9 @@ def _audit_parameters(resource: str, identity: str, body: dict) -> str:
     # No arbitrary strings, request headers, session cookies, or upstream bodies enter logs.
     if resource == "external-positions":
         identity = json.dumps(body["identity"], sort_keys=True, separators=(",", ":"))
+    elif resource == "external-liabilities":
+        identity = json.dumps({key: body[key] for key in ("exchange_type", "coin")},
+                              sort_keys=True, separators=(",", ":"))
     if resource in {"config", "opening"}:
         value = body
     else:
@@ -445,3 +483,10 @@ async def post_opening(request: Request, action: str) -> dict | Response:
     if action not in {"pause", "resume"}:
         raise HTTPException(404, "开仓操作无效")
     return await admin_proxy(request, "opening", action=action)
+
+
+@router.post("/external-liabilities/{action}", dependencies=[Depends(require_admin_session)], response_model=None)
+async def post_external_liabilities(request: Request, action: str) -> dict | Response:
+    if action not in {"register", "unregister"}:
+        raise HTTPException(400, "负债额度登记操作无效")
+    return await admin_proxy(request, "external-liabilities", action=action)

@@ -175,27 +175,31 @@ describe("实盘契约页面", () => {
 
   it("polls at 5/30 seconds, pauses when hidden and cleans up on unmount", async () => {
     const { unmount } = render(<LiveExecPage />); await flush();
-    expect(requests).toHaveLength(11);
+    expect(requests).toHaveLength(12);
     expect(count("sessions")).toBe(1);
     expect(count("remote-positions")).toBe(1);
+    expect(count("external-liabilities")).toBe(1);
     expect(adminCounts()).toEqual([1, 1, 1, 1, 1]);
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     expect([count("summary"), count("positions"), count("trades"), count("stats")]).toEqual([2, 2, 1, 1]);
     expect(adminCounts()).toEqual([1, 1, 1, 1, 2]);
-    expect(requests).toHaveLength(16);
+    expect(requests).toHaveLength(18);
     expect(count("sessions")).toBe(2);
     expect(count("remote-positions")).toBe(2);
+    expect(count("external-liabilities")).toBe(2);
     await act(async () => { await vi.advanceTimersByTimeAsync(25000); });
     expect([count("summary"), count("positions"), count("trades"), count("stats")]).toEqual([7, 7, 2, 2]);
     expect(adminCounts()).toEqual([2, 2, 2, 2, 7]);
-    expect(requests).toHaveLength(47);
+    expect(requests).toHaveLength(54);
     expect(count("sessions")).toBe(7);
     expect(count("remote-positions")).toBe(7);
+    expect(count("external-liabilities")).toBe(7);
     visibility("hidden"); const hiddenCount = requests.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
     expect(requests).toHaveLength(hiddenCount);
-    visibility("visible"); await flush(); expect(requests.length).toBe(hiddenCount + 11);
+    visibility("visible"); await flush(); expect(requests.length).toBe(hiddenCount + 12);
     expect(count("remote-positions")).toBe(8);
+    expect(count("external-liabilities")).toBe(8);
     expect(adminCounts()).toEqual([3, 3, 3, 3, 8]);
     unmount(); const endCount = requests.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
@@ -205,7 +209,7 @@ describe("实盘契约页面", () => {
   it("does not fetch on a hidden initial mount", async () => {
     visibility("hidden"); render(<LiveExecPage />); await flush();
     expect(requests).toHaveLength(0);
-    visibility("visible"); await flush(); expect(requests).toHaveLength(11);
+    visibility("visible"); await flush(); expect(requests).toHaveLength(12);
     expect(adminCounts()).toEqual([1, 1, 1, 1, 1]);
   });
 

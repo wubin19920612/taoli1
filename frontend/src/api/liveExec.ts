@@ -24,6 +24,7 @@ export interface LiveSummary {
   opening_skip_counts?: Partial<Record<LiveOpeningSkipReason, Num>> | null;
   config_version?: Num;
   equity_baseline_revision?: Num;
+  liabilities?: { exchange_type: string; coin: string; liability: string | number; route?: string; source_field?: string }[] | null;
   effective_risk_limits?: { max_equity_drop_usd: Num; daily_loss_stop_usd: Num; total_loss_stop_usd: Num } | null;
 }
 interface Leg {
@@ -95,6 +96,11 @@ export interface LiveExternalPositions {
   income?: LiveProgramIncome | null;
   flatten_status?: LiveFlattenStatus | null;
 }
+export interface LiveExternalLiability {
+  exchange_type: string; coin: string; cap: string | null; reason: string; registered_at: number | string;
+  liability: string | number | null; within_cap: boolean | null;
+}
+export interface LiveExternalLiabilities { revision: number; items: LiveExternalLiability[] }
 export interface LiveProgramIncome {
   verified?: boolean | null; reason?: Text; at?: Num; scope?: Text; day?: Text;
   captured_at?: Num; snapshot_version?: Num; revision?: Num; equity_revision?: Num;
@@ -116,6 +122,7 @@ export interface LiveRemotePositions {
 export interface LiveAdminResources {
   config: LiveConfig; "config/audit": LiveConfigAudit[]; universe: LiveUniverse[]; mappings: LiveMapping[];
   "external-positions": LiveExternalPositions;
+  "external-liabilities": LiveExternalLiabilities;
   "remote-positions": LiveRemotePositions;
 }
 export type LiveAdminResource = keyof LiveAdminResources;
@@ -146,11 +153,69 @@ function remoteShape(value: unknown): boolean {
         "unrealized_pnl_native", "unrealized_pnl_usd", "valuation", "valuation_error", "ownership"], "string"));
 }
 
+interface LiabilityDecimal { digits: string; magnitude: bigint }
+function parseLiabilityDecimal(value: string): LiabilityDecimal | null {
+  if (!/^\+?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/.test(value) || /\s/.test(value)) return null;
+  const [coefficient, exponent = "0"] = value.replace(/^\+/, "").toLowerCase().split("e");
+  const [whole, fraction = ""] = coefficient.split(".");
+  const digits = (whole + fraction).replace(/^0+/, "");
+  return { digits, magnitude: BigInt(digits.length) + BigInt(exponent) - BigInt(fraction.length) };
+}
+
+function compareLiabilityDecimals(left: LiabilityDecimal, right: LiabilityDecimal): number {
+  if (!left.digits || !right.digits) return left.digits ? 1 : right.digits ? -1 : 0;
+  if (left.magnitude !== right.magnitude) return left.magnitude < right.magnitude ? -1 : 1;
+  // Pad only the significant digits, never the exponent; quantities stay exact even at tiny scales.
+  const length = Math.max(left.digits.length, right.digits.length);
+  const a = left.digits.padEnd(length, "0");
+  const b = right.digits.padEnd(length, "0");
+  return a === b ? 0 : a < b ? -1 : 1;
+}
+
+export function validLiabilityCap(value: string): boolean {
+  if (value.length > 80) return false;
+  const decimal = parseLiabilityDecimal(value);
+  return decimal !== null && decimal.digits !== ""
+    && compareLiabilityDecimals(decimal, { digits: "1000", magnitude: 4n }) <= 0;
+}
+
+function verifiedLiabilityStatus(row: LiveExternalLiability): boolean | null {
+  if (row.liability === null || row.cap === null || row.within_cap === null) return null;
+  const liability = parseLiabilityDecimal(String(row.liability));
+  const cap = parseLiabilityDecimal(row.cap);
+  if (!liability || !cap) return null;
+  const withinCap = compareLiabilityDecimals(liability, cap) <= 0;
+  return withinCap === row.within_cap ? withinCap : null;
+}
+
+function liabilitiesShape(value: unknown): boolean {
+  if (!isObject(value) || !Number.isSafeInteger(value.revision) || Number(value.revision) < 0
+      || !Array.isArray(value.items)) return false;
+  const identities = new Set<string>();
+  return value.items.every(row => {
+    if (!isObject(row) || !["exchange_type", "coin", "reason"].every(key => typeof row[key] === "string" && row[key] !== "")
+        || !(row.cap === null || typeof row.cap === "string" && validLiabilityCap(row.cap))
+        || !(row.within_cap === null || typeof row.within_cap === "boolean")
+        || !(row.liability === null || (typeof row.liability === "string" || typeof row.liability === "number")
+          && parseLiabilityDecimal(String(row.liability)) !== null)
+        || !(typeof row.registered_at === "number" && Number.isFinite(row.registered_at)
+          || typeof row.registered_at === "string" && Number.isFinite(Date.parse(row.registered_at)))) return false;
+    const identity = JSON.stringify([row.exchange_type, row.coin]);
+    if (identities.has(identity)) return false;
+    identities.add(identity);
+    return true;
+  });
+}
+
 export async function getLiveExecAdmin<K extends LiveAdminResource>(
   resource: K, signal: AbortSignal,
 ): Promise<LiveExecResult<LiveAdminResources[K]>> {
   try {
-    const response = await sessionFetch(`/api/live-exec/${resource}`, { signal });
+    const response = resource === "external-liabilities"
+      ? await fetch(new URL(`/api/live-exec/${resource}`, window.location.origin).toString(), {
+        signal, credentials: "same-origin", cache: "no-store",
+      })
+      : await sessionFetch(`/api/live-exec/${resource}`, { signal });
     if (!response.ok) return { available: false, error: "request_failed" };
     const result = await response.json();
     if (result?.available === false) return { available: false, error: String(result.error ?? "request_failed") };
@@ -164,6 +229,7 @@ export async function getLiveExecAdmin<K extends LiveAdminResource>(
             && typeof rule.integer === "boolean";
         })
       : resource === "remote-positions" ? remoteShape(data)
+      : resource === "external-liabilities" ? liabilitiesShape(data)
       : resource === "external-positions" ? data && !Array.isArray(data) && Array.isArray(data.contracts)
         && data.contracts.every((row: LiveExternalContract | null) => row && typeof row.registered === "boolean"
           && typeof row.forbidden === "boolean" && row.identity
@@ -171,6 +237,9 @@ export async function getLiveExecAdmin<K extends LiveAdminResource>(
             .every(key => typeof row.identity[key] === "string"))
         : Array.isArray(data);
     if (result?.available !== true || !shapeOk) return { available: false, error: "invalid_json" };
+    if (resource === "external-liabilities") return { ...result, data: { ...data,
+      items: (data as LiveExternalLiabilities).items.map(row => ({ ...row, within_cap: verifiedLiabilityStatus(row) })),
+    } };
     return result;
   } catch {
     return { available: false, error: "request_failed" };
@@ -203,7 +272,10 @@ export type LiveAdminWrite =
   | { resource: "mappings"; id: string; action: "confirm" | "reject";
     expected_status: LiveMapping["status"]; expected_multiplier: string }
   | { resource: "external-positions"; action: "register" | "unregister";
-    identity: LiveExternalIdentity; expected_status: string; reason: string };
+    identity: LiveExternalIdentity; expected_status: string; reason: string }
+  | { resource: "external-liabilities"; action: "register"; exchange_type: string; coin: string;
+    cap: string; reason: string; expected_revision: number }
+  | { resource: "external-liabilities"; action: "unregister"; exchange_type: string; coin: string; expected_revision: number };
 
 export function hasUniversePrecondition(row: LiveUniverse): boolean {
   return typeof row.status === "string" && row.status.length === 67 && /^u1:[0-9a-f]{64}$/.test(row.status);
@@ -218,31 +290,44 @@ export class LiveAdminConflictError extends Error {
   constructor() { super("数据已被其他人修改，请刷新后重新确认"); }
 }
 
+export class LiveAdminSessionError extends Error {
+  constructor() { super("管理员会话已失效，请重新登录后操作"); }
+}
+
 export async function writeLiveExecAdmin(update: LiveAdminWrite): Promise<void> {
   const path = update.resource === "config" ? "config" : update.resource === "universe"
     ? `universe/${encodeURIComponent(update.base)}/${update.action}`
     : update.resource === "opening" ? `opening/${update.action}`
     : update.resource === "external-positions" ? `external-positions/${update.action}`
+    : update.resource === "external-liabilities" ? `external-liabilities/${update.action}`
       : `mappings/${encodeURIComponent(update.id)}/${update.action}`;
   const body = update.resource === "config" ? { ...update.changes, expected_version: update.expected_version }
     : update.resource === "opening" ? { expected_paused: update.expected_paused }
     : update.resource === "universe" ? {
       ...(update.action === "classify" ? update.classification : {}), expected_status: update.expected_status,
+    } : update.resource === "external-liabilities" ? {
+      exchange_type: update.exchange_type, coin: update.coin, expected_revision: update.expected_revision,
+      ...(update.action === "register" ? { cap: update.cap, reason: update.reason } : {}),
     } : update.resource === "external-positions"
       ? { identity: update.identity, expected_status: update.expected_status, reason: update.reason }
       : { expected_status: update.expected_status, expected_multiplier: update.expected_multiplier };
   let response: Response;
   try {
     // Browsers supply Origin; never attach either server token. Writes are never retried.
-    response = await sessionFetch(`/api/live-exec/${path}`, {
+    const options = {
       method: update.resource === "config" ? "PUT" : "POST",
       headers: { "Content-Type": "application/json", "X-Live-Exec-CSRF": "1" }, body: JSON.stringify(body),
-    });
+    };
+    response = update.resource === "external-liabilities"
+      ? await fetch(new URL(`/api/live-exec/${path}`, window.location.origin).toString(), { ...options, credentials: "same-origin" })
+      : await sessionFetch(`/api/live-exec/${path}`, options);
   } catch {
     throw new Error("请求未完成，结果可能已生效，请刷新核实后再操作");
   }
   if (response.status === 409) throw new LiveAdminConflictError();
   const result = await response.json().catch(() => null);
+  if (response.status === 401 && update.resource === "external-liabilities"
+      && result?.detail !== "实盘服务认证失败") throw new LiveAdminSessionError();
   if (!response.ok || result?.available !== true) {
     const message = typeof result?.detail === "string" && /[\u4e00-\u9fff]/.test(result.detail) ? result.detail
       : response.status === 401 ? "登录已失效，请重新登录"
