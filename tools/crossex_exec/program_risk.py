@@ -79,6 +79,30 @@ def program_notionals(store,snapshot,now):
 
 
 def debt_attribution(store,snapshot,now):
+    """Keep margin attribution first; only exact, bounded allowances exempt the rest."""
+    from .external_liabilities import ExternalLiabilityAllowances, matching_liability
+    result = _margin_debt_attribution(store, snapshot, now)
+    if not result['blocking']:
+        return result
+    caps = ExternalLiabilityAllowances(store).caps()
+    if not caps:
+        return result
+    allowed, blocked = list(result['external']), []
+    for debt in result['blocking']:
+        try:
+            group = (debt['exchange_type'], debt['coin'])
+            cap = caps[group]
+            amount = dec(debt['liability'])
+            if (debt.get('route') != 'crossex' or debt.get('source_field') != 'liability'
+                    or not 0 < amount <= cap or matching_liability(snapshot, group) != amount):
+                raise ValueError('external_debt_unverifiable')
+            allowed.append(dict(debt, allowance_cap=str(cap)))
+        except (KeyError, TypeError, ValueError, ArithmeticError):
+            blocked.append(debt)
+    return dict(external=allowed, blocking=blocked)
+
+
+def _margin_debt_attribution(store,snapshot,now):
     """Exemption requires one exact exchange/coin domain used only by externals.
 
     Compare native liability with native external initial margin, cross-checked

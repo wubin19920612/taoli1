@@ -1,4 +1,5 @@
 """Non-overridable ceilings and a single admission check for every opening send."""
+from decimal import localcontext, MAX_EMAX, MIN_EMIN
 from itertools import chain
 import time
 from tools.fill_sim.core import dec
@@ -13,6 +14,30 @@ MAX_TOTAL_USD = dec('600')
 MAX_EQUITY_DROP_USD = dec('150')
 DEFAULT_VAR = '/home/ubuntu/wubin/crossex-exec/var'
 DEFAULT_ENV = '/home/ubuntu/wubin/crossex-exec/crossex-exec.env'
+
+
+def _external_liability_prior(store):
+    """Warning history is optional; corrupt history must never stop risk checks."""
+    try:
+        active=store.meta('external_liability_active',False)
+        if type(active) is not bool:
+            raise ValueError('invalid_external_liability_active')
+        prior=store.meta('external_liability_status',[]) if active else []
+        if not isinstance(prior,list):
+            raise ValueError('invalid_external_liability_status')
+        crossed=set()
+        for row in prior:
+            if (not isinstance(row,list) or len(row) not in (3,5)
+                    or not all(isinstance(v,str) and v for v in row[:3])):
+                raise ValueError('invalid_external_liability_status')
+            if len(row)==5:
+                if not isinstance(row[3],str) or dec(row[3])<=0 or type(row[4]) is not bool:
+                    raise ValueError('invalid_external_liability_status')
+                if row[4]:
+                    crossed.add(tuple(row[:4]))
+        return active,crossed
+    except Exception:
+        return False,set()
 
 
 class HardLimits:
@@ -71,18 +96,52 @@ class HardLimits:
         self.store.set_meta('liabilities',snapshot['liabilities'])
         debts=self.liabilities(snapshot)
         self.store.set_meta('liability_attribution',dict(debts,snapshot_version=snapshot.get('snapshot_version'),at=self.clock()))
-        if debts['external']:
-            from .alerts import emit
-            status=sorted((r['route'],r['exchange_type'],r['coin']) for r in debts['external'])
-            previous=self.store.meta('external_liability_active')
-            emit(self.store,self.clock,'external_liability',{'assets':debts['external']},
-                 event_kind='EXTERNAL_LIABILITY',status=status,new_incident=not previous,
-                 active_key='external_liability_active',
-                 sink=getattr(getattr(self.alert,'__self__',None),'alert_sink',None))
-        elif self.store.meta('external_liability_active'):
-            with self.store.transaction():
-                self.store.set_meta('external_liability_active',False)
-                self.store.event('EXTERNAL_LIABILITY_CLEARED')
+        try:
+            previous,crossed=_external_liability_prior(self.store)
+            if debts['external']:
+                from .alerts import emit
+                try:
+                    status=[]
+                    for row in debts['external']:
+                        state=[row['route'],row['exchange_type'],row['coin']]
+                        if 'allowance_cap' in row:
+                            cap,amount=dec(row['allowance_cap']),dec(row['liability'])
+                            state.append(row['allowance_cap'])
+                            # Multiplication by a one-digit integer needs at most
+                            # one extra digit, regardless of the ambient context.
+                            with localcontext() as context:
+                                context.prec=max(len(cap.as_tuple().digits),len(amount.as_tuple().digits))+1
+                                context.Emax,context.Emin,context.clamp=MAX_EMAX,MIN_EMIN,0
+                                above=amount*5>cap*4
+                            # Warn once on the first >80% crossing for this active cap;
+                            # small oscillations around the threshold do not re-arm it.
+                            state.append(tuple(state) in crossed or above)
+                        status.append(state)
+                    status.sort()
+                    allowance_only=all('allowance_cap' in row for row in debts['external'])
+                except Exception:
+                    # A failed noise-reduction calculation means warn again, never
+                    # skip the blocking, equity or subsequent margin protections.
+                    previous,status,allowance_only=False,None,False
+                emit(self.store,self.clock,'external_liability',{'assets':debts['external']},
+                     event_kind='EXTERNAL_LIABILITY',status=status,new_incident=not previous,
+                     active_key='external_liability_active',
+                     repeat_after=None if allowance_only else 3600,status_key='external_liability_status',
+                     retry_on_failure=True,
+                     sink=getattr(getattr(self.alert,'__self__',None),'alert_sink',None))
+            elif previous:
+                with self.store.transaction():
+                    self.store.set_meta('external_liability_active',False)
+                    self.store.set_meta('external_liability_status',[])
+                    self.store.event('EXTERNAL_LIABILITY_CLEARED')
+        except Exception as error:
+            # Warning persistence and delivery are never prerequisites for debt
+            # locks, equity halts or the caller's subsequent margin protection.
+            try:
+                self.store.event('ALERT_INTERNAL_ERROR',dict(reason='external_liability',
+                                                           error_kind=type(error).__name__))
+            except Exception:
+                pass
         if debts['blocking']:
             if self.alert:
                 self.alert('account_liability',details={'assets':debts['blocking']},event_kind='ACCOUNT_LIABILITY')

@@ -14,7 +14,7 @@ from .universe import Universe
 from .public_store import PUBLIC_KEYS, public_read
 
 
-READS = {'config', 'config/audit', 'universe', 'mappings', 'external-positions'}
+READS = {'config', 'config/audit', 'universe', 'mappings', 'external-positions', 'external-liabilities'}
 
 
 class WriteConflict(ValueError):
@@ -78,6 +78,8 @@ def write_route(method, path):
             return ('opening', path.rsplit('/', 1)[1])
         if path in ('/api/v1/external-positions/register','/api/v1/external-positions/unregister'):
             return ('external-positions',path.rsplit('/',1)[1])
+        if path in ('/api/v1/external-liabilities/register','/api/v1/external-liabilities/unregister'):
+            return ('external-liabilities',path.rsplit('/',1)[1])
         if path == '/api/v1/equity/rebaseline':
             return ('equity','rebaseline')
         match = re.fullmatch('/api/v1/universe/([A-Z0-9]{1,40})/(exclude|unexclude|classify)', path)
@@ -119,10 +121,16 @@ class Management:
         with readonly(self.path, budget) as conn:
             conn.execute('BEGIN')
             store = ReadStore(conn, budget)
+            if endpoint in ('external-positions', 'external-liabilities'):
+                from .external_liabilities import ExternalLiabilityAllowances
+                allowances = ExternalLiabilityAllowances(store).describe()
+                if endpoint == 'external-liabilities':
+                    return allowances
             if endpoint == 'external-positions':
                 from .external import ExternalRegistry
                 return dict(ExternalRegistry(store).describe(),income=store.meta('external_income'),
-                    flatten_status=store.meta('flatten_status'),projection=store.meta('program_projection'))
+                    flatten_status=store.meta('flatten_status'),projection=store.meta('program_projection'),
+                    external_liability_allowances=allowances)
             if endpoint == 'config':
                 return Settings(store).describe()
             if endpoint == 'config/audit':
@@ -216,7 +224,43 @@ class Management:
                     temporary.unlink(missing_ok=True)
         return dict(paused=paused)
 
+    def _liability_allowance(self, store, action, body):
+        from .external_liabilities import (
+            ALLOWANCE_KEY, ExternalLiabilityAllowances, checked_group, checked_cap, checked_reason)
+        fields = {'exchange_type', 'coin', 'expected_revision'}
+        if action == 'register':
+            fields |= {'cap', 'reason'}
+        if action not in ('register', 'unregister') or set(body) != fields:
+            raise ValueError('invalid_body')
+        group = checked_group(body['exchange_type'], body['coin'])
+        expected = body['expected_revision']
+        if type(expected) is not int or expected < 0:
+            raise ValueError('invalid_expected_revision')
+        now = time.time()
+        new = None
+        if action == 'register':
+            new = dict(exchange_type=group[0], coin=group[1], cap=str(checked_cap(body['cap'])),
+                       reason=checked_reason(body['reason']), registered_at=now)
+        current = ExternalLiabilityAllowances(store).records()
+        if expected != current['revision']:
+            raise WriteConflict('EXTERNAL_LIABILITY_ALLOWANCE_CONFLICT',
+                                dict(error='revision_conflict', current_revision=current['revision']),
+                                dict(expected_revision=expected), exchange_type=group[0], coin=group[1], action=action)
+        old = next((r for r in current['items'] if (r['exchange_type'], r['coin']) == group), None)
+        items = [r for r in current['items'] if (r['exchange_type'], r['coin']) != group]
+        if new is not None:
+            items.append(new)
+        value = dict(revision=current['revision']+1,
+                     items=sorted(items, key=lambda r: (r['exchange_type'], r['coin'])))
+        store.set_meta(ALLOWANCE_KEY, value)
+        store.event('EXTERNAL_LIABILITY_ALLOWANCE_'+('REGISTERED' if new else 'UNREGISTERED'),
+                    dict(at=now, source='admin_api', exchange_type=group[0], coin=group[1],
+                         expected_revision=expected, revision=value['revision'], old=old, new=new))
+        return value
+
     def _update(self, store, route, body):
+        if route[0] == 'external-liabilities':
+            return self._liability_allowance(store, route[1], body)
         if route[0] == 'opening':
             return self._opening(store, route[1], body)
         if route == ('config',):

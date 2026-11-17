@@ -264,10 +264,11 @@ class DebtAndAlertTests(IsolationFixture, unittest.TestCase):
             if key=='external_liability_active':
                 raise OSError('injected alert state failure')
             return save(key,value)
-        with patch.object(self.store,'set_meta',side_effect=failed),self.assertRaises(OSError):
+        with patch.object(self.store,'set_meta',side_effect=failed):
             self.engine.limits.check_equity(self.snapshot())
         self.assertFalse(any(e['kind']=='EXTERNAL_LIABILITY' for e in self.store.events()))
         self.assertIsNone(self.store.meta('alert_states'))
+        self.assertEqual(sum(e['kind']=='ALERT_INTERNAL_ERROR' for e in self.store.events()),1)
 
     def test_fully_attributed_native_debt_warns_without_stopping_or_blocking_send(self):
         self.debt()
