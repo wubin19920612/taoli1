@@ -952,6 +952,9 @@ async def test_enrichment_round_allocation_experiment(monkeypatch, tmp_path):
         async def latest_published_at(self, **kwargs):
             return None
 
+        async def find_cross_source_duplicate(self, announcement):
+            return None
+
         async def create_if_new(self, candidate):
             return None  # Simulate existing durable rows without a fake memory DB.
 
