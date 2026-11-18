@@ -264,7 +264,7 @@ class World:
         self.store = FakeDatabase()
         # Normal history is nonzero and flat (MAD=0). The negative episode uses
         # real 15bp samples, below the structural ceiling but above v1's 10bp.
-        seed_baseline(self.store,self.now,'15' if opening_fault == 'baseline_not_flat' else '5')
+        seed_baseline(self.store,self.now,'50.01' if opening_fault == 'baseline_not_flat' else '5')
         self.market = SimpleNamespace(mapping={i.market.key:i for i in self.instruments}, books=self.books,
             funding=self.funding,
             open_interests=lambda instruments,books:[dict(market_key=i.market.key,usd='10000000',at=self.now,
@@ -575,7 +575,7 @@ class InvariantSimulationTests(unittest.TestCase):
                             self.assertFalse(sent['locked'], 'I2 opening while locked')
                             self.assertIsNotNone(sent['admission'], 'I1d missing shared admission')
                             baseline = sent['admission']['baseline']
-                            self.assertLessEqual(abs(dec(baseline['baseline_bps'])), 10)
+                            self.assertLessEqual(abs(dec(baseline['baseline_bps'])), 50)
                             self.assertGreaterEqual(dec(baseline['mad_bps']), 0)
                             self.assertLessEqual(dec(baseline['mad_bps']), 10)
                             gross = (dec(pair['fill']['sell']['vwap'])/dec(pair['fill']['buy']['vwap'])-1)*10000

@@ -89,7 +89,7 @@ class TimingTests(unittest.TestCase):
     def test_every_upper_bound_rejects_relaxation_and_invalid_config(self):
         caps = dict(CROSSEX_MAX_BOOK_SKEW_MS='300', CROSSEX_MAX_BOOK_AGE_SECONDS='1',
                     CROSSEX_MAX_FUNDING_DIFF_BPS_H='0.5', CROSSEX_MAX_FUNDING_RATE_8H='0.0005',
-                    CROSSEX_MAX_BASELINE_BPS='10', CROSSEX_MAX_BASELINE_MAD_BPS='10',
+                    CROSSEX_MAX_BASELINE_BPS='50', CROSSEX_MAX_BASELINE_MAD_BPS='50',
                     CROSSEX_MAX_NORMAL_DEVIATION_BPS='10', CROSSEX_MAX_REFERENCE_AGE_SECONDS='90')
         for name,cap in caps.items():
             with self.subTest(name=name):
@@ -152,10 +152,10 @@ class FatFingerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'funding_diff'):
                 self.guard().funding(rows)
 
-    def test_flat_baseline_and_mad_ten_inclusive_both_directions(self):
-        for center in ('10','-10','0'):
-            self.guard().flat(dict(baseline_bps=center,mad_bps='10'))
-        for center,mad in (('10.0001','0'),('-10.0001','0'),('0','10.0001'),
+    def test_flat_baseline_and_mad_fifty_inclusive_both_directions(self):
+        for center in ('50','-50','0'):
+            self.guard().flat(dict(baseline_bps=center,mad_bps='50'))
+        for center,mad in (('50.0001','0'),('-50.0001','0'),('0','50.0001'),
                            (None,'0'),('NaN','0'),('0',None),('0','-1')):
             with self.subTest(center=center,mad=mad), self.assertRaisesRegex(ValueError,'baseline_not_flat'):
                 self.guard().flat(dict(baseline_bps=center,mad_bps=mad))
@@ -344,7 +344,7 @@ class EngineAdmissionTests(unittest.TestCase):
                     self.store.pair(pair)
                 elif reason=='baseline_not_flat':
                     self.store.db.execute('DELETE FROM baseline_samples')
-                    seed_baseline(self.store,self.now[0],'10.01')
+                    seed_baseline(self.store,self.now[0],'50.01')
                 else:
                     mids={'binance':{'BTC':'100'},'bitget':{'BTC':'102'}}
                     if reason=='not_single_venue_outlier':
@@ -388,7 +388,7 @@ class EngineAdmissionTests(unittest.TestCase):
     def test_ingest_records_each_v1_reason_and_never_sends(self):
         for reason in REASONS[2:]:
             self.store.db.execute('DELETE FROM baseline_samples')
-            seed_baseline(self.store,self.now[0], '10.01' if reason=='baseline_not_flat' else '0')
+            seed_baseline(self.store,self.now[0], '50.01' if reason=='baseline_not_flat' else '0')
             mids = {'binance':{'BTC':'100'},'bitget':{'BTC':'102'}}
             if reason!='too_few_venues':
                 mids['bybit']={'BTC':'101' if reason=='not_single_venue_outlier' else '100'}
@@ -411,7 +411,7 @@ class EngineAdmissionTests(unittest.TestCase):
                 p.update(state='OPENING')
                 self.store.pair(p)
                 self.store.db.execute('DELETE FROM baseline_samples')
-                seed_baseline(self.store,self.now[0],'10.01' if reason=='baseline_not_flat' else '0')
+                seed_baseline(self.store,self.now[0],'50.01' if reason=='baseline_not_flat' else '0')
                 mids={'binance':{'BTC':'100'},'bitget':{'BTC':'102'}}
                 if reason!='too_few_venues':
                     mids['bybit']={'BTC':'101' if reason=='not_single_venue_outlier' else '100'}
