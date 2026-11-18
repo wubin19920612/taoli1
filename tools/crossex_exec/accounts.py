@@ -1,8 +1,10 @@
 """Account validation, risk measures and opening-only contract leverage checks."""
+import re
 import threading
 import time
 from dataclasses import dataclass
 from tools.fill_sim.core import dec
+from .background import exception_details
 from .history import error_details
 from .policy import Instrument
 
@@ -543,9 +545,12 @@ class Accounts:
 
     def ensure_opening_leverage(self, contracts, store, can_open):
         any_sent = False
+        current = dict(exchange=None, symbol=None, step='start')
         try:
             deadline = _LeverageDeadline(self.clock)
             for exchange, symbol in contracts:
+                current.update(exchange=exchange, symbol=symbol, step='read_leverage')
+                attempt = None
                 deadline()
                 _check_leverage_cooldown(store, self.clock())
                 if not can_open():
@@ -554,14 +559,28 @@ class Accounts:
                 if before == dec(TARGET_LEVERAGE):
                     continue
                 venue = self.bitget if exchange == 'bitget' else self.cross
+                current['step'] = 'set_and_confirm'
                 attempt = _LeverageAttempt(exchange, symbol, venue, store, can_open, self.clock, deadline, before)
                 try:
                     attempt.set_and_confirm(self._read_leverage)
                 finally:
                     any_sent = any_sent or attempt.sent
+            current.update(exchange=None, symbol=None, step='finish')
             deadline()
-        except Exception:
-            raise ValueError('leverage_set_failed' if any_sent else 'leverage_set_skipped') from None
+        except Exception as error:
+            outcome = 'leverage_set_failed' if any_sent else 'leverage_set_skipped'
+            # Diagnostics only: allowlisted type/location plus a snake_case code; never str(error).
+            try:
+                details = exception_details(error)
+                if (type(error) is ValueError and len(error.args) == 1 and type(error.args[0]) is str
+                        and re.fullmatch(r'[a-z][a-z0-9_]{0,63}', error.args[0])):
+                    details['cause'] = error.args[0]
+                stage = getattr(attempt, 'stage', None) if current['step'] == 'set_and_confirm' else None
+                store.event('LEVERAGE_OUTCOME', dict(current, outcome=outcome, stage=stage
+                            if isinstance(stage, str) else None, **details))
+            except Exception:
+                pass  # Diagnostics never change the fail-closed outcome.
+            raise ValueError(outcome) from None
 
     def program_activity(self,contracts,start_ms,end_ms):
         """Only funding and independent counters for exact program symbols.

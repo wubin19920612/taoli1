@@ -187,6 +187,33 @@ def test_occupied_or_unreadable_contract_skips_without_write(engine, http, path,
     rejected(engine, 'leverage_set_skipped')
     assert http.writes == events(engine, 'LEVERAGE_SET') == []
     assert engine.store.meta('leverage_set_window', []) == []
+    outcome, = events(engine, 'LEVERAGE_OUTCOME')
+    assert outcome['outcome'] == 'leverage_set_skipped' and outcome['exchange'] in ('crossex', 'bitget')
+    assert outcome['symbol'] in (GATE, BITGET) and outcome['error_type'] and outcome['location']
+
+
+def test_leverage_outcome_records_step_and_cause_without_secrets(engine, http):
+    private = 'fictional-key fictional-secret fictional-signature'
+    http.apply_write = False
+    http.write_error = TimeoutError(private)
+    rejected(engine, 'leverage_set_failed')
+    outcome, = events(engine, 'LEVERAGE_OUTCOME')
+    assert outcome['outcome'] == 'leverage_set_failed' and outcome['exchange'] == 'crossex'
+    assert outcome['symbol'] == GATE and outcome['step'] == 'set_and_confirm'
+    assert outcome['error_type'] == 'TimeoutError' and outcome['location'] and 'cause' not in outcome
+    assert all(secret not in str(engine.store.events()) for secret in private.split())
+
+
+def test_leverage_outcome_diagnostics_failure_keeps_fail_closed_result(engine, http):
+    http.responses[GATE_ORDERS] = [dict(symbol=GATE)]
+    real_event = engine.store.event
+    def event(kind, value):
+        if kind == 'LEVERAGE_OUTCOME':
+            raise OSError('disk')
+        return real_event(kind, value)
+    with patch.object(engine.store, 'event', side_effect=event):
+        rejected(engine, 'leverage_set_skipped')
+    assert http.writes == []
 
 
 def test_bitget_crossed_hedge_sets_both_sides_once_and_confirms(engine, http):
