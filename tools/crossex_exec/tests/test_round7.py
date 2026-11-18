@@ -259,6 +259,28 @@ class EngineAdmissionTests(unittest.TestCase):
         self.assertEqual(view.get('summary',{})['opening_skip_counts']['book_skew'],1)
         self.assertEqual(view.get('summary',{})['opening_skip_counts']['book_stale'],1)
 
+    def test_book_timing_rejections_record_per_leg_diagnostics(self):
+        for reason, fields in (('book_skew',dict(skew=501)),('book_stale',dict(age='1.01'))):
+            with self.subTest(reason=reason), patch.object(self.market,'books',return_value=books(self.now[0],**fields)):
+                self.engine.ingest(self.trigger('timing-'+reason))
+                skip=self.skips()[-1]
+                self.assertEqual(skip['reason'],reason)
+                timing=skip['book_timing']
+                self.assertEqual((timing['attempt'],timing['checkpoint']),(1,'after_fetch'))
+                self.assertEqual(len(timing['legs']),2)
+                self.assertTrue(all(leg['exchange'] and leg['fetched'] for leg in timing['legs']))
+                self.assertIsInstance(timing['skew_ms'],float)
+                if reason=='book_skew':
+                    self.assertGreater(timing['skew_ms'],500)
+                else:
+                    self.assertTrue(any((leg['exchange_age_ms'] or 0)>1000 or (leg['receipt_age_ms'] or 0)>1000
+                                        for leg in timing['legs']))
+                self.assertNotIn('bids',str(timing))
+        with patch.object(self.market,'books',side_effect=[books(skew=501),[books()[0],None]]):
+            self.engine.ingest(self.trigger('timing-missing'))
+        legs=self.skips()[-1]['book_timing']['legs']
+        self.assertEqual([leg['fetched'] for leg in legs],[True,False])
+
     def test_failed_refresh_does_not_reuse_old_valid_leg(self):
         with patch.object(self.market,'books',side_effect=[books(skew=501),[books()[0],None]]) as fetch:
             self.assertIsNone(self.engine.ingest(self.trigger()))

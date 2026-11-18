@@ -41,6 +41,28 @@ class DailyBaselinePending(ValueError):
 import re as _re
 
 
+def book_timing_details(instruments,books,started,fetched,now,attempt,checkpoint):
+    """Diagnostics only (book_skew/book_stale): per-leg ages in ms, never book contents."""
+    def ms(value):
+        try:
+            return round(float(value)*1000,1)
+        except (TypeError,ValueError,ArithmeticError):
+            return None
+    legs=[]
+    for i,book in zip(instruments,books):
+        try:
+            row=None if book is None else (book if isinstance(book,dict) else book.to_dict())
+            exchange_at=row.get('exchange_at') if row else None
+            legs.append(dict(exchange=i.market.exchange,fetched=row is not None,
+                receipt_age_ms=ms(now-float(row['received_at'])) if row else None,
+                exchange_age_ms=ms(now-float(exchange_at)) if exchange_at is not None else None))
+        except Exception:
+            legs.append(dict(exchange=i.market.exchange,fetched=False,receipt_age_ms=None,exchange_age_ms=None))
+    skew=book_skew_ms(books) if all(b is not None for b in books) else None
+    return dict(attempt=attempt,checkpoint=checkpoint,fetch_ms=ms(fetched-started),
+                review_ms=ms(now-started),skew_ms=None if skew is None else float(skew),legs=legs)
+
+
 def review_failure_details(error):
     """Type, innermost module:line and a snake_case local reason code only."""
     details=exception_details(error)
@@ -282,7 +304,10 @@ class Engine:
         interests=None
         common=[i.common() for i in instruments]
         for attempt in range(BOOK_RETRIES+1):
+            started=self.clock()
             books=self.fetch_opening_books(instruments)
+            fetched=self.clock()
+            checkpoint='after_fetch'
             try:
                 limits.books(books,self.clock())
                 check_mapping_ratio(common,books)
@@ -290,6 +315,7 @@ class Engine:
                 if interests is None:
                     interests=self.market.open_interests(instruments,books)
                 # Public OI reads also consume the opening book age budget.
+                checkpoint='after_open_interest'
                 limits.books(books,self.clock())
                 available=max(dec(0),min(self.limits.total,dec(values['max_total_open_usd']))-
                               self.limits.exposure(self.account_cache.read()))
@@ -299,9 +325,15 @@ class Engine:
                 fill.update(sizing=sizing,open_interests=interests)
                 evidence=limits.outlier(tuple(i.market.exchange for i in instruments),books,
                     self.reference_snapshot(instruments),fill['excess_bps'],self.clock())
+                checkpoint='final'
                 limits.books(books,self.clock())
                 return books,fill,evidence
             except AdmissionError as error:
+                if error.reason in ('book_skew','book_stale'):
+                    try:
+                        error.details=book_timing_details(instruments,books,started,fetched,self.clock(),attempt,checkpoint)
+                    except Exception:
+                        pass  # Diagnostics never change the rejection.
                 if error.reason not in ('book_skew','book_stale') or attempt==BOOK_RETRIES:
                     raise
 
@@ -1071,8 +1103,10 @@ class Engine:
         except Exception as error:
             reason=(error.reason if isinstance(error,AdmissionError) else str(error)
                     if isinstance(error,ValueError) and str(error) in REVIEW_SKIP_REASONS else 'review_failed_closed')
+            timing=getattr(error,'details',None) if isinstance(error,AdmissionError) else None
             self.store.skip(identity,reason,stage='review',
-                            **(review_failure_details(error) if reason=='review_failed_closed' else {}))
+                            **(review_failure_details(error) if reason=='review_failed_closed' else {}),
+                            **({'book_timing':timing} if isinstance(timing,dict) else {}))
             return
         pair=dict(id=uuid.uuid4().hex,trigger_id=identity,base=base,state='OPENING',opened_at=self.clock(),
                   baseline_at_open=fill['baseline_bps'],excess_at_open=fill['excess_bps'],
