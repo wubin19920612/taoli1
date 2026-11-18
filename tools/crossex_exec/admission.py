@@ -16,10 +16,15 @@ MAX_NORMAL_DEVIATION_BPS = dec('10')
 MIN_OUTLIER_SHARE = dec('0.7')
 MIN_VENUES = 3
 BOOK_RETRIES = 1
+# These counters are always present in the public summary, even at zero.
 SKIP_REASONS = ('book_skew', 'book_stale', 'funding_diff', 'baseline_not_flat',
                 'not_single_venue_outlier', 'too_few_venues', 'size_too_small', 'oi_missing',
                 'mapping_ratio_mismatch', 'volume_too_low', 'volume_unknown', 'category_unconfirmed',
                 'identity_price_mismatch')
+REVIEW_SKIP_REASONS = SKIP_REASONS + (
+    'baseline_warming', 'structural_spread', 'pair_cooldown', 'mapping_unconfirmed',
+    'excluded', 'external_contract_forbidden', 'leverage_set_failed', 'leverage_set_skipped',
+)
 
 
 class AdmissionError(ValueError):

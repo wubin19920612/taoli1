@@ -132,8 +132,8 @@ class CrossEx:
         return history(self.http,'crossex','/api/v4/crossex/'+kind,start_ms,end_ms,
                        key=lambda r:r[key],limit=1000)
 
-    def positions(self):
-        return self.http.request('GET','/api/v4/crossex/positions',group='position')
+    def positions(self, *, deadline=None):
+        return self.http.request('GET','/api/v4/crossex/positions',group='position',deadline=deadline)
 
     def funding_records(self,start_ms,end_ms):
         return history(self.http,'crossex','/api/v4/crossex/account_book',start_ms,end_ms,
@@ -144,10 +144,11 @@ class CrossEx:
             key=lambda r:(r['position_id'],r['update_time'],r['closed_type']),limit=1000,
             filters=dict(symbol=symbol) if symbol else None)
 
-    def open_orders(self):
+    def open_orders(self, *, request_deadline=None):
         # Documented complete current list; no symbol/venue filter may hide debt
         # or foreign orders during an administrative flat-account verification.
-        rows=self.http.request('GET','/api/v4/crossex/open_orders')
+        rows=self.http.request('GET','/api/v4/crossex/open_orders',
+                               deadline=request_deadline() if request_deadline else None)
         if not isinstance(rows,list):
             raise APIError('invalid_response')
         return rows
@@ -155,8 +156,16 @@ class CrossEx:
     def fees(self):
         return self.http.request('GET','/api/v4/crossex/fee',group='fee')
 
-    def leverage(self, symbols):
-        return self.http.request('GET','/api/v4/crossex/positions/leverage',{'symbols':','.join(symbols)})
+    def leverage(self, symbols, *, deadline=None):
+        return self.http.request('GET','/api/v4/crossex/positions/leverage',{'symbols':','.join(symbols)},
+                                 deadline=deadline)
+
+    def set_leverage(self, symbol, leverage, *, before_send, deadline=None):
+        data = self.http.request('POST', '/api/v4/crossex/positions/leverage',
+                                 body=dict(symbol=symbol, leverage=leverage),
+                                 group='write', before_send=before_send, deadline=deadline)
+        if not isinstance(data, dict) or data.get('symbol') != symbol or dec(data.get('leverage')) != dec(leverage):
+            raise APIError('invalid_response')
 
 
 class Bitget:
@@ -195,11 +204,11 @@ class Bitget:
         body.update({'orderId':i['oid']} if i.get('oid') else {'clientOid':i['cid']})
         return self.http.request('POST','/api/v3/trade/cancel-order',body=body,group='write')
 
-    def paged(self, path, params):
+    def paged(self, path, params, *, request_deadline=None):
         rows, seen = [], set()
         params=dict(params,limit=100)
         for _ in range(20):
-            data=self.http.request('GET',path,params)
+            data=self.http.request('GET',path,params,deadline=request_deadline() if request_deadline else None)
             try:
                 batch,cursor=page_rows(data,path,cursor=True,limit=100)
             except ValueError:
@@ -237,21 +246,35 @@ class Bitget:
                          key=lambda r:r['positionId'],limit=100,cursor=True,
                          filters=dict(symbol=symbol) if symbol else None)
 
-    def settings(self):
-        return self.http.request('GET','/api/v3/account/settings',group='account')
+    def settings(self, *, deadline=None):
+        return self.http.request('GET','/api/v3/account/settings',group='account',deadline=deadline)
 
-    def positions(self):
+    def set_leverage(self, symbol, leverage, *, before_send, deadline=None):
+        # UTA cross leverage applies to both sides of a hedge-mode contract.
+        result = self.http.request('POST', '/api/v3/account/set-leverage',
+                                   body=dict(category='USDT-FUTURES', symbol=symbol,
+                                             marginMode='crossed', leverage=leverage),
+                                   group='write', before_send=before_send, deadline=deadline)
+        if result != 'success':
+            raise APIError('invalid_response')
+
+    def positions(self, *, deadline=None):
         data=self.http.request('GET','/api/v3/position/current-position',
-                               dict(category='USDT-FUTURES'),group='position')
-        rows=data['list']  # C1 observed null specifically for an empty position list.
+                               dict(category='USDT-FUTURES'),group='position',deadline=deadline)
+        rows=data['list']  # C1 observed null specifically for an empty current-position list.
         if rows is None:
             return []
         if not isinstance(rows,list):
             raise ValueError('positions_unknown')
         return rows
 
-    def open_orders(self):
-        return self.paged('/api/v3/trade/unfilled-orders',dict(category='USDT-FUTURES'))
+    def open_orders(self, *, request_deadline=None):
+        return self.paged('/api/v3/trade/unfilled-orders',dict(category='USDT-FUTURES'),
+                          request_deadline=request_deadline)
+
+    def open_strategy_orders(self, *, deadline=None):
+        return self.http.request('GET', '/api/v3/trade/unfilled-strategy-orders',
+                                 dict(category='USDT-FUTURES'), deadline=deadline)
 
     def fee(self, symbol):
         return self.http.request('GET','/api/v3/account/fee-rate',

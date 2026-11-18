@@ -8,14 +8,14 @@ from decimal import ROUND_FLOOR, ROUND_CEILING
 from pathlib import Path
 from tools.fill_sim.core import Book, Market, dec, walk, closing, track_interval, day
 from tools.fill_sim.engine import trigger_reason
-from .accounts import local_positions, position_attributes
+from .accounts import LeverageMismatch, local_positions, position_attributes
 from .policy import Instrument, review, exit_reason, risk_decision, limit_price, send_review
 from .execution import Executor, NONTERMINAL
 from .limits import HardLimits, DEFAULT_VAR
 from .background import SnapshotCache, PeriodicWorker, account_failure_details, exception_details
 from .stops import StopLocks
 from .baseline import Baseline
-from .admission import OpeningLimits, AdmissionError, BOOK_RETRIES, book_skew_ms, SKIP_REASONS
+from .admission import OpeningLimits, AdmissionError, BOOK_RETRIES, book_skew_ms, SKIP_REASONS, REVIEW_SKIP_REASONS
 from .settings import Settings, risk_settings
 from .sizing import size_plan
 from .universe import Universe, check_mapping_ratio
@@ -1048,7 +1048,11 @@ class Engine:
             except ValueError:
                 self.accounts.fees(instruments)
                 fees=self.fees_for(instruments)
-            self.accounts.check_instruments(instruments)
+            try:
+                self.accounts.check_instruments(instruments)
+            except LeverageMismatch as mismatch:
+                self.accounts.ensure_opening_leverage(
+                    mismatch.contracts, self.store, lambda: self.live and self.can_open())
             try:
                 funding=self.market.funding(instruments)
             except Exception:
@@ -1060,9 +1064,7 @@ class Engine:
                 raise ValueError('open_gate_changed')
         except Exception as error:
             reason=(error.reason if isinstance(error,AdmissionError) else str(error)
-                    if isinstance(error,ValueError) and str(error) in SKIP_REASONS+(
-                        'baseline_warming','structural_spread','pair_cooldown','mapping_unconfirmed','excluded',
-                        'external_contract_forbidden') else 'review_failed_closed')
+                    if isinstance(error,ValueError) and str(error) in REVIEW_SKIP_REASONS else 'review_failed_closed')
             self.store.skip(identity,reason,stage='review',
                             **(review_failure_details(error) if reason=='review_failed_closed' else {}))
             return

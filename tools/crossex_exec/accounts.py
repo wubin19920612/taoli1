@@ -1,7 +1,9 @@
-"""Read-only startup validation and independent account risk measures."""
+"""Account validation, risk measures and opening-only contract leverage checks."""
+import threading
 import time
 from dataclasses import dataclass
 from tools.fill_sim.core import dec
+from .history import error_details
 from .policy import Instrument
 
 
@@ -157,12 +159,168 @@ class FeeSnapshot:
     captured_at: float
 
 
+TARGET_LEVERAGE = '3'
+LEVERAGE_TIMEOUT = 5
+LEVERAGE_COOLDOWN = 600
+LEVERAGE_HOURLY_LIMIT = 30
+
+
+class LeverageMismatch(ValueError):
+    def __init__(self, contracts):
+        self.contracts = contracts
+        super().__init__('bitget_symbol_config_mismatch' if contracts[0][0] == 'bitget'
+                         else 'crossex_leverage_mismatch')
+
+
+def _contract_occupied(rows, symbol, quantity_field=None):
+    if not isinstance(rows, list):
+        raise ValueError('leverage_set_skipped')
+    for row in rows:
+        identity = row['symbol']
+        if not isinstance(identity, str) or not identity or identity != identity.strip():
+            raise ValueError('leverage_set_skipped')
+        if identity == symbol and (quantity_field is None or dec(row[quantity_field]) != 0):
+            return True
+    return False
+
+
+def _check_leverage_cooldown(store, now):
+    if now < store.meta('leverage_set_cooldown_until', 0):
+        raise ValueError('leverage_set_skipped')
+
+
+class _LeverageDeadline:
+    """One budget across both contracts, expressed in monotonic time for HTTP."""
+    def __init__(self, clock):
+        self.clock = clock
+        self.wall_end = clock() + LEVERAGE_TIMEOUT
+        self.monotonic_end = time.monotonic() + LEVERAGE_TIMEOUT
+
+    def __call__(self):
+        now = time.monotonic()
+        end = min(self.monotonic_end, now + (self.wall_end - self.clock()))
+        if now >= end:
+            raise TimeoutError('leverage_deadline')
+        return end
+
+
+class _LeverageAttempt:
+    """Transport guard for one contract. A reservation survives an ambiguous exit."""
+    def __init__(self, exchange, symbol, venue, store, can_open, clock, deadline, before):
+        self.exchange, self.symbol, self.venue = exchange, symbol, venue
+        self.store, self.can_open, self.clock = store, can_open, clock
+        self.deadline = deadline
+        self.reservation = None
+        self.sent = False
+        target = dict(leverage=TARGET_LEVERAGE)
+        previous = dict(leverage=str(before) if before is not None else None)
+        if exchange == 'bitget':
+            target['marginMode'] = previous['marginMode'] = 'crossed'
+        self.audit = dict(exchange=exchange, symbol=symbol, before=previous, target=target)
+
+    def require_open(self):
+        _check_leverage_cooldown(self.store, self.clock())
+        if not self.can_open():
+            raise ValueError('leverage_set_skipped')
+        self.deadline()
+
+    def window(self, now):
+        _check_leverage_cooldown(self.store, now)
+        recent = [r for r in self.store.meta('leverage_set_window', []) if now-r['at'] < 3600]
+        if len(recent) >= LEVERAGE_HOURLY_LIMIT or any(
+                r['exchange'] == self.exchange and r['symbol'] == self.symbol and
+                'failed_at' in r and now-r['failed_at'] <= LEVERAGE_COOLDOWN for r in recent):
+            raise ValueError('leverage_set_skipped')
+        return recent
+
+    def require_no_orders(self):
+        if self.exchange == 'bitget':
+            strategies = self.venue.open_strategy_orders(deadline=self.deadline())
+            if _contract_occupied(strategies, self.symbol):
+                raise ValueError('leverage_set_skipped')
+        orders = self.venue.open_orders(request_deadline=self.deadline)
+        if _contract_occupied(orders, self.symbol):
+            raise ValueError('leverage_set_skipped')
+
+    def __call__(self):
+        # After write admission, bracket the position read with order reads.
+        # A new regular or strategy order may appear while positions are in flight.
+        self.stage = 'precheck'
+        self.deadline()
+        self.require_open()
+        self.require_no_orders()
+        positions = self.venue.positions(deadline=self.deadline())
+        if _contract_occupied(positions, self.symbol, 'total' if self.exchange == 'bitget' else 'position_qty'):
+            raise ValueError('leverage_set_skipped')
+        self.require_no_orders()
+        with self.store.transaction():
+            self.deadline()
+            now = self.clock()
+            recent = self.window(now)
+            entry = dict(exchange=self.exchange, symbol=self.symbol, at=now, failed_at=now)
+            self.store.set_meta('leverage_set_window', recent + [entry])
+        self.reservation = entry
+        # A STOP may arrive while persisting the reservation. can_open also
+        # reads the executor, so call it after releasing the journal lock.
+        self.require_open()
+        self.store.event('LEVERAGE_SET_ATTEMPT', self.audit)
+        self.require_open()  # The audit commit may also have waited on a writer.
+
+    def on_send(self):
+        self.deadline()  # Includes the durable audit commit and request signing.
+        self.stage = 'write'
+        self.sent = True
+
+    def finish(self, error):
+        if self.reservation is None:
+            return
+        with self.store.transaction():
+            recent = self.store.meta('leverage_set_window')
+            recent.remove(self.reservation)
+            if self.sent:
+                entry = dict(exchange=self.exchange, symbol=self.symbol, at=self.reservation['at'])
+                if error is not None:
+                    entry['failed_at'] = self.clock()
+                recent.append(entry)
+                self.store.event('LEVERAGE_SET', dict(self.audit, result='failed' if error else 'success', error=error))
+            self.store.set_meta('leverage_set_window', recent)
+            if error is None:
+                self.deadline()
+
+    def set_and_confirm(self, read_leverage):
+        self.window(self.clock())
+        self.stage = 'write'  # A rate-limit refusal at write admission also counts.
+        try:
+            self.venue.set_leverage(self.symbol, TARGET_LEVERAGE, before_send=self, deadline=self.deadline())
+            self.deadline()
+            self.stage = 'readback'
+            if read_leverage(self.exchange, self.symbol, self.deadline) != dec(TARGET_LEVERAGE):
+                self.stage = 'readback_mismatch'
+                raise ValueError
+            self.stage = 'audit'
+            self.finish(None)
+        except Exception as error:
+            failure = dict(stage=self.stage, **error_details(error))
+            limited = failure['error_kind'] == 'rate_limited' or failure.get('http_status') == 429
+            try:
+                if self.stage == 'write' and limited:
+                    # Persist separately so a failure writing the result event cannot undo the pause.
+                    with self.store.transaction():
+                        until = max(self.store.meta('leverage_set_cooldown_until', 0), self.clock() + LEVERAGE_COOLDOWN)
+                        self.store.set_meta('leverage_set_cooldown_until', until)
+            finally:
+                self.finish(failure)
+            raise
+
+
 class Accounts:
     def __init__(self,cross,bitget,*,risk_confirmed=False,clock=time.time):
         self.cross,self.bitget,self.risk_confirmed=cross,bitget,risk_confirmed
         self.clock=clock
         self.fee_snapshots={}
         self.leverages={}
+        self._leverage_lock = threading.Lock()
+        self.bitget_symbol_configs = {}
 
     @property
     def fees_by_market(self):
@@ -210,10 +368,12 @@ class Accounts:
                 current[i.market.key]=FeeSnapshot(mapped[i.market.key],captured_at)
             # One publication carries both fields; readers retain that version.
             self.fee_snapshots=current
-        try:
-            self.leverages=self.cross.leverage([])
-        except Exception:
-            self.leverages={}
+        with self._leverage_lock:
+            try:
+                data = self.cross.leverage([])
+                self.leverages = data if isinstance(data, dict) else {}
+            except Exception:
+                self.leverages = {}
         return mapped
 
     def validate_startup(self):
@@ -310,20 +470,98 @@ class Accounts:
                 raise failure from None
         return dict(result,complete=True)
 
+    def _bitget_leverage(self, symbol, deadline=None):
+        self.bitget_symbol_configs.pop(symbol, None)
+        try:
+            data = self.bitget.settings() if deadline is None else self.bitget.settings(deadline=deadline())
+        except Exception:
+            raise ValueError('leverage_set_skipped') from None
+        try:
+            bitget_settings(data, self.bitget.mode)
+        except (KeyError, TypeError):
+            raise ValueError('leverage_set_skipped') from None
+        try:
+            rows = [r for r in data['symbolConfigList']
+                    if r['symbol'] == symbol and r['category'] == 'USDT-FUTURES']
+            # set-leverage selects a margin mode's leverage. UTA does not
+            # document using it to switch an isolated contract to cross margin.
+            if len(rows) != 1 or rows[0]['marginMode'] != 'crossed':
+                raise ValueError
+            leverage = dec(rows[0]['leverage'])
+            if leverage <= 0:
+                raise ValueError
+        except (KeyError, TypeError, ValueError):
+            raise ValueError('leverage_set_skipped') from None
+        if deadline is not None:
+            deadline()
+        self.bitget_symbol_configs[symbol] = dict(marginMode='crossed', leverage=str(leverage))
+        return leverage
+
+    def _read_leverage(self, exchange, symbol, deadline):
+        if exchange == 'bitget':
+            return self._bitget_leverage(symbol, deadline)
+        # Serialize bulk fee refreshes with exact-symbol observations, so an
+        # older in-flight leverage response cannot overwrite a confirmed value.
+        if not self._leverage_lock.acquire(timeout=max(0, deadline() - time.monotonic())):
+            raise TimeoutError('leverage_deadline')
+        try:
+            self.leverages.pop(symbol, None)
+            data = self.cross.leverage([symbol], deadline=deadline())
+            deadline()
+            if data == {}:
+                # No setting reported for this mapped contract. The same empty
+                # response after a write can never confirm the target.
+                return None
+            leverage = dec(data[symbol])
+            if leverage <= 0:
+                raise ValueError('leverage_unknown')
+            self.leverages[symbol] = str(leverage)
+            return leverage
+        finally:
+            self._leverage_lock.release()
+
     def check_instruments(self,instruments):
+        mismatches = []
         for i in instruments:
             if i.market.key not in self.fees_by_market:
                 raise ValueError('actual_fee_missing')
             if i.market.exchange=='bitget':
-                data=self.bitget.settings()
-                bitget_settings(data,self.bitget.mode)
-                rows=[r for r in data['symbolConfigList'] if r['symbol']==i.symbol and r['category']=='USDT-FUTURES']
-                if len(rows)!=1 or rows[0]['marginMode']!='crossed' or dec(rows[0]['leverage'])!=3:
-                    raise ValueError('bitget_symbol_config_mismatch')
+                leverage = self._bitget_leverage(i.symbol)
                 if not self.risk_confirmed:
                     raise ValueError('bitget_risk_units_unconfirmed')
-            elif dec(self.leverages.get(i.symbol,0))!=3:
-                raise ValueError('crossex_leverage_mismatch')
+                exchange = 'bitget'
+            else:
+                exchange = 'crossex'
+                try:
+                    leverage = dec(self.leverages.get(i.symbol, 0))
+                except ValueError:
+                    leverage = None  # The bulk cache cannot establish the value.
+            if leverage != dec(TARGET_LEVERAGE):
+                mismatches.append((exchange, i.symbol))
+        if mismatches:
+            raise LeverageMismatch(mismatches)
+
+    def ensure_opening_leverage(self, contracts, store, can_open):
+        any_sent = False
+        try:
+            deadline = _LeverageDeadline(self.clock)
+            for exchange, symbol in contracts:
+                deadline()
+                _check_leverage_cooldown(store, self.clock())
+                if not can_open():
+                    raise ValueError('leverage_set_skipped')
+                before = self._read_leverage(exchange, symbol, deadline)
+                if before == dec(TARGET_LEVERAGE):
+                    continue
+                venue = self.bitget if exchange == 'bitget' else self.cross
+                attempt = _LeverageAttempt(exchange, symbol, venue, store, can_open, self.clock, deadline, before)
+                try:
+                    attempt.set_and_confirm(self._read_leverage)
+                finally:
+                    any_sent = any_sent or attempt.sent
+            deadline()
+        except Exception:
+            raise ValueError('leverage_set_failed' if any_sent else 'leverage_set_skipped') from None
 
     def program_activity(self,contracts,start_ms,end_ms):
         """Only funding and independent counters for exact program symbols.

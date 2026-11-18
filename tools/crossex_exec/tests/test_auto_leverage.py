@@ -1,0 +1,587 @@
+"""Opening review against synthetic private HTTP and the regular local journal."""
+import json
+import tempfile
+import time
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from tools.crossex_exec.accounts import Accounts, FeeSnapshot
+from tools.crossex_exec.adapters import Bitget, CrossEx
+from tools.crossex_exec.engine import Engine
+from tools.crossex_exec.security import Credentials
+from tools.crossex_exec.storage import Store
+from tools.crossex_exec.transport import APIError, Transport
+from tools.fill_sim.network import DeadlineSocket
+from baseline_fixtures import seed_baseline
+from round18_fixtures import OfflineAccountHTTP
+from test_engine import FakeMarket, trigger
+from test_exec import FakeVenue, instrument, setUpModule, tearDownModule
+from test_round2 import settings
+
+
+GATE = instrument().symbol
+BITGET = instrument('bitget').symbol
+GATE_LEVERAGE = '/api/v4/crossex/positions/leverage'
+GATE_POSITIONS = '/api/v4/crossex/positions'
+GATE_ORDERS = '/api/v4/crossex/open_orders'
+BG_LEVERAGE = '/api/v3/account/set-leverage'
+BG_SETTINGS = '/api/v3/account/settings'
+BG_POSITIONS = '/api/v3/position/current-position'
+BG_ORDERS = '/api/v3/trade/unfilled-orders'
+BG_STRATEGIES = '/api/v3/trade/unfilled-strategy-orders'
+
+
+class LeverageHTTP(OfflineAccountHTTP):
+    def __init__(self):
+        super().__init__()
+        self.responses.update({GATE_LEVERAGE: {GATE: '10'}, BG_SETTINGS: settings(), BG_STRATEGIES: []})
+        self.writes = []
+        self.apply_write = True
+        self.after_admit = lambda: None
+        self.after_read = lambda path: None
+        self.before_write = lambda: None
+        self.write_error = None
+
+    def request(self, method, path, params=None, *, body=None, before_send=None, group='query', **kwargs):
+        if method == 'GET':
+            if isinstance(self.responses.get(path), Exception):
+                raise self.responses[path]
+            data = super().request(method, path, params, **kwargs)
+            self.after_read(path)
+            return data
+        assert method == 'POST' and path in (GATE_LEVERAGE, BG_LEVERAGE)
+        assert group == 'write'
+        self.after_admit()
+        before_send()
+        before_send.on_send()
+        self.before_write()
+        self.writes.append((path, body))
+        if self.write_error:
+            raise self.write_error
+        if path == GATE_LEVERAGE:
+            if self.apply_write:
+                self.responses[path][body['symbol']] = body['leverage']
+            return dict(body)
+        if self.apply_write:
+            for row in self.responses[BG_SETTINGS]['symbolConfigList']:
+                if row['symbol'] == body['symbol'] and row['category'] == body['category']:
+                    row['leverage'] = body['leverage']
+        return 'success'
+
+
+@pytest.fixture
+def http():
+    return LeverageHTTP()
+
+
+@pytest.fixture
+def engine(http):
+    market = FakeMarket()
+    accounts = Accounts(CrossEx(http), Bitget(http), risk_confirmed=True)
+    now = time.time()
+    accounts.fee_snapshots = {k: FeeSnapshot('.0002', now) for k in market.mapping}
+    accounts.leverages = dict(http.responses[GATE_LEVERAGE])
+    with tempfile.TemporaryDirectory() as tmp, Store(Path(tmp)/'exec.db') as store:
+        runtime = Engine(store, market, accounts, live=True, stop_file=Path(tmp)/'STOP',
+                         config={'CROSSEX_RISK_SCOPE': 'dedicated_account'})
+        snapshot = accounts.snapshot()
+        runtime.limits.initialize(snapshot)
+        runtime.account_cache.publish(snapshot)
+        runtime.risk = 'RUN'
+        runtime.last_reconcile = now
+        store.set_meta('mapping', {'at': now})
+        seed_baseline(store, now)
+        runtime.baseline.record(market.baseline_quotes(('BTC',)), ('BTC',))
+        http.calls.clear()
+        try:
+            yield runtime
+        finally:
+            runtime.close()
+
+
+def events(engine, kind):
+    return [json.loads(row['value']) for row in engine.store.events() if row['kind'] == kind]
+
+
+def reviewed(engine):
+    # Stop at the existing executor boundary. Validate the two actual intents
+    # produced by this trigger without submitting even a simulated order.
+    with patch.object(engine.executor, 'execute_pair', return_value=[]) as execute, patch.object(engine, 'balance'):
+        pair = engine.ingest(trigger())
+    execute.assert_called_once()
+    assert pair['trigger_id'] == 'shadow-1'
+    assert [o['instrument']['symbol'] for o in execute.call_args.args[0]] == [GATE, BITGET]
+    assert not events(engine, 'SKIP')
+
+
+def rejected(engine, reason, identity='rejected', *, expected_locks=()):
+    engine.store.set_meta('single_failures', 1)
+    with (patch.object(engine, 'balance') as balance, patch.object(engine, 'flatten_all') as flatten,
+          patch.object(engine, 'alert') as alert, patch.object(engine.executor, 'execute_pair') as execute):
+        assert engine.ingest(trigger(identity)) is None
+        for action in (balance, flatten, alert, execute):
+            action.assert_not_called()
+    assert events(engine, 'SKIP')[-1]['reason'] == reason
+    assert set(engine.stops.reasons) == set(expected_locks) and not events(engine, 'ALERT')
+    assert not engine.store.pairs() and not engine.store.all_orders()
+    assert engine.store.meta('single_failures') == 1
+
+
+def test_gate_sets_full_symbol_and_continues_this_review(engine, http):
+    http.responses[GATE_POSITIONS] = [dict(symbol='OKX_FUTURE_BTC_USDT', position_qty='4'),
+                                      dict(symbol=GATE, position_qty='0')]
+    http.responses[GATE_ORDERS] = [dict(symbol='BYBIT_FUTURE_BTC_USDT')]
+    reviewed(engine)
+    assert http.writes == [(GATE_LEVERAGE, dict(symbol=GATE, leverage='3'))]
+    assert engine.accounts.leverages[GATE] == '3'
+    assert ('GET', GATE_LEVERAGE, {'symbols': GATE}) == http.calls[-1]
+    assert events(engine, 'LEVERAGE_SET') == [dict(exchange='crossex', symbol=GATE, before={'leverage': '10'},
+            target={'leverage': '3'}, result='success', error=None)]
+
+
+@pytest.mark.parametrize('failure', ['stale_readback', 'write_timeout', 'readback_timeout', 'wrong_symbol', 'empty'])
+def test_failure_is_an_expected_skip_with_safe_event(engine, http, failure):
+    http.apply_write = False
+    private = 'fictional-key fictional-secret fictional-signature fictional-passphrase'
+    if failure == 'write_timeout':
+        http.write_error = TimeoutError(private)
+    elif failure == 'readback_timeout':
+        http.after_admit = lambda: http.responses.update({GATE_LEVERAGE: TimeoutError(private)})
+    elif failure == 'wrong_symbol':
+        http.after_admit = lambda: http.responses.update({GATE_LEVERAGE: {'OKX_FUTURE_BTC_USDT': '3'}})
+    elif failure == 'empty':
+        http.after_admit = lambda: http.responses.update({GATE_LEVERAGE: {}})
+    rejected(engine, 'leverage_set_failed')
+    assert len(http.writes) == 1
+    assert engine.accounts.leverages.get(GATE) != '3'
+    event, = events(engine, 'LEVERAGE_SET')
+    assert event['result'] == 'failed'
+    assert event['error']['stage'] == {'stale_readback': 'readback_mismatch',
+        'write_timeout': 'write', 'readback_timeout': 'readback', 'wrong_symbol': 'readback',
+        'empty': 'readback_mismatch'}[failure]
+    assert all(secret not in str(engine.store.events()) for secret in private.split())
+    engine.ingest(trigger('rejected'))
+    assert events(engine, 'SKIP') == [dict(id='rejected', reason='leverage_set_failed', stage='review')]
+    assert len(http.writes) == 1
+
+
+@pytest.mark.parametrize(('path', 'rows'), [
+    (GATE_POSITIONS, [dict(symbol=GATE, position_side='LONG', position_qty='1')]),
+    (GATE_POSITIONS, [dict(symbol=GATE, position_side='SHORT', position_qty='-1')]),
+    (GATE_POSITIONS, [dict(symbol=GATE, position_qty='1'), dict(symbol=GATE, position_qty='-1')]),
+    (GATE_ORDERS, [dict(symbol=GATE)]), (GATE_POSITIONS, None), (GATE_POSITIONS, [dict(symbol=GATE)]),
+    (GATE_ORDERS, None), (GATE_ORDERS, [{}]),
+    (BG_POSITIONS, {'list': [dict(symbol=BITGET, posSide='short', total='1')]}),
+    (BG_POSITIONS, {}), (BG_POSITIONS, {'list': {}}), (BG_POSITIONS, {'list': ''}), (BG_POSITIONS, {'list': 0}),
+    (BG_ORDERS, {'list': [dict(symbol=BITGET)], 'cursor': ''}),
+    (BG_ORDERS, {'list': [], 'cursor': 'incomplete'}), (BG_STRATEGIES, [dict(symbol=BITGET)]),
+    (BG_STRATEGIES, None),
+])
+def test_occupied_or_unreadable_contract_skips_without_write(engine, http, path, rows):
+    if path.startswith('/api/v3/'):
+        engine.accounts.leverages[GATE] = '3'
+        http.responses[BG_SETTINGS]['symbolConfigList'][0]['leverage'] = '10'
+    http.responses[path] = rows
+    rejected(engine, 'leverage_set_skipped')
+    assert http.writes == events(engine, 'LEVERAGE_SET') == []
+    assert engine.store.meta('leverage_set_window', []) == []
+
+
+def test_bitget_crossed_hedge_sets_both_sides_once_and_confirms(engine, http):
+    engine.accounts.leverages[GATE] = '3'
+    row = http.responses[BG_SETTINGS]['symbolConfigList'][0]
+    row['leverage'] = '12'
+    reviewed(engine)
+    assert http.writes == [(BG_LEVERAGE, dict(symbol=BITGET, category='USDT-FUTURES',
+                                            leverage='3', marginMode='crossed'))]
+    assert http.calls[-1][1] == BG_SETTINGS
+    assert engine.accounts.bitget_symbol_configs[BITGET] == dict(leverage='3', marginMode='crossed')
+    assert events(engine, 'LEVERAGE_SET')[0]['before'] == dict(leverage='12', marginMode='crossed')
+
+
+def test_bitget_null_positions_allow_setting(engine, http):
+    engine.accounts.leverages[GATE] = '3'
+    http.responses[BG_SETTINGS]['symbolConfigList'][0]['leverage'] = '7'
+    http.responses[BG_POSITIONS] = {'list': None}
+    reviewed(engine)
+    assert http.writes == [(BG_LEVERAGE, dict(symbol=BITGET, category='USDT-FUTURES',
+                                              leverage='3', marginMode='crossed'))]
+    attempt, = events(engine, 'LEVERAGE_SET_ATTEMPT')
+    assert attempt == dict(exchange='bitget', symbol=BITGET, before=dict(leverage='7', marginMode='crossed'),
+                           target=dict(leverage='3', marginMode='crossed'))
+    assert events(engine, 'LEVERAGE_SET')[0]['result'] == 'success'
+
+
+@pytest.mark.parametrize('new_order', [GATE_ORDERS, BG_ORDERS, BG_STRATEGIES])
+def test_order_created_during_position_read_prevents_write(engine, http, new_order):
+    bitget = new_order != GATE_ORDERS
+    if bitget:
+        engine.accounts.leverages[GATE] = '3'
+        http.responses[BG_SETTINGS]['symbolConfigList'][0]['leverage'] = '7'
+    reads = []
+    http.after_admit = lambda: reads.append('admitted')
+    positions = BG_POSITIONS if bitget else GATE_POSITIONS
+
+    def add_order(path):
+        if path in (GATE_POSITIONS, BG_POSITIONS, GATE_ORDERS, BG_ORDERS, BG_STRATEGIES):
+            reads.append(path)
+        if path == positions:
+            orders = [dict(symbol=BITGET if bitget else GATE)]
+            http.responses[new_order] = dict(list=orders, cursor='') if new_order == BG_ORDERS else orders
+
+    http.after_read = add_order
+    rejected(engine, 'leverage_set_skipped')
+    assert reads[0] == 'admitted' and reads.count(positions) == 1
+    assert new_order in reads[1:reads.index(positions)] and new_order in reads[reads.index(positions)+1:]
+    assert http.writes == events(engine, 'LEVERAGE_SET_ATTEMPT') == events(engine, 'LEVERAGE_SET') == []
+
+
+def test_attempt_is_committed_and_visible_before_post(engine, http):
+    payload = dict(exchange='crossex', symbol=GATE, before=dict(leverage='10'), target=dict(leverage='3'))
+    with Store(engine.stop_file.parent/'exec.db') as observer:
+        def before_write():
+            rows = [r for r in observer.events() if r['kind'].startswith('LEVERAGE_SET')]
+            assert [(r['kind'], json.loads(r['value'])) for r in rows] == [('LEVERAGE_SET_ATTEMPT', payload)]
+            assert http.writes == []
+
+        http.before_write = before_write
+        reviewed(engine)
+    assert events(engine, 'LEVERAGE_SET') == [dict(payload, result='success', error=None)]
+
+
+@pytest.mark.parametrize(('failed_event', 'write_fails'), [
+    ('LEVERAGE_SET_ATTEMPT', False), ('LEVERAGE_SET', False), ('LEVERAGE_SET', True)])
+def test_audit_errors_map_to_whether_a_post_was_sent(engine, http, failed_event, write_fails):
+    event = engine.store.event
+    if write_fails:
+        http.write_error = TimeoutError()
+
+    def fail_event(kind, *args, **kwargs):
+        if kind == failed_event:
+            raise OSError('journal unavailable')
+        return event(kind, *args, **kwargs)
+
+    sent = failed_event == 'LEVERAGE_SET'
+    with patch.object(engine.store, 'event', side_effect=fail_event):
+        rejected(engine, 'leverage_set_failed' if sent else 'leverage_set_skipped')
+    assert len(http.writes) == len(events(engine, 'LEVERAGE_SET_ATTEMPT')) == int(sent)
+    assert len(engine.store.meta('leverage_set_window', [])) == int(sent)
+
+
+@pytest.mark.parametrize('delay', ['queue', 'positions', 'audit', 'post', 'readback'])
+def test_five_second_limit_at_each_stage(engine, http, delay):
+    now = [10000.]
+    engine.accounts.clock = lambda: now[0]
+    request, event = http.request, engine.store.event
+
+    def slow_request(method, path, *args, **kwargs):
+        data = request(method, path, *args, **kwargs)
+        if ((delay == 'positions' and path == GATE_POSITIONS) or (delay == 'post' and method == 'POST')
+                or (delay == 'readback' and method == 'GET' and path == GATE_LEVERAGE and http.writes)):
+            now[0] += 5
+        return data
+
+    def slow_event(kind, *args, **kwargs):
+        event(kind, *args, **kwargs)
+        if delay == 'audit' and kind == 'LEVERAGE_SET_ATTEMPT':
+            now[0] += 5
+
+    def slow_queue():
+        now[0] += 5
+
+    if delay == 'queue':
+        http.after_admit = slow_queue
+    sent = delay in ('post', 'readback')
+    with patch.object(http, 'request', side_effect=slow_request), patch.object(engine.store, 'event', side_effect=slow_event):
+        rejected(engine, 'leverage_set_failed' if sent else 'leverage_set_skipped')
+    assert len(http.writes) == int(sent)
+    assert [r['result'] for r in events(engine, 'LEVERAGE_SET')] == (['failed'] if sent else [])
+    assert engine.accounts.leverages.get(GATE) != '3'
+    if delay == 'post':
+        assert [path for _, path, _ in http.calls].count(GATE_LEVERAGE) == 1
+
+
+def test_both_contracts_share_one_deadline(engine, http):
+    now = [10000.]
+    engine.accounts.clock = lambda: now[0]
+    http.responses[BG_SETTINGS]['symbolConfigList'][0]['leverage'] = '7'
+
+    def queue():
+        now[0] += 2.6
+
+    http.after_admit = queue
+    rejected(engine, 'leverage_set_failed')
+    assert [path for path, _ in http.writes] == [GATE_LEVERAGE]
+    assert [r['exchange'] for r in events(engine, 'LEVERAGE_SET_ATTEMPT')] == ['crossex']
+
+
+def test_monotonic_deadline_holds_when_account_clock_does_not_advance(engine, http):
+    engine.accounts.clock = lambda: 10000.
+    elapsed = [100.]
+
+    def queue():
+        elapsed[0] += 5.1
+
+    http.after_admit = queue
+    with patch('tools.crossex_exec.accounts.time') as clock:
+        clock.monotonic.side_effect = lambda: elapsed[0]
+        rejected(engine, 'leverage_set_skipped')
+    assert http.writes == events(engine, 'LEVERAGE_SET_ATTEMPT') == []
+
+
+def test_bitget_stops_pagination_when_total_budget_expires(engine, http):
+    now = [10000.]
+    engine.accounts.clock = lambda: now[0]
+    engine.accounts.leverages[GATE] = '3'
+    http.responses[BG_SETTINGS]['symbolConfigList'][0]['leverage'] = '7'
+    request, cursors = http.request, []
+
+    def page(method, path, params=None, **kwargs):
+        if path == BG_ORDERS:
+            cursors.append(params.get('cursor'))
+            assert time.monotonic() < kwargs['deadline'] <= time.monotonic() + 5
+            now[0] += 2.6
+            return dict(list=[dict(symbol='OTHER')], cursor=str(len(cursors)))
+        return request(method, path, params, **kwargs)
+
+    with patch.object(http, 'request', side_effect=page):
+        rejected(engine, 'leverage_set_skipped')
+    assert cursors == [None, '1']
+    assert http.writes == events(engine, 'LEVERAGE_SET_ATTEMPT') == []
+
+
+@pytest.mark.parametrize('error', [APIError('unknown', http_status=429), APIError('rate_limited')])
+def test_rate_limited_write_pauses_other_venue_across_restart_for_ten_minutes(engine, http, error):
+    now = [10000.]
+    engine.accounts.clock = lambda: now[0]
+    http.write_error = error
+    rejected(engine, 'leverage_set_failed')
+    assert events(engine, 'LEVERAGE_SET')[0]['result'] == 'failed'
+    http.write_error = None
+    http.responses[BG_SETTINGS]['symbolConfigList'][0]['leverage'] = '7'
+    fresh = Accounts(CrossEx(http), Bitget(http), risk_confirmed=True, clock=lambda: now[0])
+    with Store(engine.stop_file.parent/'exec.db') as reopened:
+        now[0] += 599
+        calls_before_retry = list(http.calls)
+        with pytest.raises(ValueError, match='^leverage_set_skipped$'):
+            fresh.ensure_opening_leverage([('bitget', BITGET)], reopened, lambda: True)
+        assert http.calls == calls_before_retry
+        assert len(http.writes) == len(events(engine, 'LEVERAGE_SET_ATTEMPT')) == 1
+        now[0] += 1
+        fresh.ensure_opening_leverage([('bitget', BITGET)], reopened, lambda: True)
+    assert [path for path, _ in http.writes] == [GATE_LEVERAGE, BG_LEVERAGE]
+
+
+# An empty-body HTTP 429 is a pre-existing transport edge; transport.py is
+# intentionally unchanged here, so only the recognized rate-limit form is covered.
+@pytest.mark.parametrize('http_status', [200])
+def test_signed_post_rate_limit_preserves_transport_pause_and_persists_leverage_pause(engine, http_status):
+    engine.accounts.clock = lambda: 10000.
+    server = FakeVenue('gate')
+    try:
+        transport = Transport('gate', Credentials('test-key', 'test-secret', 'test-pass'),
+                              base=server.url, local_test=True, live=True)
+        engine.accounts.cross = CrossEx(transport)
+        server.responses.update({GATE_LEVERAGE: {GATE: '10'}, GATE_POSITIONS: [], GATE_ORDERS: []})
+        handler = server.server.RequestHandlerClass
+        reply = handler.reply
+
+        def rate_limit_post(request, status, data):
+            if request.command != 'POST':
+                return reply(request, status, data)
+            if http_status == 200:
+                return reply(request, 200, {'label': 'TOO_MANY_REQUESTS'})
+            request.send_response(429)
+            request.send_header('Content-Length', '0')
+            request.end_headers()
+
+        started = time.monotonic()
+        with patch.object(handler, 'reply', rate_limit_post):
+            rejected(engine, 'leverage_set_failed')
+        assert started + 60 <= transport.paused <= time.monotonic() + 60
+        with Store(engine.stop_file.parent/'exec.db') as reopened:
+            assert reopened.meta('leverage_set_cooldown_until') == 10600
+        failure, = events(engine, 'LEVERAGE_SET')
+        assert failure['error']['http_status'] == http_status and failure['error']['error_kind'] == 'rate_limited'
+    finally:
+        server.close()
+
+
+@pytest.mark.parametrize('config', ['isolated', 'missing', 'duplicate', 'wrong_category'])
+def test_bitget_unconfirmed_cross_mode_prevents_any_write(engine, http, config):
+    rows = http.responses[BG_SETTINGS]['symbolConfigList']
+    if config == 'isolated':
+        rows[0]['marginMode'] = 'isolated'
+    elif config == 'missing':
+        rows.clear()
+    elif config == 'duplicate':
+        rows.append(dict(rows[0]))
+    else:
+        rows[0]['category'] = 'COIN-FUTURES'
+    rejected(engine, 'leverage_set_skipped')
+    assert http.writes == events(engine, 'LEVERAGE_SET') == []
+
+
+def test_already_at_target_issues_no_write_or_exposure_reads(engine, http):
+    engine.accounts.leverages[GATE] = '3'
+    reviewed(engine)
+    assert http.writes == [] and [call[1] for call in http.calls] == [BG_SETTINGS]
+
+
+def test_stale_gate_cache_already_correct_on_venue(engine, http):
+    http.responses[GATE_LEVERAGE][GATE] = '3'
+    reviewed(engine)
+    assert http.writes == [] and engine.accounts.leverages[GATE] == '3'
+
+
+def test_unconfigured_gate_contract_requires_exact_readback(engine, http):
+    engine.accounts.leverages.clear()
+    http.responses[GATE_LEVERAGE].clear()
+    reviewed(engine)
+    assert len(http.writes) == 1
+    assert events(engine, 'LEVERAGE_SET')[0]['before'] == {'leverage': None}
+    assert engine.accounts.leverages[GATE] == '3'
+
+
+def test_both_legs_repaired_before_one_review(engine, http):
+    http.responses[BG_SETTINGS]['symbolConfigList'][0]['leverage'] = '7'
+    reviewed(engine)
+    assert [path for path, _ in http.writes] == [GATE_LEVERAGE, BG_LEVERAGE]
+    assert [r['exchange'] for r in events(engine, 'LEVERAGE_SET')] == ['crossex', 'bitget']
+
+
+def test_bitget_readback_requires_both_leverage_and_mode(engine, http):
+    engine.accounts.leverages[GATE] = '3'
+    row = http.responses[BG_SETTINGS]['symbolConfigList'][0]
+    row['leverage'] = '7'
+    http.after_admit = lambda: row.update(marginMode='isolated')
+    rejected(engine, 'leverage_set_failed')
+    assert row['leverage'] == '3' and BITGET not in engine.accounts.bitget_symbol_configs
+    assert len(http.writes) == 1
+
+
+@pytest.mark.parametrize('gate', ['stop', 'stop_after_queue', 'stop_lock', 'shadow', 'rate_limit'])
+def test_no_write_when_opening_or_transport_blocks(engine, http, gate):
+    expected = 'leverage_set_skipped'
+    if gate == 'stop':
+        engine.stop_file.touch()
+        expected = 'filter_or_open_gate'
+    elif gate == 'stop_after_queue':
+        http.after_admit = engine.stop_file.touch
+    elif gate == 'stop_lock':
+        http.after_admit = lambda: engine.stops.add('manual_hold')
+    elif gate == 'shadow':
+        engine.live = False
+    else:
+        def rate_limited():
+            raise APIError('rate_limited')
+        http.after_admit = rate_limited
+    rejected(engine, expected, expected_locks=('manual_hold',) if gate == 'stop_lock' else ())
+    assert http.writes == events(engine, 'LEVERAGE_SET') == []
+
+
+def test_stop_during_budget_reservation_releases_unsent_slot(engine, http):
+    set_meta = engine.store.set_meta
+
+    def pause_on_reserve(key, value):
+        set_meta(key, value)
+        if key == 'leverage_set_window' and value:
+            engine.stop_file.touch()
+
+    with patch.object(engine.store, 'set_meta', side_effect=pause_on_reserve):
+        rejected(engine, 'leverage_set_skipped')
+    assert http.writes == events(engine, 'LEVERAGE_SET') == []
+    assert engine.store.meta('leverage_set_window') == []
+
+
+def test_cooldown_survives_restart_and_expires_only_after_ten_minutes(engine, http):
+    now = [10000.]
+    engine.accounts.clock = lambda: now[0]
+    http.apply_write = False
+    rejected(engine, 'leverage_set_failed', 'failed')
+    now[0] += 599
+    other = Accounts(CrossEx(http), Bitget(http), risk_confirmed=True, clock=lambda: now[0])
+    with Store(engine.stop_file.parent/'exec.db') as reopened:
+        with pytest.raises(ValueError, match='leverage_set_skipped'):
+            other.ensure_opening_leverage([('crossex', GATE)], reopened, lambda: True)
+        assert len(http.writes) == 1
+        now[0] += 2
+        http.apply_write = True
+        other.ensure_opening_leverage([('crossex', GATE)], reopened, lambda: True)
+    assert len(http.writes) == 2 and other.leverages[GATE] == '3'
+
+
+def test_hourly_limit_is_rolling_and_shared_across_venues(engine, http):
+    now = [10000.]
+    engine.accounts.clock = lambda: now[0]
+    for n in range(30):
+        symbol = f'GATE_FUTURE_C{n}_USDT'
+        http.responses[GATE_LEVERAGE][symbol] = '10'
+        engine.accounts.ensure_opening_leverage([('crossex', symbol)], engine.store, lambda: True)
+    http.responses[BG_SETTINGS]['symbolConfigList'][0]['leverage'] = '10'
+    now[0] += 3599
+    with pytest.raises(ValueError, match='leverage_set_skipped'):
+        engine.accounts.ensure_opening_leverage([('bitget', BITGET)], engine.store, lambda: True)
+    assert len(http.writes) == len(events(engine, 'LEVERAGE_SET')) == 30
+    now[0] += 1
+    engine.accounts.ensure_opening_leverage([('bitget', BITGET)], engine.store, lambda: True)
+    assert len(http.writes) == 31 and http.writes[-1][0] == BG_LEVERAGE
+
+
+def test_signed_transport_checks_flatness_after_write_admission(engine):
+    server = FakeVenue('gate')
+    try:
+        transport = Transport('gate', Credentials('test-key', 'test-secret', 'test-pass'),
+                              base=server.url, local_test=True, live=True)
+        engine.accounts.cross = CrossEx(transport)
+        server.responses.update({GATE_LEVERAGE: {GATE: '10'}, GATE_POSITIONS: [], GATE_ORDERS: []})
+        admit = transport.admit
+
+        def add_order_while_queued(group, deadline):
+            if group == 'write':
+                server.responses[GATE_ORDERS] = [dict(symbol=GATE)]
+            return admit(group, deadline)
+
+        with patch.object(transport, 'admit', side_effect=add_order_while_queued):
+            rejected(engine, 'leverage_set_skipped')
+        assert [(method, path) for method, path, _, _ in server.calls] == [
+            ('GET', GATE_LEVERAGE), ('GET', GATE_ORDERS)]
+        assert events(engine, 'LEVERAGE_SET') == []
+    finally:
+        server.close()
+
+
+@pytest.mark.parametrize('transport_timeout', [2, 10])
+def test_signed_bitget_write_does_not_log_credentials_or_signature(engine, transport_timeout):
+    server = FakeVenue('bitget')
+    try:
+        credentials = Credentials('test-key', 'test-secret', 'test-pass')
+        transport = Transport('bitget', credentials, base=server.url, local_test=True, live=True,
+                              timeout=transport_timeout)
+        engine.accounts.bitget = Bitget(transport)
+        engine.accounts.leverages[GATE] = '3'
+        data = settings()
+        data['symbolConfigList'][0]['leverage'] = '7'
+        server.responses.update({BG_SETTINGS: data, BG_LEVERAGE: 'success', BG_POSITIONS: {'list': []},
+                                 BG_ORDERS: {'list': [], 'cursor': None}, BG_STRATEGIES: []})
+        with (patch.object(transport, 'request', wraps=transport.request) as requests,
+              patch('tools.crossex_exec.transport.DeadlineSocket', wraps=DeadlineSocket) as sockets):
+            rejected(engine, 'leverage_set_failed')  # Server ACKs, settings still report 7.
+        # The initial check_instruments read precedes ensure. Every subsequent
+        # HTTP call is bounded, including the wire read after the signed POST.
+        assert all(call.kwargs['deadline'] is not None for call in requests.call_args_list[1:])
+        # transport.py is intentionally unchanged (order sends must keep their
+        # behavior), so the signed POST keeps its own per-request wire timeout
+        # after before_send instead of being capped by the leverage budget.
+        (_, path, body, headers), = [call for call in server.calls if call[0] == 'POST']
+        assert path == BG_LEVERAGE and body == dict(symbol=BITGET, category='USDT-FUTURES',
+                                                    marginMode='crossed', leverage='3')
+        logged = json.dumps(events(engine, 'LEVERAGE_SET'))
+        assert 'readback_mismatch' in logged
+        assert all(value not in logged for value in ('test-key', 'test-secret', 'test-pass', headers['ACCESS-SIGN']))
+        attempt_log = json.dumps(events(engine, 'LEVERAGE_SET_ATTEMPT'))
+        assert all(value not in attempt_log for value in ('test-key', 'test-secret', 'test-pass', headers['ACCESS-SIGN']))
+    finally:
+        server.close()
