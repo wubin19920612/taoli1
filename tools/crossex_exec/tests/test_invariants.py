@@ -347,17 +347,17 @@ class World:
             if self.fault == 'spread':
                 price = dec(100)
             received_at = self.now-100 if self.fault == 'stale' or self.opening_fault == 'book_stale' else self.now
-            exchange_at = received_at-(.5 if self.opening_fault == 'book_skew' and leg == 1 else 0)
+            exchange_at = received_at-(.501 if self.opening_fault == 'book_skew' and leg == 1 else 0)
             factor=self.multipliers[leg]
             result.append(Book([[str(price*factor), str(dec(20)/factor)]], [[str(price*factor), str(dec(20)/factor)]],
                                received_at, exchange_at))
         return result
 
     def funding(self, instruments):
-        # 0.6bp/h difference exceeds v1; each leg remains below 0.05%/8h.
-        return [dict(rate='.00048' if self.opening_fault == 'funding_diff' and i.market.exchange == 'binance' else '0',
+        # The 2.4 bps/h difference exceeds 2 bps/h with each leg below 0.2%/8h.
+        return [dict(rate='.00192' if self.opening_fault == 'funding_diff' and i.market.exchange == 'binance' else '0',
                      interval=28800, next=self.now+10000, captured_at=self.now,
-                     history_ok=True, max_abs_24h='.00048') for i in instruments]
+                     history_ok=True, max_abs_24h='.00192') for i in instruments]
 
     def positions(self):
         self.coverage['position_read'] += 1

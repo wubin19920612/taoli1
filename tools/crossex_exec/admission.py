@@ -6,10 +6,10 @@ from tools.fill_sim.core import dec
 from .baseline import BATCH_URLS, FRESH_SECONDS
 
 
-MAX_BOOK_SKEW_MS = dec('300')
+MAX_BOOK_SKEW_MS = dec('500')  # 11-18 user: relaxed from 300 after sim review
 MAX_BOOK_AGE_SECONDS = dec('1')
-MAX_FUNDING_DIFF_BPS_H = dec('0.5')
-MAX_FUNDING_RATE_8H = dec('0.0005')
+MAX_FUNDING_DIFF_BPS_H = dec('2')  # 11-18: from 0.5
+MAX_FUNDING_RATE_8H = dec('0.002')  # 11-18: from 0.0005 (5 -> 20 bps per 8h)
 MAX_BASELINE_BPS = dec('50')  # 11-18 user: relaxed from 10 after sim review
 MAX_BASELINE_MAD_BPS = dec('50')
 MAX_NORMAL_DEVIATION_BPS = dec('10')

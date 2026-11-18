@@ -39,14 +39,14 @@ class TimingTests(unittest.TestCase):
         from tools.crossex_exec.admission import OpeningLimits
         return OpeningLimits(config)
 
-    def test_skew_300_passes_301_fails_using_exchange_not_receive_time(self):
+    def test_skew_500_passes_501_fails_using_exchange_not_receive_time(self):
         guard = self.guard()
-        self.assertEqual(guard.books(books(skew=300), NOW), dec(300))
+        self.assertEqual(guard.books(books(skew=500), NOW), dec(500))
         with self.assertRaisesRegex(ValueError, 'book_skew'):
-            guard.books(books(skew=301), NOW)
+            guard.books(books(skew=501), NOW)
         # Simultaneous exchange snapshots are valid despite differing receipts.
         pair = books()
-        pair[0].received_at -= .5
+        pair[0].received_at -= .501
         self.assertEqual(guard.books(pair, NOW), 0)
 
     def test_age_exact_one_second_passes_1_01_fails_on_either_leg(self):
@@ -61,8 +61,8 @@ class TimingTests(unittest.TestCase):
         pair = books()
         for b in pair:
             b.exchange_at = None
-        pair[0].received_at -= .3
-        self.assertEqual(self.guard().books(pair, NOW), 300)
+        pair[0].received_at -= .5
+        self.assertEqual(self.guard().books(pair, NOW), 500)
         pair[0].received_at -= .001
         with self.assertRaisesRegex(ValueError, 'book_skew'):
             self.guard().books(pair, NOW)
@@ -84,11 +84,11 @@ class TimingTests(unittest.TestCase):
 
     def test_stale_has_deterministic_priority_over_skew(self):
         with self.assertRaisesRegex(ValueError, 'book_stale'):
-            self.guard().books(books(skew=301, age=1.01), NOW)
+            self.guard().books(books(skew=501, age=1.01), NOW)
 
     def test_every_upper_bound_rejects_relaxation_and_invalid_config(self):
-        caps = dict(CROSSEX_MAX_BOOK_SKEW_MS='300', CROSSEX_MAX_BOOK_AGE_SECONDS='1',
-                    CROSSEX_MAX_FUNDING_DIFF_BPS_H='0.5', CROSSEX_MAX_FUNDING_RATE_8H='0.0005',
+        caps = dict(CROSSEX_MAX_BOOK_SKEW_MS='500', CROSSEX_MAX_BOOK_AGE_SECONDS='1',
+                    CROSSEX_MAX_FUNDING_DIFF_BPS_H='2', CROSSEX_MAX_FUNDING_RATE_8H='0.002',
                     CROSSEX_MAX_BASELINE_BPS='50', CROSSEX_MAX_BASELINE_MAD_BPS='50',
                     CROSSEX_MAX_NORMAL_DEVIATION_BPS='10', CROSSEX_MAX_REFERENCE_AGE_SECONDS='90')
         for name,cap in caps.items():
@@ -120,19 +120,19 @@ class FatFingerTests(unittest.TestCase):
     def funding(self, rates=('0','0'), intervals=(28800,28800)):
         return [dict(rate=r,interval=i) for r,i in zip(rates,intervals)]
 
-    def test_hourly_difference_half_bp_inclusive_both_signs_and_unequal_periods(self):
+    def test_hourly_difference_two_bps_inclusive_both_signs_and_unequal_periods(self):
         for sign in (1,-1):
             for intervals in ((3600,28800), (14400,3600)):
-                rate = dec(sign)*dec('.00005')*intervals[0]/3600
+                rate = dec(sign)*dec('.0002')*intervals[0]/3600
                 self.guard().funding(self.funding((str(rate),'0'),intervals))
                 with self.subTest(sign=sign,intervals=intervals), self.assertRaisesRegex(ValueError,'funding_diff'):
                     self.guard().funding(self.funding((str(rate*dec('1.0001')),'0'),intervals))
-        self.guard().funding(self.funding(('.0005','.0000625'), (28800,3600)))
+        self.guard().funding(self.funding(('.002','.00025'), (28800,3600)))
 
     def test_each_leg_absolute_eight_hour_cap_inclusive_for_positive_and_negative(self):
         for sign in (1,-1):
             for interval in (3600,14400,28800):
-                value = dec(sign)*dec('.0005')*interval/28800
+                value = dec(sign)*dec('.002')*interval/28800
                 self.guard().funding(self.funding((str(value),str(value)),(interval,interval)))
                 for leg in (0,1):
                     rows = self.funding((str(value),str(value)),(interval,interval))
@@ -238,7 +238,7 @@ class EngineAdmissionTests(unittest.TestCase):
         for field in ('skew','age'):
             # Shadow avoids residual positions across the independent subcases.
             self.engine.live = self.engine.executor.live = False
-            initial = books(self.now[0], **{field:301 if field=='skew' else '1.01'})
+            initial = books(self.now[0], **{field:501 if field=='skew' else '1.01'})
             with self.subTest(field=field), patch.object(self.market,'books',side_effect=[initial,books(self.now[0],skew=100)]) as fetch:
                 pair = self.engine.ingest(self.trigger(field))
                 self.assertIsNotNone(pair)
@@ -248,7 +248,7 @@ class EngineAdmissionTests(unittest.TestCase):
                 self.assertEqual(self.skips(),[])
 
     def test_initial_two_bad_pairs_skip_once_and_never_send(self):
-        for reason, fields in (('book_skew',dict(skew=301)),('book_stale',dict(age='1.01'))):
+        for reason, fields in (('book_skew',dict(skew=501)),('book_stale',dict(age='1.01'))):
             with self.subTest(reason=reason), patch.object(self.market,'books',return_value=books(self.now[0],**fields)) as fetch:
                 self.assertIsNone(self.engine.ingest(self.trigger(reason)))
                 self.assertEqual(fetch.call_count,2)
@@ -260,17 +260,17 @@ class EngineAdmissionTests(unittest.TestCase):
         self.assertEqual(view.get('summary',{})['opening_skip_counts']['book_stale'],1)
 
     def test_failed_refresh_does_not_reuse_old_valid_leg(self):
-        with patch.object(self.market,'books',side_effect=[books(skew=301),[books()[0],None]]) as fetch:
+        with patch.object(self.market,'books',side_effect=[books(skew=501),[books()[0],None]]) as fetch:
             self.assertIsNone(self.engine.ingest(self.trigger()))
             self.assertEqual(fetch.call_count,2)
         self.assertEqual(self.skips()[-1]['reason'],'book_stale')
         self.assertFalse(any(r[0]=='place' for r in self.trace))
 
-    def test_three_hundred_ms_live_boundary_no_unnecessary_refresh(self):
-        with patch.object(self.market,'books',return_value=books(skew=300)) as fetch:
+    def test_five_hundred_ms_live_boundary_no_unnecessary_refresh(self):
+        with patch.object(self.market,'books',return_value=books(skew=500)) as fetch:
             pair=self.engine.ingest(self.trigger())
         self.assertEqual(pair['state'],'OPEN')
-        self.assertEqual(pair['open_book_skew_ms'],300)
+        self.assertEqual(pair['open_book_skew_ms'],500)
         self.assertEqual(fetch.call_count,1)
 
     def test_nonzero_flat_baseline_and_final_excess_are_saved(self):
@@ -320,10 +320,10 @@ class EngineAdmissionTests(unittest.TestCase):
     def test_shared_gate_skew_retries_both_and_counts_once_without_sending(self):
         def skew_cache():
             pair=self.store.pairs(active=True)[0]
-            pair['last_books'][1]['exchange_at']=self.now[0]-.301
+            pair['last_books'][1]['exchange_at']=self.now[0]-.501
             self.store.pair(pair)
         self.change_before_gate(skew_cache)
-        with patch.object(self.market,'books',side_effect=[books(),books(skew=301)]) as fetch:
+        with patch.object(self.market,'books',side_effect=[books(),books(skew=501)]) as fetch:
             self.engine.ingest(self.trigger())
         self.assertEqual(fetch.call_count,2)
         self.assertEqual([s['reason'] for s in self.skips()],['book_skew'])
@@ -340,7 +340,7 @@ class EngineAdmissionTests(unittest.TestCase):
             def change(reason=reason):
                 if reason=='funding_diff':
                     pair=self.store.pairs(active=True)[0]
-                    pair['funding'][0]['rate']='.000401'
+                    pair['funding'][0]['rate']='.001601'
                     self.store.pair(pair)
                 elif reason=='baseline_not_flat':
                     self.store.db.execute('DELETE FROM baseline_samples')
@@ -396,7 +396,7 @@ class EngineAdmissionTests(unittest.TestCase):
             payload = self.trigger(reason)
             if reason=='funding_diff':
                 original=self.market.funding
-                self.market.funding=lambda instruments: [dict(row,rate='.000401' if n==0 else '0')
+                self.market.funding=lambda instruments: [dict(row,rate='.001601' if n==0 else '0')
                     for n,row in enumerate(original(instruments))]
             with self.subTest(reason=reason):
                 self.assertIsNone(self.engine.ingest(payload))
@@ -417,7 +417,7 @@ class EngineAdmissionTests(unittest.TestCase):
                     mids['bybit']={'BTC':'101' if reason=='not_single_venue_outlier' else '100'}
                 self.engine.baseline.record(mids,('BTC',))
                 if reason=='funding_diff':
-                    p['funding'][0]['rate']='.000401'
+                    p['funding'][0]['rate']='.001601'
                     self.store.pair(p)
                 orders=[self.engine.new_intent(p,n,'1','100.03' if n==0 else '101.96',False) for n in (0,1)]
                 with self.assertRaisesRegex(ValueError,reason):
