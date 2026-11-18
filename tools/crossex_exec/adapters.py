@@ -164,7 +164,7 @@ class CrossEx:
         data = self.http.request('POST', '/api/v4/crossex/positions/leverage',
                                  body=dict(symbol=symbol, leverage=leverage),
                                  group='write', before_send=before_send, deadline=deadline)
-        if not isinstance(data, dict) or data.get('symbol') != symbol or dec(data.get('leverage')) != dec(leverage):
+        if not isinstance(data, dict) or data.get('symbol') != symbol or dec(data.get('leverage')) <= 0:
             raise APIError('invalid_response')
 
 

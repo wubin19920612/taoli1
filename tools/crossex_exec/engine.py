@@ -8,7 +8,8 @@ from decimal import ROUND_FLOOR, ROUND_CEILING
 from pathlib import Path
 from tools.fill_sim.core import Book, Market, dec, walk, closing, track_interval, day
 from tools.fill_sim.engine import trigger_reason
-from .accounts import LeverageMismatch, local_positions, position_attributes
+from .accounts import (BitgetLeverageSkipped, LeverageMismatch, local_positions, position_attributes,
+                       record_leverage_outcome)
 from .policy import Instrument, review, exit_reason, risk_decision, limit_price, send_review
 from .execution import Executor, NONTERMINAL
 from .limits import HardLimits, DEFAULT_VAR
@@ -1053,6 +1054,11 @@ class Engine:
             except LeverageMismatch as mismatch:
                 self.accounts.ensure_opening_leverage(
                     mismatch.contracts, self.store, lambda: self.live and self.can_open())
+            except BitgetLeverageSkipped as error:
+                outcome = 'leverage_set_skipped'
+                record_leverage_outcome(self.store, error, exchange='bitget', symbol=error.symbol,
+                                        step='check_instruments', outcome=outcome)
+                raise AdmissionError(outcome) from None
             try:
                 funding=self.market.funding(instruments)
             except Exception:

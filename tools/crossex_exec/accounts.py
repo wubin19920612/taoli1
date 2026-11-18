@@ -162,9 +162,14 @@ class FeeSnapshot:
 
 
 TARGET_LEVERAGE = '3'
+MIN_OPENING_LEVERAGE = dec('1')
 LEVERAGE_TIMEOUT = 5
 LEVERAGE_COOLDOWN = 600
 LEVERAGE_HOURLY_LIMIT = 30
+
+
+def _opening_leverage_allowed(leverage):
+    return leverage is not None and MIN_OPENING_LEVERAGE <= leverage <= dec(TARGET_LEVERAGE)
 
 
 class LeverageMismatch(ValueError):
@@ -172,6 +177,71 @@ class LeverageMismatch(ValueError):
         self.contracts = contracts
         super().__init__('bitget_symbol_config_mismatch' if contracts[0][0] == 'bitget'
                          else 'crossex_leverage_mismatch')
+
+
+class BitgetLeverageSkipped(ValueError):
+    def __init__(self, symbol, cause):
+        super().__init__('leverage_set_skipped')
+        self.symbol = symbol
+        self.cause = cause if cause in ('settings_read_failed', 'settings_invalid', 'not_crossed',
+                                       'duplicate_rows', 'invalid_leverage') else 'settings_invalid'
+
+
+def record_leverage_outcome(store, error, *, exchange, symbol, step, outcome, stage=None):
+    try:
+        details = exception_details(error)
+        if isinstance(error, BitgetLeverageSkipped):
+            details['cause'] = error.cause
+        elif (type(error) is ValueError and len(error.args) == 1 and type(error.args[0]) is str
+              and re.fullmatch(r'[a-z][a-z0-9_]{0,63}', error.args[0])):
+            details['cause'] = error.args[0]
+        store.event('LEVERAGE_OUTCOME', dict(exchange=exchange, symbol=symbol, step=step, outcome=outcome,
+                                             stage=stage if isinstance(stage, str) else None, **details))
+    except Exception:
+        pass  # Diagnostics never change the fail-closed outcome.
+
+
+def _bitget_config_leverage(data, mode, symbol, allow_missing):
+    try:
+        bitget_settings(data, mode)
+        configs = data['symbolConfigList']
+        if not isinstance(configs, list):
+            raise TypeError
+    except (KeyError, TypeError, ValueError):
+        raise BitgetLeverageSkipped(symbol, 'settings_invalid') from None
+
+    matches = []
+    for row in configs:
+        if not isinstance(row, dict):
+            raise BitgetLeverageSkipped(symbol, 'settings_invalid')
+        name = row.get('symbol')
+        category = row.get('category')
+        margin_mode = row.get('marginMode')
+        if (not isinstance(name, str) or not name or name != name.strip()
+                or not isinstance(category, str) or not isinstance(margin_mode, str)):
+            raise BitgetLeverageSkipped(symbol, 'settings_invalid')
+        try:
+            leverage = dec(row.get('leverage'))
+        except ValueError:
+            raise BitgetLeverageSkipped(symbol, 'invalid_leverage') from None
+        if name == symbol and category == 'USDT-FUTURES':
+            matches.append((margin_mode, leverage))
+
+    if not matches:
+        # A same-symbol row in another category cannot establish absence.
+        if allow_missing and all(row['symbol'] != symbol for row in configs):
+            return None
+        raise BitgetLeverageSkipped(symbol, 'settings_invalid')
+    if len(matches) > 1:
+        raise BitgetLeverageSkipped(symbol, 'duplicate_rows')
+    margin_mode, leverage = matches[0]
+    if margin_mode == 'isolated':
+        raise BitgetLeverageSkipped(symbol, 'not_crossed')
+    if margin_mode != 'crossed':
+        raise BitgetLeverageSkipped(symbol, 'settings_invalid')
+    if leverage < MIN_OPENING_LEVERAGE:
+        raise BitgetLeverageSkipped(symbol, 'invalid_leverage')
+    return leverage
 
 
 def _contract_occupied(rows, symbol, quantity_field=None):
@@ -217,7 +287,8 @@ class _LeverageAttempt:
         target = dict(leverage=TARGET_LEVERAGE)
         previous = dict(leverage=str(before) if before is not None else None)
         if exchange == 'bitget':
-            target['marginMode'] = previous['marginMode'] = 'crossed'
+            target['marginMode'] = 'crossed'
+            previous['marginMode'] = 'crossed' if before is not None else None
         self.audit = dict(exchange=exchange, symbol=symbol, before=previous, target=target)
 
     def require_open(self):
@@ -296,14 +367,20 @@ class _LeverageAttempt:
             self.venue.set_leverage(self.symbol, TARGET_LEVERAGE, before_send=self, deadline=self.deadline())
             self.deadline()
             self.stage = 'readback'
-            if read_leverage(self.exchange, self.symbol, self.deadline) != dec(TARGET_LEVERAGE):
+            readback = read_leverage(self.exchange, self.symbol, self.deadline, allow_missing=False)
+            if not _opening_leverage_allowed(readback):
                 self.stage = 'readback_mismatch'
                 raise ValueError
             self.stage = 'audit'
             self.finish(None)
         except Exception as error:
+            if (self.stage == 'readback' and isinstance(error, BitgetLeverageSkipped)
+                    and error.cause != 'settings_read_failed'):
+                self.stage = 'readback_mismatch'
             failure = dict(stage=self.stage, **error_details(error))
-            limited = failure['error_kind'] == 'rate_limited' or failure.get('http_status') == 429
+            status = failure.get('http_status')
+            # A 422 only cools down this contract, even if the response also carries a throttle label.
+            limited = status == 429 or (status != 422 and failure['error_kind'] == 'rate_limited')
             try:
                 if self.stage == 'write' and limited:
                     # Persist separately so a failure writing the result event cannot undo the pause.
@@ -472,36 +549,22 @@ class Accounts:
                 raise failure from None
         return dict(result,complete=True)
 
-    def _bitget_leverage(self, symbol, deadline=None):
+    def _bitget_leverage(self, symbol, deadline=None, *, allow_missing=False):
         self.bitget_symbol_configs.pop(symbol, None)
         try:
             data = self.bitget.settings() if deadline is None else self.bitget.settings(deadline=deadline())
         except Exception:
-            raise ValueError('leverage_set_skipped') from None
-        try:
-            bitget_settings(data, self.bitget.mode)
-        except (KeyError, TypeError):
-            raise ValueError('leverage_set_skipped') from None
-        try:
-            rows = [r for r in data['symbolConfigList']
-                    if r['symbol'] == symbol and r['category'] == 'USDT-FUTURES']
-            # set-leverage selects a margin mode's leverage. UTA does not
-            # document using it to switch an isolated contract to cross margin.
-            if len(rows) != 1 or rows[0]['marginMode'] != 'crossed':
-                raise ValueError
-            leverage = dec(rows[0]['leverage'])
-            if leverage <= 0:
-                raise ValueError
-        except (KeyError, TypeError, ValueError):
-            raise ValueError('leverage_set_skipped') from None
+            raise BitgetLeverageSkipped(symbol, 'settings_read_failed') from None
+        leverage = _bitget_config_leverage(data, self.bitget.mode, symbol, allow_missing)
         if deadline is not None:
             deadline()
-        self.bitget_symbol_configs[symbol] = dict(marginMode='crossed', leverage=str(leverage))
+        if leverage is not None:
+            self.bitget_symbol_configs[symbol] = dict(marginMode='crossed', leverage=str(leverage))
         return leverage
 
-    def _read_leverage(self, exchange, symbol, deadline):
+    def _read_leverage(self, exchange, symbol, deadline, *, allow_missing=False):
         if exchange == 'bitget':
-            return self._bitget_leverage(symbol, deadline)
+            return self._bitget_leverage(symbol, deadline, allow_missing=allow_missing)
         # Serialize bulk fee refreshes with exact-symbol observations, so an
         # older in-flight leverage response cannot overwrite a confirmed value.
         if not self._leverage_lock.acquire(timeout=max(0, deadline() - time.monotonic())):
@@ -515,7 +578,7 @@ class Accounts:
                 # response after a write can never confirm the target.
                 return None
             leverage = dec(data[symbol])
-            if leverage <= 0:
+            if leverage < MIN_OPENING_LEVERAGE:
                 raise ValueError('leverage_unknown')
             self.leverages[symbol] = str(leverage)
             return leverage
@@ -528,7 +591,7 @@ class Accounts:
             if i.market.key not in self.fees_by_market:
                 raise ValueError('actual_fee_missing')
             if i.market.exchange=='bitget':
-                leverage = self._bitget_leverage(i.symbol)
+                leverage = self._bitget_leverage(i.symbol, allow_missing=True)
                 if not self.risk_confirmed:
                     raise ValueError('bitget_risk_units_unconfirmed')
                 exchange = 'bitget'
@@ -538,7 +601,7 @@ class Accounts:
                     leverage = dec(self.leverages.get(i.symbol, 0))
                 except ValueError:
                     leverage = None  # The bulk cache cannot establish the value.
-            if leverage != dec(TARGET_LEVERAGE):
+            if not _opening_leverage_allowed(leverage):
                 mismatches.append((exchange, i.symbol))
         if mismatches:
             raise LeverageMismatch(mismatches)
@@ -555,8 +618,8 @@ class Accounts:
                 _check_leverage_cooldown(store, self.clock())
                 if not can_open():
                     raise ValueError('leverage_set_skipped')
-                before = self._read_leverage(exchange, symbol, deadline)
-                if before == dec(TARGET_LEVERAGE):
+                before = self._read_leverage(exchange, symbol, deadline, allow_missing=True)
+                if _opening_leverage_allowed(before):
                     continue
                 venue = self.bitget if exchange == 'bitget' else self.cross
                 current['step'] = 'set_and_confirm'
@@ -569,17 +632,8 @@ class Accounts:
             deadline()
         except Exception as error:
             outcome = 'leverage_set_failed' if any_sent else 'leverage_set_skipped'
-            # Diagnostics only: allowlisted type/location plus a snake_case code; never str(error).
-            try:
-                details = exception_details(error)
-                if (type(error) is ValueError and len(error.args) == 1 and type(error.args[0]) is str
-                        and re.fullmatch(r'[a-z][a-z0-9_]{0,63}', error.args[0])):
-                    details['cause'] = error.args[0]
-                stage = getattr(attempt, 'stage', None) if current['step'] == 'set_and_confirm' else None
-                store.event('LEVERAGE_OUTCOME', dict(current, outcome=outcome, stage=stage
-                            if isinstance(stage, str) else None, **details))
-            except Exception:
-                pass  # Diagnostics never change the fail-closed outcome.
+            stage = getattr(attempt, 'stage', None) if current['step'] == 'set_and_confirm' else None
+            record_leverage_outcome(store, error, **current, outcome=outcome, stage=stage)
             raise ValueError(outcome) from None
 
     def program_activity(self,contracts,start_ms,end_ms):

@@ -39,6 +39,7 @@ class LeverageHTTP(OfflineAccountHTTP):
         self.responses.update({GATE_LEVERAGE: {GATE: '10'}, BG_SETTINGS: settings(), BG_STRATEGIES: []})
         self.writes = []
         self.apply_write = True
+        self.gate_post_response = None
         self.after_admit = lambda: None
         self.after_read = lambda path: None
         self.before_write = lambda: None
@@ -63,7 +64,7 @@ class LeverageHTTP(OfflineAccountHTTP):
         if path == GATE_LEVERAGE:
             if self.apply_write:
                 self.responses[path][body['symbol']] = body['leverage']
-            return dict(body)
+            return dict(body) if self.gate_post_response is None else self.gate_post_response
         if self.apply_write:
             for row in self.responses[BG_SETTINGS]['symbolConfigList']:
                 if row['symbol'] == body['symbol'] and row['category'] == body['category']:
@@ -139,6 +140,77 @@ def test_gate_sets_full_symbol_and_continues_this_review(engine, http):
     assert ('GET', GATE_LEVERAGE, {'symbols': GATE}) == http.calls[-1]
     assert events(engine, 'LEVERAGE_SET') == [dict(exchange='crossex', symbol=GATE, before={'leverage': '10'},
             target={'leverage': '3'}, result='success', error=None)]
+
+
+@pytest.mark.parametrize('leverage', ['1', '2', '2.5'])
+def test_lower_current_leverage_continues_without_writes_or_exposure_reads(engine, http, leverage):
+    # Opening review now accepts the full [1, 3] interval on both legs.
+    engine.accounts.leverages[GATE] = http.responses[GATE_LEVERAGE][GATE] = leverage
+    http.responses[BG_SETTINGS]['symbolConfigList'][0]['leverage'] = leverage
+    reviewed(engine)
+    assert [path for _, path, _ in http.calls] == [BG_SETTINGS]
+    assert http.writes == events(engine, 'LEVERAGE_SET_ATTEMPT') == []
+
+
+def test_lower_leverage_on_fresh_reads_avoids_both_writes(engine, http):
+    engine.accounts.leverages[GATE] = 'invalid-cache'
+    http.responses[GATE_LEVERAGE][GATE] = '1'
+    row = http.responses[BG_SETTINGS]['symbolConfigList'][0]
+    row['leverage'] = '5'
+    # The opening check sees crossed/5. The next Bitget settings read sees crossed/2.
+    def lower_bitget_leverage(path):
+        if path == BG_SETTINGS:
+            row['leverage'] = '2'
+
+    http.after_read = lower_bitget_leverage
+    reviewed(engine)
+    assert [path for _, path, _ in http.calls] == [BG_SETTINGS, GATE_LEVERAGE, BG_SETTINGS]
+    assert http.writes == events(engine, 'LEVERAGE_SET_ATTEMPT') == []
+    assert engine.accounts.leverages[GATE] == '1'
+    assert engine.accounts.bitget_symbol_configs[BITGET] == dict(leverage='2', marginMode='crossed')
+
+
+@pytest.mark.parametrize('leverage', ['0', '-1', 'not-a-number', 'NaN', '0.99999999999999999'])
+def test_invalid_crossex_current_leverage_skips_without_write(engine, http, leverage):
+    engine.accounts.leverages[GATE] = http.responses[GATE_LEVERAGE][GATE] = leverage
+    rejected(engine, 'leverage_set_skipped')
+    assert [path for _, path, _ in http.calls] == [BG_SETTINGS, GATE_LEVERAGE]
+    assert http.writes == events(engine, 'LEVERAGE_SET_ATTEMPT') == []
+    assert GATE not in engine.accounts.leverages
+
+
+@pytest.mark.parametrize('ack_leverage', ['3', '2', '5'])
+@pytest.mark.parametrize(('readback', 'result'), [
+    ('3', 'success'), ('2', 'success'), ('5', 'failed'), ('3.00000000000000001', 'failed')])
+def test_crossex_five_writes_three_and_checks_readback(engine, http, readback, result, ack_leverage):
+    leverages = http.responses[GATE_LEVERAGE]
+    leverages[GATE] = '5'
+    http.gate_post_response = dict(symbol=GATE, leverage=ack_leverage)
+    http.apply_write = False
+    http.before_write = lambda: leverages.update({GATE: readback})
+    if result == 'success':
+        reviewed(engine)
+        error = None
+    else:
+        rejected(engine, 'leverage_set_failed')
+        error = dict(stage='readback_mismatch', error_kind='unknown')
+    assert http.writes == [(GATE_LEVERAGE, dict(symbol=GATE, leverage='3'))]
+    assert http.calls[-1] == ('GET', GATE_LEVERAGE, {'symbols': GATE})
+    assert engine.accounts.leverages[GATE] == readback
+    assert events(engine, 'LEVERAGE_SET') == [dict(exchange='crossex', symbol=GATE, before={'leverage': '5'},
+                                                   target={'leverage': '3'}, result=result, error=error)]
+
+
+@pytest.mark.parametrize('receipt', [
+    dict(symbol='OKX_FUTURE_BTC_USDT', leverage='2'), dict(symbol=GATE, leverage='0'),
+    dict(symbol=GATE, leverage='-1'), dict(symbol=GATE, leverage='Infinity'), dict(symbol=GATE, leverage='bad')])
+def test_crossex_invalid_post_receipt_fails_before_readback(engine, http, receipt):
+    http.gate_post_response = receipt
+    rejected(engine, 'leverage_set_failed')
+    assert http.writes == [(GATE_LEVERAGE, dict(symbol=GATE, leverage='3'))]
+    assert http.calls.count(('GET', GATE_LEVERAGE, {'symbols': GATE})) == 1  # Pre-write GET only.
+    result, = events(engine, 'LEVERAGE_SET')
+    assert result['error']['stage'] == 'write'
 
 
 @pytest.mark.parametrize('failure', ['stale_readback', 'write_timeout', 'readback_timeout', 'wrong_symbol', 'empty'])
@@ -226,6 +298,160 @@ def test_bitget_crossed_hedge_sets_both_sides_once_and_confirms(engine, http):
     assert http.calls[-1][1] == BG_SETTINGS
     assert engine.accounts.bitget_symbol_configs[BITGET] == dict(leverage='3', marginMode='crossed')
     assert events(engine, 'LEVERAGE_SET')[0]['before'] == dict(leverage='12', marginMode='crossed')
+
+
+def test_bitget_crossed_five_writes_three_and_confirms_two(engine, http):
+    engine.accounts.leverages[GATE] = '3'
+    row = http.responses[BG_SETTINGS]['symbolConfigList'][0]
+    row['leverage'] = '5'
+    http.apply_write = False
+    http.before_write = lambda: row.update(leverage='2')
+    reviewed(engine)
+    target = dict(leverage='3', marginMode='crossed')
+    assert http.writes == [(BG_LEVERAGE, dict(symbol=BITGET, category='USDT-FUTURES', **target))]
+    assert http.calls[-1][1] == BG_SETTINGS
+    assert engine.accounts.bitget_symbol_configs[BITGET] == dict(leverage='2', marginMode='crossed')
+    assert events(engine, 'LEVERAGE_SET') == [dict(exchange='bitget', symbol=BITGET,
+        before=dict(leverage='5', marginMode='crossed'), target=target, result='success', error=None)]
+
+
+@pytest.mark.parametrize('other_symbols', [[], ['ETHUSDT']], ids=['empty_list', 'other_contract_only'])
+def test_missing_bitget_row_sets_once_and_continues_this_review(engine, http, other_symbols):
+    engine.accounts.leverages[GATE] = '3'
+    rows = http.responses[BG_SETTINGS]['symbolConfigList']
+    configured = rows.pop()
+    rows.extend(dict(configured, symbol=symbol) for symbol in other_symbols)
+    # Only the settings GET after the POST can observe the new row.
+    http.before_write = lambda: rows.append(configured)
+    reviewed(engine)
+    target = dict(leverage='3', marginMode='crossed')
+    assert http.writes == [(BG_LEVERAGE, dict(symbol=BITGET, category='USDT-FUTURES', **target))]
+    assert [path for _, path, _ in http.calls].count(BG_SETTINGS) == 3
+    assert http.calls[-1][1] == BG_SETTINGS
+    assert engine.accounts.bitget_symbol_configs[BITGET] == target
+    audit = dict(exchange='bitget', symbol=BITGET, before=dict(leverage=None, marginMode=None), target=target)
+    assert events(engine, 'LEVERAGE_SET_ATTEMPT') == [audit]
+    assert events(engine, 'LEVERAGE_SET') == [dict(audit, result='success', error=None)]
+
+
+@pytest.mark.parametrize('readback', [[], [('isolated', '3')], [('crossed', '5')], [('crossed', '3')] * 2],
+                         ids=['missing', 'isolated', 'wrong_leverage', 'duplicate'])
+def test_missing_bitget_row_requires_exact_readback(engine, http, readback):
+    engine.accounts.leverages[GATE] = '3'
+    rows = http.responses[BG_SETTINGS]['symbolConfigList']
+    configured = rows.pop()
+    http.apply_write = False
+    http.before_write = lambda: rows.extend(dict(configured, marginMode=mode, leverage=value)
+                                            for mode, value in readback)
+    rejected(engine, 'leverage_set_failed')
+    assert http.writes == [(BG_LEVERAGE, dict(symbol=BITGET, category='USDT-FUTURES',
+                                              marginMode='crossed', leverage='3'))]
+    assert http.calls[-1][1] == BG_SETTINGS
+    result, = events(engine, 'LEVERAGE_SET')
+    assert result['result'] == 'failed' and result['error']['stage'] == 'readback_mismatch'
+    outcome, = events(engine, 'LEVERAGE_OUTCOME')
+    assert (outcome['step'], outcome['stage'], outcome['outcome']) == (
+        'set_and_confirm', 'readback_mismatch', 'leverage_set_failed')
+
+
+@pytest.mark.parametrize('target_present', [False, True], ids=['without_target', 'with_target'])
+@pytest.mark.parametrize('bad_row', [
+    dict(symbol='ETHUSDT', marginMode='crossed', leverage='3'),
+    dict(symbol=None, category='USDT-FUTURES', marginMode='crossed', leverage='3'),
+    dict(symbol='', category='USDT-FUTURES', marginMode='crossed', leverage='3'),
+    dict(symbol='ETHUSDT', category=None, marginMode='crossed', leverage='3'),
+    dict(symbol='ETHUSDT', category='USDT-FUTURES', marginMode=None, leverage='3'),
+    dict(symbol='ETHUSDT', category='USDT-FUTURES', marginMode='crossed', leverage='bad'),
+], ids=['missing_category', 'null_symbol', 'empty_symbol', 'null_category', 'null_margin_mode', 'bad_leverage'])
+def test_bitget_malformed_row_skips_opening_without_writes(engine, http, bad_row, target_present):
+    rows = http.responses[BG_SETTINGS]['symbolConfigList']
+    if not target_present:
+        rows.clear()
+    rows.append(bad_row)
+    rejected(engine, 'leverage_set_skipped')
+    assert [path for _, path, _ in http.calls] == [BG_SETTINGS]
+    assert http.writes == events(engine, 'LEVERAGE_SET_ATTEMPT') == []
+
+
+@pytest.mark.parametrize('bad_row_index', [0, 1])
+def test_bitget_valid_and_malformed_readback_rows_fail(engine, http, bad_row_index):
+    engine.accounts.leverages[GATE] = '3'
+    rows = http.responses[BG_SETTINGS]['symbolConfigList']
+    rows[0]['leverage'] = '5'
+    bad_row = dict(rows[0], symbol='ETHUSDT', leverage='NaN')
+    http.before_write = lambda: rows.insert(bad_row_index, bad_row)
+    rejected(engine, 'leverage_set_failed')
+    assert http.writes == [(BG_LEVERAGE, dict(symbol=BITGET, category='USDT-FUTURES',
+                                              marginMode='crossed', leverage='3'))]
+    assert http.calls[-1][1] == BG_SETTINGS
+    assert BITGET not in engine.accounts.bitget_symbol_configs
+    result, = events(engine, 'LEVERAGE_SET')
+    assert result['result'] == 'failed' and result['error']['stage'] == 'readback_mismatch'
+
+
+def test_missing_bitget_row_after_crossex_repair_attempts_both_writes(engine, http):
+    # The original [missing] case also starts with CrossEx at 10.
+    http.responses[BG_SETTINGS]['symbolConfigList'].clear()
+    rejected(engine, 'leverage_set_failed')
+    assert http.writes == [(GATE_LEVERAGE, dict(symbol=GATE, leverage='3')),
+                           (BG_LEVERAGE, dict(symbol=BITGET, category='USDT-FUTURES', marginMode='crossed', leverage='3'))]
+    assert [(e['exchange'], e['result']) for e in events(engine, 'LEVERAGE_SET')] == [
+        ('crossex', 'success'), ('bitget', 'failed')]
+    outcome, = events(engine, 'LEVERAGE_OUTCOME')
+    assert outcome['symbol'] == BITGET and outcome['stage'] == 'readback_mismatch'
+
+
+def test_missing_bitget_row_is_rejected_by_default(engine, http):
+    assert engine.accounts._bitget_leverage(BITGET) == 3
+    http.responses[BG_SETTINGS]['symbolConfigList'].clear()
+    assert engine.accounts._bitget_leverage(BITGET, allow_missing=True) is None
+    assert BITGET not in engine.accounts.bitget_symbol_configs
+    with pytest.raises(ValueError, match='^leverage_set_skipped$'):
+        engine.accounts._bitget_leverage(BITGET)
+    assert http.writes == events(engine, 'LEVERAGE_SET') == []
+
+
+@pytest.mark.parametrize(('settings_update', 'cause'), [
+    (dict(symbolConfigList=[dict(settings()['symbolConfigList'][0], marginMode='isolated')]), 'not_crossed'),
+    (dict(symbolConfigList=settings()['symbolConfigList'] * 2), 'duplicate_rows'),
+    (dict(symbolConfigList=[dict(settings()['symbolConfigList'][0], leverage='NaN')]), 'invalid_leverage'),
+    (dict(holdMode='one_way_mode', symbolConfigList=[]), 'settings_invalid'),
+    (dict(symbolConfigList={}), 'settings_invalid'),
+    (dict(symbolConfigList=[{}]), 'settings_invalid'),
+    (dict(symbolConfigList=[{'symbol': None}]), 'settings_invalid'),
+    (OSError('fictional-key fictional-signature'), 'settings_read_failed'),
+    (dict(symbolConfigList=[dict(settings()['symbolConfigList'][0], marginMode='isolated', leverage='2')]), 'not_crossed'),
+    (dict(symbolConfigList=[dict(settings()['symbolConfigList'][0], leverage='0.99')]), 'invalid_leverage'),
+], ids=['isolated', 'duplicate', 'invalid_leverage', 'account_mode', 'invalid_list', 'invalid_row',
+        'invalid_symbol', 'read_error', 'isolated_two', 'below_one'])
+def test_bitget_check_instruments_records_safe_skip(engine, http, settings_update, cause):
+    if isinstance(settings_update, Exception):
+        http.responses[BG_SETTINGS] = settings_update
+    else:
+        http.responses[BG_SETTINGS].update(settings_update)
+    rejected(engine, 'leverage_set_skipped')
+    assert http.writes == events(engine, 'LEVERAGE_SET_ATTEMPT') == events(engine, 'LEVERAGE_SET') == []
+    outcome, = events(engine, 'LEVERAGE_OUTCOME')
+    assert outcome['exchange'] == 'bitget' and outcome['symbol'] == BITGET
+    assert outcome['step'] == 'check_instruments' and outcome['stage'] is None
+    assert outcome['outcome'] == 'leverage_set_skipped' and outcome['cause'] == cause
+    assert outcome['error_type'] and outcome['location']
+    assert all(secret not in str(engine.store.events()) for secret in ('fictional-key', 'fictional-signature'))
+
+
+def test_bitget_check_instruments_rejects_when_outcome_cannot_be_recorded(engine, http):
+    http.responses[BG_SETTINGS] = OSError('settings unavailable')
+    event = engine.store.event
+
+    def fail_outcome(kind, *args, **kwargs):
+        if kind == 'LEVERAGE_OUTCOME':
+            raise OSError('journal unavailable')
+        return event(kind, *args, **kwargs)
+
+    with patch.object(engine.store, 'event', side_effect=fail_outcome) as record:
+        rejected(engine, 'leverage_set_skipped')
+    assert [call.args[0] for call in record.call_args_list].count('LEVERAGE_OUTCOME') == 1
+    assert http.writes == events(engine, 'LEVERAGE_SET_ATTEMPT') == []
 
 
 def test_bitget_null_positions_allow_setting(engine, http):
@@ -401,6 +627,35 @@ def test_rate_limited_write_pauses_other_venue_across_restart_for_ten_minutes(en
     assert [path for path, _ in http.writes] == [GATE_LEVERAGE, BG_LEVERAGE]
 
 
+@pytest.mark.parametrize(('status', 'kind', 'code'), [
+    (422, 'unknown', 'INVALID_PARAM_VALUE'), (200, 'unknown', 'INVALID_PARAM_VALUE'),
+    (422, 'rate_limited', 'TOO_MANY_REQUESTS'),
+], ids=['http_422', 'business_error', 'http_422_with_rate_limit_label'])
+def test_leverage_422_or_parameter_error_only_cools_down_contract_writes(engine, http, status, kind, code):
+    now = [10000.]
+    engine.accounts.clock = lambda: now[0]
+    http.responses[GATE_LEVERAGE][GATE] = '5'
+    http.write_error = APIError(kind, http_status=status, api_code=code)
+    rejected(engine, 'leverage_set_failed')
+    failure, = events(engine, 'LEVERAGE_SET')
+    assert failure['result'] == 'failed' and failure['target'] == {'leverage': '3'}
+    assert failure['error'] == dict(stage='write', error_kind=kind, http_status=status, api_code=code)
+    assert engine.store.meta('leverage_set_cooldown_until') is None
+    assert engine.store.meta('leverage_set_window') == [
+        dict(exchange='crossex', symbol=GATE, at=now[0], failed_at=now[0])]
+
+    now[0] += 599
+    http.write_error = None
+    rejected(engine, 'leverage_set_skipped', 'still-five')
+    http.responses[GATE_LEVERAGE][GATE] = '2'
+    with patch.object(engine.executor, 'execute_pair', return_value=[]) as execute, patch.object(engine, 'balance'):
+        assert engine.ingest(trigger('now-two'))['trigger_id'] == 'now-two'
+    execute.assert_called_once()
+    assert engine.accounts.leverages[GATE] == '2'
+    assert http.writes == [(GATE_LEVERAGE, dict(symbol=GATE, leverage='3'))]
+    assert events(engine, 'LEVERAGE_SET') == [failure]
+
+
 # An empty-body HTTP 429 is a pre-existing transport edge; transport.py is
 # intentionally unchanged here, so only the recognized rate-limit form is covered.
 @pytest.mark.parametrize('http_status', [200])
@@ -436,13 +691,13 @@ def test_signed_post_rate_limit_preserves_transport_pause_and_persists_leverage_
         server.close()
 
 
-@pytest.mark.parametrize('config', ['isolated', 'missing', 'duplicate', 'wrong_category'])
+# Opening review now tries a crossed write for a missing row. The missing-row
+# readback and default strict-read tests above cover the two rejection paths.
+@pytest.mark.parametrize('config', ['isolated', 'duplicate', 'wrong_category'])
 def test_bitget_unconfirmed_cross_mode_prevents_any_write(engine, http, config):
     rows = http.responses[BG_SETTINGS]['symbolConfigList']
     if config == 'isolated':
         rows[0]['marginMode'] = 'isolated'
-    elif config == 'missing':
-        rows.clear()
     elif config == 'duplicate':
         rows.append(dict(rows[0]))
     else:
