@@ -5,6 +5,27 @@ from tools.fill_sim.core import dec
 from tools.fill_sim.exchanges import check_response, exact
 
 
+class OIStaleError(ValueError):
+    def __init__(self, reason, age_s):
+        super().__init__(reason)
+        self.age_s = age_s
+
+
+def record_oi_failure(failures, leg, market, stage, kind, error=None):
+    """Append diagnostics without letting formatting or a collector affect admission."""
+    if failures is None:
+        return
+    try:
+        row = dict(leg=leg, exchange=market.exchange, raw_symbol=market.raw_symbol, stage=stage, kind=kind)
+        if isinstance(error, OIStaleError):
+            row.update(kind='stale', age_s=float(round(error.age_s, 1)))
+        elif error is not None:
+            row['error'] = str(error)[:80]
+        failures.append(row)
+    except Exception:
+        pass
+
+
 def oi_urls(market):
     raw, ex = market.raw_symbol, market.exchange
     if ex == 'binance':
@@ -32,8 +53,11 @@ def parse_oi(market, payloads, price, now):
         row = exact(data, 'symbol', raw)
         mark = exact([payloads[1]], 'symbol', raw)
         quantity, value, mark_price = dec(row['sumOpenInterest']), dec(row['sumOpenInterestValue']), dec(mark['markPrice'])
-        if quantity <= 0 or value <= 0 or mark_price <= 0 or not 0 <= dec(now)-dec(mark['time'])/1000 <= 300:
+        if quantity <= 0 or value <= 0 or mark_price <= 0:
             raise ValueError('oi_unit_unverified')
+        mark_age = dec(now)-dec(mark['time'])/1000
+        if not 0 <= mark_age <= 300:
+            raise OIStaleError('oi_unit_unverified', mark_age)
         implied = value/quantity
         if abs(implied/mark_price-1) > dec('.01'):
             raise ValueError('oi_unit_unverified')
@@ -71,7 +95,10 @@ def parse_oi(market, payloads, price, now):
         value, at, unit = dec(row['open_interest_usd']), dec(row['time']), 'USDT'
     else:
         raise ValueError('oi_unit_unverified')
-    if value < 0 or not 0 <= dec(now)-at <= 300:
+    if value < 0:
         raise ValueError('oi_missing')
+    age = dec(now)-at
+    if not 0 <= age <= 300:
+        raise OIStaleError('oi_missing', age)
     return dict(market_key=market.key, usd=str(value), at=float(at), unit=unit, unit_verified=True,
                 source=oi_urls(market)[0], evidence=evidence)

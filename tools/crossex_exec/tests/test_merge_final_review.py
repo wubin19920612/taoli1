@@ -75,7 +75,7 @@ class MergeReleaseTests(unittest.TestCase):
         self.assert_rejected(errors, 'send_size_changed')
 
     def test_oi_expiring_during_commit_rejects_even_when_books_are_fresh(self):
-        def nearly_expired(instruments):
+        def nearly_expired(instruments, *, failures=None):
             return oi_payloads(instruments,self.now[0]-299.75)
         def change(rows):
             self.now[0] += .5

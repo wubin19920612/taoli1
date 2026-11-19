@@ -2,6 +2,7 @@
 import time
 import threading
 from copy import deepcopy
+from inspect import signature
 from urllib.parse import urlencode
 from tools.fill_sim.core import Market, dec
 from tools.fill_sim.exchanges import endpoint, parse_spec, parse_book, exact, check_response
@@ -12,11 +13,22 @@ from .policy import mapped_instrument
 from .baseline import BATCH_URLS, FRESH_SECONDS, parse_tickers, supported_base
 from .liquidity import VOLUME_URLS, parse_batch
 from .universe import Universe, category, alias, PRE_IPO_BASES, COMMODITY_BASES
-from .open_interest import oi_urls, parse_oi
+from .open_interest import oi_urls, parse_oi, record_oi_failure
 from .external_fx import NATIVE_USD, spot_urls, parse_spot_quote, quote_band
 
 OPENING_OI_TIMEOUT = 3
 OI_DATA_ERRORS = (AttributeError, IndexError, KeyError, TypeError, ValueError, ArithmeticError)
+
+
+def oi_diagnostic_kwargs(method, implementation, **options):
+    """Older injected providers can still serve the request with a single call."""
+    try:
+        if getattr(method, '__func__', None) is not implementation:
+            signature(method).bind_partial(**options)
+        return options
+    except Exception:
+        return {}
+
 
 RULES_URL='https://api.gateio.ws/api/v4/crossex/rule/symbols'
 CATALOGS={
@@ -202,7 +214,8 @@ class MarketData:
             self.pool.shutdown(wait=False)
             self.opening_pool.shutdown(wait=False)
 
-    def batch(self,items,priority=1,partial=False,*,opening_books=False,timings=None,deadline=None):
+    def batch(self,items,priority=1,partial=False,*,opening_books=False,timings=None,deadline=None,errors=None):
+        """Optional errors follow job order, with None for a successful result."""
         queue,pool=(self.opening_queue,self.opening_pool) if opening_books else (self.queue,self.pool)
         with queue.lock:
             jobs=[queue.submit(ex,url,priority,convert,opening_book=opening_books) for ex,url,convert in items]
@@ -214,15 +227,24 @@ class MarketData:
             time.sleep(.01)
         results=[]
         for j in jobs:
+            failure=None
             try:
                 if not j.done():
                     j.cancel()
                     raise TimeoutError('public_deadline')
                 results.append(j.result())
-            except Exception:
+            except Exception as error:
+                if errors is not None:
+                    failure='timeout' if issubclass(type(error),TimeoutError) else 'request_failed'
                 if not partial:
                     raise ValueError('public_data_unavailable') from None
                 results.append(None)
+            finally:
+                if errors is not None:
+                    try:
+                        errors.append(failure)
+                    except Exception:
+                        pass
             if opening_books and timings is not None:
                 # A running send can complete while the batch is returning at its deadline.
                 returned,sent=j.returned_at,j.sent_at
@@ -430,7 +452,7 @@ class MarketData:
                 mids.setdefault(ex,{})[base]=str(dec(row['mid'])/multiplier)
         return mids,bases
 
-    def open_interest_payloads(self,instruments,*,timeout=OPENING_OI_TIMEOUT):
+    def open_interest_payloads(self,instruments,*,timeout=OPENING_OI_TIMEOUT,failures=None):
         """Fetch all routed legs in one batch and return their raw responses in leg order."""
         deadline=time.monotonic()+timeout
 
@@ -452,18 +474,29 @@ class MarketData:
                 routed_legs.append((n,i.market,slice(start,len(items))))
         if not items:
             return results
+        errors=[] if failures is not None else None
         try:
-            responses=self.batch(items,priority=1,partial=True,deadline=deadline)
+            batch=self.batch
+            options=oi_diagnostic_kwargs(batch,MarketData.batch,errors=errors) if errors is not None else {}
+            responses=batch(items,priority=1,partial=True,deadline=deadline,**options)
         except Exception:
+            if failures is not None:
+                for n,market,_ in routed_legs:
+                    record_oi_failure(failures,n,market,'payload','request_failed')
             return results
         for n,market,span in routed_legs:
             raw=responses[span]
             if len(raw) != span.stop-span.start or any(row is None for row in raw):
+                if failures is not None:
+                    kind='timeout' if 'timeout' in errors[span] else 'request_failed'
+                    record_oi_failure(failures,n,market,'payload',kind)
                 continue
             try:
                 # A unit price validates base quantities before a book is available.
                 parse_oi(market,raw,1,self.clock())
-            except OI_DATA_ERRORS:
+            except OI_DATA_ERRORS as error:
+                if failures is not None:
+                    record_oi_failure(failures,n,market,'payload','parse_invalid',error)
                 continue
             results[n]=raw
         return results
@@ -473,14 +506,22 @@ class MarketData:
         return value_open_interests(instruments,books,payloads,self.clock())
 
 
-def value_open_interests(instruments,books,payloads,now):
+def value_open_interests(instruments,books,payloads,now,*,failures=None,routed_legs=None):
     """Value already-fetched OI against this attempt's common-unit books."""
     results=[]
-    for i,book,leg in zip(instruments,books,payloads):
+    for n,(i,book,leg) in enumerate(zip(instruments,books,payloads)):
         try:
             # Convert the common midpoint back to the venue's native denomination.
             price=(dec(book.bids[0][0])+dec(book.asks[0][0]))/2*i.multiplier
             results.append(parse_oi(i.market,leg,price,now))
-        except OI_DATA_ERRORS:
+        except OI_DATA_ERRORS as error:
             results.append(None)
+            if failures is not None:
+                try:
+                    market=i.market
+                    routed=oi_urls(market) if routed_legs is None else n in routed_legs
+                    if routed:
+                        record_oi_failure(failures,n,market,'value','parse_invalid',error)
+                except Exception:
+                    pass
     return results

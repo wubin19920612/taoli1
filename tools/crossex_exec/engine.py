@@ -1,4 +1,5 @@
 """Single coordinator owns pair state; parallel workers only own individual orders."""
+import json
 import time
 import threading
 import uuid
@@ -19,8 +20,8 @@ from .baseline import Baseline
 from .admission import OpeningLimits, AdmissionError, BOOK_RETRIES, book_skew_ms, SKIP_REASONS, REVIEW_SKIP_REASONS
 from .settings import Settings, risk_settings
 from .sizing import size_plan
-from .market import value_open_interests
-from .open_interest import oi_urls
+from .market import MarketData, oi_diagnostic_kwargs, value_open_interests
+from .open_interest import oi_urls, record_oi_failure
 from .universe import Universe, check_mapping_ratio
 from .external import ExternalRegistry, ExternalAdmin, ExternalUnverifiable, plain
 from .external_accounting import ExternalAccounting
@@ -77,6 +78,28 @@ def review_failure_details(error):
             and _re.fullmatch(r'[a-z][a-z0-9_]{0,63}',error.args[0])):
         details['cause']=error.args[0]
     return details
+
+
+def oi_missing_error(instruments, legs, stage, kind, failures=(), *, unmatched=(), error=None):
+    if error is None:
+        error=AdmissionError('oi_missing')
+    try:
+        observed={row['leg']:row for row in failures if row['stage']==stage}
+        rows=[]
+        legs=list(legs)
+        cause='missing OI value' if stage=='value' else None
+        if not legs and unmatched:
+            # Extra responses or a missing unrouted slot cannot be attributed to one venue.
+            legs,kind,cause=unmatched,'parse_invalid','payload_count_mismatch'
+        for n in legs:
+            if n in observed:
+                rows.append(observed[n])
+            else:
+                record_oi_failure(rows,n,instruments[n].market,stage,kind,cause)
+        error.details={'oi_failures':rows}
+    except Exception:
+        pass  # Diagnostics never change the rejection.
+    return error
 
 
 class Engine:
@@ -310,12 +333,17 @@ class Engine:
         limits=self.opening_limits.restricted(values)
         common=[i.common() for i in instruments]
         routed_legs=[n for n,i in enumerate(instruments) if oi_urls(i.market)]
+        failures=[]
         try:
-            payloads=self.market.open_interest_payloads(instruments)
+            fetch=self.market.open_interest_payloads
+            options=oi_diagnostic_kwargs(fetch,MarketData.open_interest_payloads,failures=failures)
+            payloads=fetch(instruments,**options)
         except Exception:
-            raise AdmissionError('oi_missing') from None
-        if len(payloads or ())!=len(instruments) or any(not payloads[n] for n in routed_legs):
-            raise AdmissionError('oi_missing')
+            raise oi_missing_error(instruments,routed_legs,'payload','request_failed') from None
+        payload_count=len(payloads or ())
+        if payload_count!=len(instruments) or any(not payloads[n] for n in routed_legs):
+            missing=(n for n in routed_legs if n>=payload_count or not payloads[n])
+            raise oi_missing_error(instruments,missing,'payload','request_failed',failures,unmatched=routed_legs)
         first_book_timing=None
         for attempt in range(BOOK_RETRIES+1):
             started=self.clock()
@@ -327,16 +355,25 @@ class Engine:
                 limits.books(books,self.clock())
                 check_mapping_ratio(common,books)
                 self.universe.check_identity_prices(instruments,books)
-                interests=value_open_interests(instruments,books,payloads,self.clock())
+                interests=value_open_interests(instruments,books,payloads,self.clock(),
+                                               failures=failures,routed_legs=routed_legs)
                 if any(interests[n] is None for n in routed_legs):
-                    raise AdmissionError('oi_missing')
+                    missing=(n for n in routed_legs if interests[n] is None)
+                    raise oi_missing_error(instruments,missing,'value','parse_invalid',failures)
                 checkpoint='after_open_interest'
                 limits.books(books,self.clock())
                 available=max(dec(0),min(self.limits.total,dec(values['max_total_open_usd']))-
                               self.limits.exposure(self.account_cache.read()))
-                sizing=size_plan(common,books,interests,values,available,self.clock())
+                try:
+                    sizing=size_plan(common,books,interests,values,available,self.clock())
+                except ValueError as error:
+                    # With no usable legs size_plan raises before it can return oi_legs_used.
+                    if type(error) is ValueError and error.args==('oi_missing',):
+                        oi_missing_error(instruments,routed_legs,'sizing','not_used_by_sizing',error=error)
+                    raise
                 if any(n not in sizing['oi_legs_used'] for n in routed_legs):
-                    raise AdmissionError('oi_missing')
+                    missing=(n for n in routed_legs if n not in sizing['oi_legs_used'])
+                    raise oi_missing_error(instruments,missing,'sizing','not_used_by_sizing')
                 fill=review(common,books,fees,funding,turnovers,self.clock(),baseline_bps=baseline['baseline_bps'],
                             quantity=sizing['quantity'],min_turnover=values['min_quote_volume_usd'],min_excess_bps=values['min_excess_bps'])
                 fill.update(sizing=sizing,open_interests=interests)
@@ -1127,10 +1164,20 @@ class Engine:
         except Exception as error:
             reason=(error.reason if isinstance(error,AdmissionError) else str(error)
                     if isinstance(error,ValueError) and str(error) in REVIEW_SKIP_REASONS else 'review_failed_closed')
-            timing=getattr(error,'details',None) if isinstance(error,AdmissionError) else None
+            diagnostics={}
+            try:
+                details=getattr(error,'details',None) if isinstance(error,AdmissionError) or reason=='oi_missing' else None
+                if isinstance(details,dict):
+                    if 'oi_failures' in details:
+                        # Freeze provider diagnostics as plain JSON before the single durable SKIP write.
+                        diagnostics['oi_failures']=json.loads(json.dumps(details['oi_failures'],allow_nan=False))
+                    elif isinstance(error,AdmissionError):
+                        diagnostics['book_timing']=details
+            except Exception:
+                pass
             self.store.skip(identity,reason,stage='review',
                             **(review_failure_details(error) if reason=='review_failed_closed' else {}),
-                            **({'book_timing':timing} if isinstance(timing,dict) else {}))
+                            **diagnostics)
             return
         pair=dict(id=uuid.uuid4().hex,trigger_id=identity,base=base,state='OPENING',opened_at=self.clock(),
                   baseline_at_open=fill['baseline_bps'],excess_at_open=fill['excess_bps'],
