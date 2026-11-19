@@ -23,7 +23,7 @@ from .admission import OpeningLimits, AdmissionError, BOOK_RETRIES, book_skew_ms
 from .settings import Settings, risk_settings
 from .sizing import size_plan
 from .market import value_open_interests
-from .open_interest import oi_urls, record_oi_failure
+from .open_interest import check_gate_send_oi, oi_urls, record_oi_failure
 from .universe import Universe, check_mapping_ratio
 from .external import ExternalRegistry, ExternalAdmin, ExternalUnverifiable, plain
 from .external_accounting import ExternalAccounting
@@ -242,7 +242,7 @@ class Engine:
                 if reason in SKIP_REASONS:
                     pair=self.store.get_pair(intents[0]['pair_id']) or {}
                     self.store.skip(pair.get('trigger_id','pair:'+str(pair.get('id'))),reason,
-                                    stage='send',pair_id=pair.get('id'))
+                                    stage='send',pair_id=pair.get('id'),**getattr(error,'gate_oi_details',{}))
                 raise
 
     def _check_pair(self,intents):
@@ -301,7 +301,7 @@ class Engine:
             try:
                 instruments=[Instrument.load(i) for i in pair['instruments']]
                 self.check_send_config(pair,instruments)
-                self.check_send_size(pair,sorted(intents,key=lambda o:o['leg']),instruments)
+                self.check_send_size(pair,sorted(intents,key=lambda o:o['leg']),instruments,stage='release')
                 if not self.can_open(ignore_cids={i['cid'] for i in intents}):
                     raise ValueError('open_gate_changed')
                 config=pair.get('config_at_open')
@@ -312,12 +312,15 @@ class Engine:
                 limits=self.opening_limits.restricted(config['values']) if config else self.opening_limits
                 # Last check: all preceding reads/commits consume this budget.
                 # Success performs no further I/O before releasing BOTH senders.
-                limits.books(pair['last_books'],self.clock(),send=True)
+                now=self.clock()
+                limits.books(pair['last_books'],now,send=True)
+                if config:
+                    check_gate_send_oi(instruments,pair['open_interests'],now,'release',bounded_oi_failures)
             except ValueError as error:
                 reason=error.reason if isinstance(error,AdmissionError) else str(error)
                 if reason in SKIP_REASONS:
                     self.store.skip(pair.get('trigger_id','pair:'+pair['id']),reason,
-                                    stage='release',pair_id=pair['id'])
+                                    stage='release',pair_id=pair['id'],**getattr(error,'gate_oi_details',{}))
                 raise
 
     def check_send_config(self,pair,instruments):
@@ -333,7 +336,7 @@ class Engine:
             if [i.dump() for i in current]!=[i.dump() for i in instruments]:
                 raise ValueError('send_catalog_changed')
 
-    def check_send_size(self,pair,orders,instruments):
+    def check_send_size(self,pair,orders,instruments,*,stage='send'):
         config=pair.get('config_at_open')
         if not config:
             return
@@ -344,7 +347,11 @@ class Engine:
         own=sum(dec(o['quantity'])*dec(o['price']) for o in orders)
         available=max(dec(0),min(self.limits.total,dec(config['values']['max_total_open_usd']))-
                       self.limits.exposure(self.account_cache.read())+own)
-        plan=size_plan([i.common() for i in instruments],common_books,pair['open_interests'],config['values'],available,self.clock())
+        common=[i.common() for i in instruments]
+        interests=pair['open_interests']
+        now=self.clock()
+        check_gate_send_oi(instruments,interests,now,stage,bounded_oi_failures)
+        plan=size_plan(common,common_books,interests,config['values'],available,now)
         if any(dec(o['quantity'])*i.multiplier>dec(plan['quantity']) for o,i in zip(orders,instruments)):
             raise ValueError('send_size_changed')
 

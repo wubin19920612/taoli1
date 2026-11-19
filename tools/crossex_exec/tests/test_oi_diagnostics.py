@@ -14,6 +14,7 @@ from tools.crossex_exec.market import value_open_interests
 from tools.crossex_exec.open_interest import oi_urls, parse_oi
 from tools.crossex_exec.sizing import size_plan
 from tools.fill_sim.network import Limiter
+from baseline_fixtures import seed_baseline
 from test_engine import oi_payloads
 from test_exec import instrument, setUpModule, tearDownModule
 import test_opening_book_latency as latency
@@ -22,6 +23,13 @@ import test_round7 as previous
 
 def failure(leg, exchange, kind, *, stage='payload', raw_symbol='BTCUSDT', **details):
     return dict(leg=leg, exchange=exchange, raw_symbol=raw_symbol, stage=stage, kind=kind, **details)
+
+
+def gate_fixture():
+    gate = instrument('gate')
+    gate.market = replace(gate.market, raw_symbol='BTC_USDT')
+    gate.symbol = 'GATE_FUTURE_BTC_USDT'
+    return gate, [dict(contract='BTC_USDT', total_size='1250', quanto_multiplier='1', mark_price='100')]
 
 
 @contextmanager
@@ -78,23 +86,25 @@ class OIMarketDiagnosticsTests(unittest.TestCase):
         batch.assert_called_once()
         self.assertEqual(failures,[failure(1,'bitget','request_failed')])
 
-    def test_gate_bucket_age_preserves_payload_and_value_results_without_a_collector(self):
-        gate=instrument('gate')
-        gate.market=replace(gate.market,raw_symbol='BTC_USDT')
+    def test_gate_receipt_age_preserves_payload_and_value_results_without_a_collector(self):
+        gate,raw=gate_fixture()
         legs=[instrument('aster'),gate]
-        bucket=1800
-        raw=[dict(contract='BTC_USDT',time=bucket,open_interest_usd='125000')]
+        received_at=1943
         market=self.market(Limiter(),None)
+        def batch(items, **_):
+            (_, _, receive), = items
+            with patch.object(market,'clock',return_value=received_at):
+                return [receive(raw)]
         for age,stale in ((240,False),(300,False),(301.26,True),(-1.37,True)):
-            now=bucket+age
-            with (self.subTest(age=age),patch.object(market,'batch',return_value=[raw]),
+            now=received_at+age
+            with (self.subTest(age=age),patch.object(market,'batch',side_effect=batch),
                   patch.object(market,'clock',return_value=now)):
                 failures=[]
+                payloads=[[],[(raw,received_at)]]
                 plain=market.open_interest_payloads(legs)
-                self.assertEqual(plain,[[],[] if stale else [raw]])
+                self.assertEqual(plain,[[],[]] if stale else payloads)
                 self.assertEqual(market.open_interest_payloads(legs,failures=failures),plain)
-                books=previous.books(now)
-                payloads=[[],[raw]]
+                books=previous.books(now,prices=('102','100'))
                 values=value_open_interests(legs,books,payloads,now)
                 self.assertEqual(value_open_interests(legs,books,payloads,now,failures=failures),values)
                 if stale:
@@ -102,9 +112,10 @@ class OIMarketDiagnosticsTests(unittest.TestCase):
                     self.assertEqual(failures,[failure(1,'gate','stale',stage=stage,raw_symbol='BTC_USDT',
                                                        age_s=round(age,1)) for stage in ('payload','value')])
                     with self.assertRaisesRegex(ValueError,'^oi_missing$'):
-                        parse_oi(gate.market,[raw],1,now)
+                        parse_oi(gate.market,[raw],None,now,contract_size=gate.spec.contract_size,received_at=received_at)
                 else:
                     self.assertEqual(values[1]['usd'],'125000')
+                    self.assertEqual(values[1]['at'],received_at)
                     self.assertEqual(failures,[])
 
     def test_binance_expired_mark_keeps_its_original_parse_error(self):
@@ -117,6 +128,46 @@ class OIMarketDiagnosticsTests(unittest.TestCase):
         self.assertIsNone(valued[0])
         self.assertIsNotNone(valued[1])
         self.assertEqual(failures,[failure(0,'binance','stale',stage='value',age_s=302.3)])
+
+    def test_each_gate_response_keeps_its_receipt_across_a_five_minute_boundary(self):
+        btc, ticker = gate_fixture()
+        eth = replace(btc, market=replace(btc.market, raw_symbol='ETH_USDT'), spec=replace(btc.spec, base='ETH'))
+        legs = [btc, eth]
+        now = [2099.75]
+        market = self.market(Limiter(clock=lambda: now[0]), None)
+
+        def batch(items, **_):
+            eth_response = items[1][2]([dict(ticker[0], contract='ETH_USDT')])
+            now[0] = 2100.25
+            btc_response = items[0][2](ticker)
+            now[0] = 2102
+            return [btc_response, eth_response]
+
+        with patch.object(market, 'batch', side_effect=batch):
+            payloads = market.open_interest_payloads(iter(legs))
+        rows = value_open_interests(legs, previous.books(2120, prices=('100', '100')), payloads, 2120)
+        self.assertEqual([row['at'] for row in rows], [2100.25, 2099.75])
+        self.assertEqual([row['usd'] for row in rows], ['125000', '125000'])
+
+    def test_gate_catalog_and_midpoint_fail_at_the_stage_that_can_verify_them(self):
+        gate, ticker = gate_fixture()
+        now = previous.NOW
+        market = self.market(Limiter(clock=lambda: now), {oi_urls(gate.market)[0]: ticker}.__getitem__)
+        for spec in (None, replace(gate.spec, contract_size='10')):
+            with self.subTest(spec=spec):
+                failures = []
+                self.assertEqual(market.open_interest_payloads([replace(gate, spec=spec)], failures=failures), [[]])
+                self.assertEqual(failures, [failure(0, 'gate', 'parse_invalid', raw_symbol='BTC_USDT',
+                                                    error='oi_unit_unverified')])
+            now += 1  # Each independent fetch gets its own limiter window.
+        failures = []
+        payloads = market.open_interest_payloads([gate], failures=failures)
+        self.assertEqual(payloads, [[(ticker, now)]])
+        self.assertEqual(failures, [])
+        book = previous.books(now, prices=('102', '100'))[0]
+        self.assertEqual(value_open_interests([gate], [book], payloads, now, failures=failures), [None])
+        self.assertEqual(failures, [failure(0, 'gate', 'parse_invalid', stage='value', raw_symbol='BTC_USDT',
+                                            error='oi_unit_unverified')])
 
     def test_value_parse_error_is_bounded_and_collector_errors_do_not_escape(self):
         class BrokenCollector(list):
@@ -325,15 +376,20 @@ class OIReviewDiagnosticsTests(unittest.TestCase):
         self.assertEqual(len(books), 2)
         self.assertEqual(fill['sizing']['oi_legs_used'], [0, 1])
 
-    def test_gate_timestamp_1e28_preserves_stale_in_the_review_and_value_diagnostics(self):
-        gate = instrument('gate')
-        gate.market = replace(gate.market, raw_symbol='BTC_USDT')
+    def test_gate_receipt_1e28_preserves_stale_in_the_review_and_value_diagnostics(self):
+        gate, ticker = gate_fixture()
         legs = [gate, instrument('bitget')]
-        raw = [[dict(contract='BTC_USDT', time='1e28', open_interest_usd='125000')]]
-        payloads = [raw, oi_payloads(legs, self.now[0])[1]]
-        by_url = {oi_urls(i.market)[0]: leg[0] for i, leg in zip(legs, payloads)}
+        bitget = oi_payloads(legs, self.now[0])[1]
+        received_at = 1e28
+        payloads = [[(ticker, received_at)], bitget]
+        by_url = {oi_urls(gate.market)[0]: ticker, oi_urls(legs[1].market)[0]: bitget[0]}
         market = self.oi_market(by_url.__getitem__)
-        with (patch.object(self.engine, 'market', market), patch.object(market, 'opening_books') as books,
+        batch = market.batch
+        def future_receipt(items, **options):
+            with patch.object(market, 'clock', return_value=received_at):
+                return batch(items, **options)
+        with (patch.object(self.engine, 'market', market), patch.object(market, 'batch', side_effect=future_receipt),
+              patch.object(market, 'opening_books') as books,
               self.assertRaisesRegex(AdmissionError, '^oi_missing$') as caught):
             self.engine.opening_review(legs, [], [], [], dict(baseline_bps='0'))
         books.assert_not_called()
@@ -355,6 +411,44 @@ class OIReviewDiagnosticsTests(unittest.TestCase):
             self.assert_oi_skip('oi-interrupted')
         books.assert_not_called()
         self.assertEqual(self.last_oi_failures, [stale, failure(1, 'bitget', 'request_failed')])
+
+    def assert_gate_expiry_blocks_orders(self, target, check, stage):
+        gate, ticker = gate_fixture()
+        legs = [gate, instrument('bitget')]
+        trigger = dict(self.trigger('gate-expiry-'+stage), buy_market_key=gate.dump()['market'])
+        self.market.mapping = {i.market.key: i for i in legs}
+        self.accounts.fee_snapshots[gate.market.key] = self.accounts.fee_snapshots[instrument().market.key]
+        seed_baseline(self.store, self.now[0], venues=('gate', 'bitget'))
+        self.engine.baseline.record({ex: {'BTC': p} for ex, p in (('gate', '100'), ('bitget', '102'), ('bybit', '100'))}, ('BTC',))
+
+        received_at = self.now[0] - 300
+        market = self.oi_market({oi_urls(gate.market)[0]: ticker}.__getitem__)
+        with patch.object(market, 'clock', return_value=received_at):
+            gate_payload, = market.open_interest_payloads([gate])
+        payloads = [gate_payload, oi_payloads(legs, self.now[0])[1]]
+        before_send = getattr(target, check)
+
+        def advance(*args):
+            self.now[0] += .25
+            return before_send(*args)
+
+        with (patch.object(self.market, 'open_interest_payloads', return_value=payloads),
+              patch.object(self.market, 'books', return_value=previous.books(self.now[0])),
+              patch.object(target, check, side_effect=advance) as barrier):
+            pair = self.engine.ingest(trigger)
+
+        barrier.assert_called_once()
+        self.assertEqual([row['at'] for row in pair['open_interests']], [received_at, received_at+300])
+        skips = [json.loads(e['value']) for e in self.store.events() if e['kind']=='SKIP']
+        self.assertEqual(skips, [dict(id=trigger['id'], reason='oi_missing', stage=stage, pair_id=pair['id'],
+            oi_failures=[failure(0, 'gate', 'stale', stage=stage, raw_symbol='BTC_USDT', age_s=300.2)])])
+        self.assertFalse(any(row[0]=='place' for row in self.trace))
+
+    def test_expired_gate_receipt_blocks_send_with_a_fresh_peer(self):
+        self.assert_gate_expiry_blocks_orders(self.engine.executor, 'check_pair', 'send')
+
+    def test_expired_gate_receipt_blocks_final_release_with_a_fresh_peer(self):
+        self.assert_gate_expiry_blocks_orders(self.engine, 'check_cached_volumes', 'release')
 
     def test_oi_expiring_after_payload_validation_records_value_stage_without_refetch(self):
         instruments=list(self.market.mapping.values())

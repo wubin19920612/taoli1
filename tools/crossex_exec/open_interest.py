@@ -45,16 +45,46 @@ def oi_urls(market):
     if ex == 'okx':
         return ['https://www.okx.com/api/v5/public/open-interest?'+urlencode(dict(instType='SWAP', instId=raw))]
     if ex == 'gate':
-        return ['https://api.gateio.ws/api/v4/futures/usdt/contract_stats?'+urlencode(dict(contract=raw, interval='5m', limit=1))]
+        return ['https://api.gateio.ws/api/v4/futures/usdt/tickers?'+urlencode(dict(contract=raw))]
     return []  # No verified public Aster OI route or unit; do not guess one.
 
 
-def parse_oi(market, payloads, price, now):
+def _require_fresh(at, now):
+    age = dec(now)-at
+    if not 0 <= age <= 300:
+        raise OIStaleError('oi_missing', age)
+
+
+def check_gate_send_oi(instruments, interests, now, stage, bound_failures):
+    """A fresh peer can satisfy size_plan on its own. Gate still needs its own fresh receipt."""
+    for leg, instrument in enumerate(instruments):
+        if instrument.market.exchange != 'gate':
+            continue
+        try:
+            at = dec(interests[leg]['at'])
+        except (IndexError, KeyError, TypeError, ValueError):
+            raise ValueError('oi_missing') from None
+        try:
+            _require_fresh(at, now)
+        except OIStaleError as error:
+            try:
+                failures = []
+                record_oi_failure(failures, leg, instrument.market, stage, 'stale', error)
+                if failures:
+                    error.gate_oi_details = {'oi_failures': bound_failures(failures)}
+            except Exception:
+                pass  # Diagnostics cannot replace the send rejection.
+            raise
+
+
+def parse_oi(market, payloads, price, now, *, contract_size=None, received_at=None):
+    """Gate uses the original receipt time and has no midpoint until a book is available."""
     ex, raw = market.exchange, market.raw_symbol
     data = payloads[0]
-    price = dec(price)
-    if price <= 0:
-        raise ValueError('oi_price_invalid')
+    if ex != 'gate' or price is not None:
+        price = dec(price)
+        if price <= 0:
+            raise ValueError('oi_price_invalid')
     evidence = {}
     if ex == 'binance':
         row = exact(data, 'symbol', raw)
@@ -97,15 +127,27 @@ def parse_oi(market, payloads, price, now):
         if not isinstance(data, list) or len(data) != 1:
             raise ValueError('oi_ambiguous')
         row = data[0]
-        if row.get('contract', raw) != raw:
+        if not isinstance(row, dict) or row.get('contract') != raw:
             raise ValueError('oi_identity_mismatch')
-        value, at, unit = dec(row['open_interest_usd']), dec(row['time']), 'USDT'
+        try:
+            total_size = dec(row['total_size'])
+            multiplier = dec(row['quanto_multiplier'])
+            mark_price = dec(row['mark_price'])
+            catalog_size = dec(contract_size)
+        except (KeyError, ValueError):
+            raise ValueError('oi_unit_unverified') from None
+        if total_size < 0 or multiplier <= 0 or mark_price <= 0 or multiplier != catalog_size:
+            raise ValueError('oi_unit_unverified')
+        if price is not None and abs(mark_price/price-1) > dec('.01'):
+            raise ValueError('oi_unit_unverified')
+        if received_at is None:
+            raise ValueError('oi_missing')
+        value, at, unit = total_size*multiplier*mark_price, dec(received_at), 'USDT'
+        evidence = dict(total_size=str(total_size), quanto_multiplier=str(multiplier), mark_price=str(mark_price))
     else:
         raise ValueError('oi_unit_unverified')
     if value < 0:
         raise ValueError('oi_missing')
-    age = dec(now)-at
-    if not 0 <= age <= 300:
-        raise OIStaleError('oi_missing', age)
+    _require_fresh(at, now)
     return dict(market_key=market.key, usd=str(value), at=float(at), unit=unit, unit_verified=True,
                 source=oi_urls(market)[0], evidence=evidence)

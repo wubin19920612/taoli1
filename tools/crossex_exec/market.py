@@ -468,7 +468,7 @@ class MarketData:
         return mids,bases
 
     def open_interest_payloads(self,instruments,*,timeout=OPENING_OI_TIMEOUT,failures=None):
-        """Fetch all routed legs in one batch and return their raw responses in leg order."""
+        """Fetch OI in leg order. Each Gate ticker carries its own local receipt time."""
         deadline=time.monotonic()+timeout
 
         def received(data):
@@ -476,6 +476,9 @@ class MarketData:
             if time.monotonic() >= deadline:
                 raise TimeoutError('public_deadline')
             return data
+
+        def gate_received(data):
+            return received(data), self.clock()
 
         results=[]
         items=[]
@@ -485,8 +488,9 @@ class MarketData:
             urls=oi_urls(i.market)
             if urls:
                 start=len(items)
-                items.extend((i.market.exchange,url,received) for url in urls)
-                routed_legs.append((n,i.market,slice(start,len(items))))
+                convert=gate_received if i.market.exchange=='gate' else received
+                items.extend((i.market.exchange,url,convert) for url in urls)
+                routed_legs.append((n,i,slice(start,len(items))))
         if not items:
             return results
         errors = _DeferredBatchErrors() if failures is not None else None
@@ -496,19 +500,19 @@ class MarketData:
         except Exception:
             if failures is not None:
                 rows = []
-                for n, market, _ in routed_legs:
-                    record_oi_failure(rows, n, market, 'payload', 'request_failed')
+                for n, instrument, _ in routed_legs:
+                    record_oi_failure(rows, n, instrument.market, 'payload', 'request_failed')
                 _extend_diagnostics(failures, rows)
             return results
-        for n,market,span in routed_legs:
+        for n,instrument,span in routed_legs:
+            market=instrument.market
             raw=responses[span]
             if len(raw) != span.stop-span.start or any(row is None for row in raw):
                 if failures is not None:
                     pending.append((n, market, span, None))
                 continue
             try:
-                # A unit price validates base quantities before a book is available.
-                parse_oi(market,raw,1,self.clock())
+                _parse_instrument_oi(instrument,raw,None,self.clock())
             except OI_DATA_ERRORS as error:
                 if failures is not None:
                     pending.append((n, market, span, error))
@@ -531,6 +535,17 @@ class MarketData:
         return value_open_interests(instruments,books,payloads,self.clock())
 
 
+def _parse_instrument_oi(instrument, payloads, price, now):
+    market = instrument.market
+    if market.exchange == 'gate':
+        tickers, received_at = payloads[0]
+        spec = getattr(instrument, 'spec', None)
+        return parse_oi(market, [tickers], price, now, received_at=received_at,
+                        contract_size=getattr(spec, 'contract_size', None))
+    # A unit price validates base quantities before a book is available.
+    return parse_oi(market, payloads, 1 if price is None else price, now)
+
+
 def value_open_interests(instruments,books,payloads,now,*,failures=None,routed_legs=None):
     """Value already-fetched OI against this attempt's common-unit books."""
     results=[]
@@ -539,7 +554,7 @@ def value_open_interests(instruments,books,payloads,now,*,failures=None,routed_l
         try:
             # Convert the common midpoint back to the venue's native denomination.
             price=(dec(book.bids[0][0])+dec(book.asks[0][0]))/2*i.multiplier
-            results.append(parse_oi(i.market,leg,price,now))
+            results.append(_parse_instrument_oi(i,leg,price,now))
         except OI_DATA_ERRORS as error:
             results.append(None)
             if failures is not None:
