@@ -1,12 +1,15 @@
 """Open-interest diagnostics use simulated venues and the real review journal."""
 import json
 import sqlite3
+import sys
 import unittest
 from concurrent.futures import Future
+from contextlib import contextmanager
 from dataclasses import replace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from tools.crossex_exec.admission import AdmissionError
+from tools.crossex_exec.engine import bounded_oi_failures
 from tools.crossex_exec.market import value_open_interests
 from tools.crossex_exec.open_interest import oi_urls, parse_oi
 from tools.crossex_exec.sizing import size_plan
@@ -19,6 +22,30 @@ import test_round7 as previous
 
 def failure(leg, exchange, kind, *, stage='payload', raw_symbol='BTCUSDT', **details):
     return dict(leg=leg, exchange=exchange, raw_symbol=raw_symbol, stage=stage, kind=kind, **details)
+
+
+@contextmanager
+def slow_batch_writes(market, now):
+    """Charge two milliseconds for writes to the real batch error list on the test thread."""
+    batch = market.batch
+    sink = None
+
+    def watch_errors(items, **options):
+        nonlocal sink
+        sink = options.get('errors')
+        return batch(items, **options)
+
+    def slow_writes(frame, event, method):
+        if event == 'c_call' and sink is not None and method.__name__ in ('append', 'extend') and method.__self__ is sink:
+            now[0] += .002
+
+    with patch.object(market, 'batch', side_effect=watch_errors):
+        previous_profile = sys.getprofile()
+        try:
+            sys.setprofile(slow_writes)
+            yield
+        finally:
+            sys.setprofile(previous_profile)
 
 
 class OIMarketDiagnosticsTests(unittest.TestCase):
@@ -93,7 +120,7 @@ class OIMarketDiagnosticsTests(unittest.TestCase):
 
     def test_value_parse_error_is_bounded_and_collector_errors_do_not_escape(self):
         class BrokenCollector(list):
-            def append(self, row):
+            def extend(self, rows):
                 raise RuntimeError('collector unavailable')
 
         raw=oi_payloads(self.legs,previous.NOW)
@@ -115,11 +142,11 @@ class OIMarketDiagnosticsTests(unittest.TestCase):
             last.set_result('last')
 
             class Collector(list):
-                def append(self, kind):
+                def extend(self, kinds):
                     # Model a request completing while the caller is recording diagnostics.
                     if not late.done():
                         late.set_result('late')
-                    super().append(kind)
+                    super().extend(kinds)
 
             errors = Collector()
             with (self.subTest(partial=partial), patch.object(market.queue, 'submit', side_effect=[first, late, last]),
@@ -150,6 +177,101 @@ class OIMarketDiagnosticsTests(unittest.TestCase):
         self.assertEqual(fetch.call_args.kwargs['errors'], [])
         self.assertEqual(failures, [])
 
+    def test_payload_parses_the_300_second_leg_before_publishing_the_first_failure(self):
+        now = [previous.NOW]
+        raw = oi_payloads(self.legs, now[0] - 300)
+        raw[0][1]['markPrice'] = 'NaN'
+        by_url = {url: row for leg, data in zip(self.legs, raw) for url, row in zip(oi_urls(leg.market), data)}
+        market = self.market(Limiter(clock=lambda: now[0]), by_url.__getitem__)
+        failures = Mock()
+
+        def slow_write(_):
+            now[0] += .002
+            raise RuntimeError('collector unavailable')
+
+        failures.append.side_effect = failures.extend.side_effect = slow_write
+        with patch('tools.crossex_exec.market.parse_oi', wraps=parse_oi) as parse:
+            self.assertEqual(market.open_interest_payloads(self.legs, failures=failures), [[], raw[1]])
+        self.assertEqual([call.args[3] for call in parse.call_args_list], [previous.NOW, previous.NOW])
+        failures.extend.assert_called_once_with([failure(0, 'binance', 'parse_invalid', error='nonfinite_number')])
+        failures.append.assert_not_called()
+
+    def test_partial_batch_error_publication_cannot_age_the_other_leg(self):
+        now = [previous.NOW]
+        raw = oi_payloads(self.legs, now[0] - 300)
+        by_url = {url: row for leg, data in zip(self.legs, raw) for url, row in zip(oi_urls(leg.market), data)}
+        mark = oi_urls(self.legs[0].market)[1]
+
+        def transport(url):
+            if url == mark:
+                raise TimeoutError()
+            return by_url[url]
+
+        market = self.market(Limiter(clock=lambda: now[0]), transport)
+        failures = []
+        with slow_batch_writes(market, now):
+            self.assertEqual(market.open_interest_payloads(self.legs, failures=failures), [[], raw[1]])
+        self.assertEqual(failures, [failure(0, 'binance', 'timeout')])
+        self.assertEqual(now[0], previous.NOW + .002)
+
+    def test_payload_clock_is_sampled_again_after_the_previous_parse(self):
+        now = [previous.NOW]
+        raw = oi_payloads(self.legs, now[0] - 300)
+        market = self.market(Limiter(clock=lambda: now[0]), None)
+        failures = []
+
+        def parse(market_key, data, price, at):
+            value = parse_oi(market_key, data, price, at)
+            now[0] += .002
+            return value
+
+        with (patch.object(market, 'batch', return_value=raw[0] + raw[1]),
+              patch('tools.crossex_exec.market.parse_oi', side_effect=parse)):
+            self.assertEqual(market.open_interest_payloads(self.legs, failures=failures), [raw[0], []])
+        self.assertEqual(failures, [failure(1, 'bitget', 'stale', age_s=300.0)])
+
+    def test_value_finishes_both_parses_before_one_failing_extend(self):
+        raw = oi_payloads(self.legs, previous.NOW)
+        failures = Mock()
+        trace = []
+
+        def invalid(market, *args):
+            trace.append(market.exchange)
+            raise ValueError('bad_payload')
+
+        def unavailable(rows):
+            trace.append('publish')
+            raise RuntimeError('collector unavailable')
+
+        failures.extend.side_effect = unavailable
+        with patch('tools.crossex_exec.market.parse_oi', side_effect=invalid):
+            self.assertEqual(value_open_interests(self.legs, previous.books(), raw, previous.NOW, failures=failures),
+                             [None, None])
+        self.assertEqual(trace, ['binance', 'bitget', 'publish'])
+        failures.extend.assert_called_once_with([failure(n, leg.market.exchange, 'parse_invalid', stage='value',
+                                                         error='bad_payload') for n, leg in enumerate(self.legs)])
+
+    def test_batch_extends_errors_once_even_if_the_collector_rejects_them(self):
+        market = self.market(Limiter(), None)
+        items = [('gate', url, None) for url in ('ok', 'timeout', 'last')]
+        jobs = [Future() for _ in items]
+        jobs[0].set_result('ok')
+        jobs[1].set_exception(TimeoutError())
+        jobs[2].set_result('last')
+        for partial in (False, True):
+            errors = Mock()
+            errors.extend.side_effect = RuntimeError('collector unavailable')
+            with self.subTest(partial=partial), patch.object(market.queue, 'submit', side_effect=jobs):
+                if partial:
+                    self.assertEqual(market.batch(items, partial=True, errors=errors), ['ok', None, 'last'])
+                    errors.extend.assert_called_once_with([None, 'timeout', None])
+                else:
+                    with self.assertRaisesRegex(ValueError, '^public_data_unavailable$') as caught:
+                        market.batch(items, errors=errors)
+                    self.assertIs(caught.exception.__context__, jobs[1].exception())
+                    errors.extend.assert_called_once_with([None, 'timeout'])
+                errors.append.assert_not_called()
+
 
 class OIReviewDiagnosticsTests(unittest.TestCase):
     setUp = previous.EngineAdmissionTests.setUp
@@ -179,6 +301,60 @@ class OIReviewDiagnosticsTests(unittest.TestCase):
                 self.assertEqual(self.last_oi_failures,expected)
                 fetch.assert_called_once()
                 books.assert_not_called()
+
+    def test_review_at_300_seconds_keeps_three_oi_and_two_book_requests_with_slow_batch_writes(self):
+        legs = list(self.market.mapping.values())
+        raw = oi_payloads(legs, self.now[0] - 300)
+        by_url = {url: row for leg, data in zip(legs, raw) for url, row in zip(oi_urls(leg.market), data)}
+        requests = []
+
+        def transport(url):
+            requests.append(url)
+            if url in by_url:
+                return by_url[url]
+            if 'bitget' in url:
+                return latency.depth('bitget', self.now[0], '102', '102.02')
+            return latency.depth('binance', self.now[0])
+
+        market = self.oi_market(transport)
+        market.client.limiter.opening_book_reserve = True
+        with slow_batch_writes(market, self.now):
+            books, fill, _ = self.review_with_market(market)
+        self.assertCountEqual(requests[:3], by_url.keys())
+        self.assertEqual(len(requests), 5)
+        self.assertEqual(len(books), 2)
+        self.assertEqual(fill['sizing']['oi_legs_used'], [0, 1])
+
+    def test_gate_timestamp_1e28_preserves_stale_in_the_review_and_value_diagnostics(self):
+        gate = instrument('gate')
+        gate.market = replace(gate.market, raw_symbol='BTC_USDT')
+        legs = [gate, instrument('bitget')]
+        raw = [[dict(contract='BTC_USDT', time='1e28', open_interest_usd='125000')]]
+        payloads = [raw, oi_payloads(legs, self.now[0])[1]]
+        by_url = {oi_urls(i.market)[0]: leg[0] for i, leg in zip(legs, payloads)}
+        market = self.oi_market(by_url.__getitem__)
+        with (patch.object(self.engine, 'market', market), patch.object(market, 'opening_books') as books,
+              self.assertRaisesRegex(AdmissionError, '^oi_missing$') as caught):
+            self.engine.opening_review(legs, [], [], [], dict(baseline_bps='0'))
+        books.assert_not_called()
+        self.assertEqual(caught.exception.details['oi_failures'], [failure(0, 'gate', 'stale', raw_symbol='BTC_USDT')])
+        failures = []
+        values = value_open_interests(legs, previous.books(), payloads, self.now[0], failures=failures)
+        self.assertIsNone(values[0])
+        self.assertIsNotNone(values[1])
+        self.assertEqual(failures, [failure(0, 'gate', 'stale', stage='value', raw_symbol='BTC_USDT')])
+
+    def test_provider_exception_preserves_an_already_reported_stale_leg(self):
+        stale = failure(0, 'binance', 'stale')
+
+        def interrupted(legs, *, failures):
+            failures.extend([stale])
+            raise OSError('batch interrupted')
+
+        with patch.object(self.market, 'open_interest_payloads', interrupted), patch.object(self.market, 'books') as books:
+            self.assert_oi_skip('oi-interrupted')
+        books.assert_not_called()
+        self.assertEqual(self.last_oi_failures, [stale, failure(1, 'bitget', 'request_failed')])
 
     def test_oi_expiring_after_payload_validation_records_value_stage_without_refetch(self):
         instruments=list(self.market.mapping.values())
@@ -353,3 +529,28 @@ class OIReviewDiagnosticsTests(unittest.TestCase):
         skips = [json.loads(e['value']) for e in self.store.events() if e['kind'] == 'SKIP']
         self.assertCountEqual(skips, expected)
         self.assertEqual(self.store.meta('opening_skip_counts')['oi_missing'], len(expected))
+
+    def test_emoji_and_json_escapes_keep_the_single_skip_under_the_8k_sqlite_limit(self):
+        limit = self.store.db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 8192)
+        self.addCleanup(self.store.db.setlimit, sqlite3.SQLITE_LIMIT_LENGTH, limit)
+        for identity, glyph in (('oi-emoji', '\U0001f600'), ('oi-control', '\x00')):
+            text = glyph * 16384
+            error = AdmissionError('oi_missing')
+            error.details = {'oi_failures': [dict(leg=n, exchange=text, raw_symbol=text, stage=text, kind=text,
+                                                  error=text) for n in range(4)]}
+            with self.subTest(identity=identity), patch.object(self.engine, 'opening_review', side_effect=error):
+                self.assertIsNone(self.engine.ingest(self.trigger(identity)))
+        skips = [json.loads(event['value']) for event in self.store.events() if event['kind'] == 'SKIP']
+        projected = [dict(leg=n, exchange='?'*16, raw_symbol='?'*40, stage='?'*16, kind='?'*24, error='?'*80)
+                     for n in range(4)]
+        self.assertGreater(len(json.dumps(projected).encode('utf-8')), 1024)
+        self.assertLessEqual(len(json.dumps(projected[:3]).encode('utf-8')), 1024)
+        self.assertCountEqual(skips, [dict(id='oi-emoji', reason='oi_missing', stage='review', oi_failures=projected[:3]),
+                                      dict(id='oi-control', reason='oi_missing', stage='review')])
+        self.assertEqual(self.store.meta('opening_skip_counts')['oi_missing'], 2)
+
+    def test_json_budget_includes_a_fourth_row_at_exactly_1024_bytes(self):
+        rows = [dict(leg=n, exchange='?'*16, raw_symbol='?'*40, stage='?'*16, kind='?'*24, error='?'*76)
+                for n in range(4)]
+        self.assertEqual(len(json.dumps(rows).encode('utf-8')), 1024)
+        self.assertEqual(bounded_oi_failures(rows), rows)

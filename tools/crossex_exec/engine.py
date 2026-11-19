@@ -1,4 +1,5 @@
 """Single coordinator owns pair state; parallel workers only own individual orders."""
+import json
 import math
 import sys
 import time
@@ -119,13 +120,15 @@ def bounded_oi_failures(failures):
             value = source[key]
             if type(value) is not str:
                 raise TypeError('invalid OI text field')
-            row[key] = value[:limit]
+            row[key] = value.encode('ascii', errors='replace')[:limit].decode('ascii')
         if 'age_s' in source:
             age = float(source['age_s'])
             if not math.isfinite(age):
                 raise ValueError('nonfinite OI age')
             row['age_s'] = age
         rows.append(row)
+    while rows and len(json.dumps(rows).encode('utf-8')) > 1024:
+        rows.pop()
     return rows
 
 
@@ -364,7 +367,7 @@ class Engine:
         try:
             payloads=self.market.open_interest_payloads(instruments,failures=failures)
         except Exception:
-            raise oi_missing_error(instruments,routed_legs,'payload','request_failed') from None
+            raise oi_missing_error(instruments,routed_legs,'payload','request_failed',failures) from None
         payload_count=len(payloads or ())
         if payload_count!=len(instruments) or any(not payloads[n] for n in routed_legs):
             missing=(n for n in routed_legs if n>=payload_count or not payloads[n])
@@ -1197,7 +1200,9 @@ class Engine:
                 details=getattr(error,'details',None) if isinstance(error,AdmissionError) or reason=='oi_missing' else None
                 if isinstance(details,dict):
                     if 'oi_failures' in details:
-                        diagnostics['oi_failures']=bounded_oi_failures(details['oi_failures'])
+                        rows=bounded_oi_failures(details['oi_failures'])
+                        if rows:
+                            diagnostics['oi_failures']=rows
                     elif isinstance(error,AdmissionError):
                         diagnostics['book_timing']=details
             except Exception:

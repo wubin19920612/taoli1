@@ -18,6 +18,35 @@ from .external_fx import NATIVE_USD, spot_urls, parse_spot_quote, quote_band
 OPENING_OI_TIMEOUT = 3
 OI_DATA_ERRORS = (AttributeError, IndexError, KeyError, TypeError, ValueError, ArithmeticError)
 
+
+class _DeferredBatchErrors(list):
+    """OI requests job errors with the responses so it can validate every leg before publishing."""
+
+
+class _PartialBatch(list):
+    """Keep failed job types with the responses until OI has checked every timestamp."""
+
+    def __init__(self, results, failed_jobs):
+        super().__init__(results)
+        self.failed_jobs = failed_jobs
+
+
+def _extend_diagnostics(collector, rows):
+    if collector is not None and rows:
+        try:
+            collector.extend(rows)
+        except Exception:
+            pass
+
+
+def _publish_job_errors(errors, failed_jobs, count):
+    if errors is not None:
+        kinds = [None] * count
+        for index, error_type in failed_jobs:
+            kinds[index] = 'timeout' if issubclass(error_type, TimeoutError) else 'request_failed'
+        _extend_diagnostics(errors, kinds)
+
+
 RULES_URL='https://api.gateio.ws/api/v4/crossex/rule/symbols'
 CATALOGS={
     'gate':'https://api.gateio.ws/api/v4/futures/usdt/contracts',
@@ -204,22 +233,7 @@ class MarketData:
 
     def batch(self,items,priority=1,partial=False,*,opening_books=False,timings=None,deadline=None,errors=None):
         """Optional errors follow job order, with None for a successful result."""
-        error_types = {}
-
-        def publish_errors(count):
-            # A caller's collector may block. Only publish after the last job decision.
-            if errors is None:
-                return
-            for index in range(count):
-                try:
-                    error_type = error_types.get(index)
-                    kind = None
-                    if error_type is not None:
-                        kind = 'timeout' if issubclass(error_type, TimeoutError) else 'request_failed'
-                    errors.append(kind)
-                except Exception:
-                    pass
-
+        failed_jobs = []
         queue,pool=(self.opening_queue,self.opening_pool) if opening_books else (self.queue,self.pool)
         with queue.lock:
             jobs=[queue.submit(ex,url,priority,convert,opening_book=opening_books) for ex,url,convert in items]
@@ -238,9 +252,9 @@ class MarketData:
                 results.append(j.result())
             except Exception as error:
                 if errors is not None:
-                    error_types[len(results)] = type(error)
+                    failed_jobs.append((len(results), type(error)))
                 if not partial:
-                    publish_errors(len(results)+1)
+                    _publish_job_errors(errors, failed_jobs, len(results)+1)
                     raise ValueError('public_data_unavailable') from None
                 results.append(None)
             if opening_books and timings is not None:
@@ -249,7 +263,9 @@ class MarketData:
                 timings.append(dict(queue_wait_ms=None if sent is None else round((sent-j.queued_at)*1000,1),
                                     wire_ms=None if returned is None else round((returned-sent)*1000,1),
                                     limiter_blocked=j.limiter_blocked))
-        publish_errors(len(results))
+        if type(errors) is _DeferredBatchErrors:
+            return _PartialBatch(results, failed_jobs) if failed_jobs else results
+        _publish_job_errors(errors, failed_jobs, len(results))
         return results
 
     def fetch(self,ex,url,priority=1):
@@ -473,29 +489,41 @@ class MarketData:
                 routed_legs.append((n,i.market,slice(start,len(items))))
         if not items:
             return results
-        errors=[] if failures is not None else None
+        errors = _DeferredBatchErrors() if failures is not None else None
+        pending = []
         try:
             responses=self.batch(items,priority=1,partial=True,deadline=deadline,errors=errors)
         except Exception:
             if failures is not None:
-                for n,market,_ in routed_legs:
-                    record_oi_failure(failures,n,market,'payload','request_failed')
+                rows = []
+                for n, market, _ in routed_legs:
+                    record_oi_failure(rows, n, market, 'payload', 'request_failed')
+                _extend_diagnostics(failures, rows)
             return results
         for n,market,span in routed_legs:
             raw=responses[span]
             if len(raw) != span.stop-span.start or any(row is None for row in raw):
                 if failures is not None:
-                    kind='timeout' if 'timeout' in errors[span] else 'request_failed'
-                    record_oi_failure(failures,n,market,'payload',kind)
+                    pending.append((n, market, span, None))
                 continue
             try:
                 # A unit price validates base quantities before a book is available.
                 parse_oi(market,raw,1,self.clock())
             except OI_DATA_ERRORS as error:
                 if failures is not None:
-                    record_oi_failure(failures,n,market,'payload','parse_invalid',error)
+                    pending.append((n, market, span, error))
                 continue
             results[n]=raw
+        if pending:
+            if isinstance(responses, _PartialBatch):
+                _publish_job_errors(errors, responses.failed_jobs, len(responses))
+            rows = []
+            for n, market, span, error in pending:
+                kind = 'parse_invalid'
+                if error is None:
+                    kind = 'timeout' if 'timeout' in errors[span] else 'request_failed'
+                record_oi_failure(rows, n, market, 'payload', kind, error)
+            _extend_diagnostics(failures, rows)
         return results
 
     def open_interests(self,instruments,books):
@@ -506,6 +534,7 @@ class MarketData:
 def value_open_interests(instruments,books,payloads,now,*,failures=None,routed_legs=None):
     """Value already-fetched OI against this attempt's common-unit books."""
     results=[]
+    pending = []
     for n,(i,book,leg) in enumerate(zip(instruments,books,payloads)):
         try:
             # Convert the common midpoint back to the venue's native denomination.
@@ -514,11 +543,16 @@ def value_open_interests(instruments,books,payloads,now,*,failures=None,routed_l
         except OI_DATA_ERRORS as error:
             results.append(None)
             if failures is not None:
-                try:
-                    market=i.market
-                    routed=oi_urls(market) if routed_legs is None else n in routed_legs
-                    if routed:
-                        record_oi_failure(failures,n,market,'value','parse_invalid',error)
-                except Exception:
-                    pass
+                pending.append((n, i, error))
+    if pending:
+        rows = []
+        for n, i, error in pending:
+            try:
+                market = i.market
+                routed = oi_urls(market) if routed_legs is None else n in routed_legs
+                if routed:
+                    record_oi_failure(rows, n, market, 'value', 'parse_invalid', error)
+            except Exception:
+                pass
+        _extend_diagnostics(failures, rows)
     return results

@@ -1,4 +1,5 @@
 """Documented public OI; unsupported or unverifiable responses stay missing."""
+import math
 from urllib.parse import urlencode
 
 from tools.fill_sim.core import dec
@@ -18,7 +19,13 @@ def record_oi_failure(failures, leg, market, stage, kind, error=None):
     try:
         row = dict(leg=leg, exchange=market.exchange, raw_symbol=market.raw_symbol, stage=stage, kind=kind)
         if isinstance(error, OIStaleError):
-            row.update(kind='stale', age_s=float(round(error.age_s, 1)))
+            row['kind'] = 'stale'
+            try:
+                age = float(round(error.age_s, 1))
+                if math.isfinite(age):
+                    row['age_s'] = age
+            except Exception:
+                pass  # The parser already established staleness. The age is optional.
         elif error is not None:
             row['error'] = str(error)[:80]
         failures.append(row)
