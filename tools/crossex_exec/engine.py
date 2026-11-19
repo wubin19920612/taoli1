@@ -1147,11 +1147,12 @@ class Engine:
             return
         try:
             markets=[Market.from_payload(payload[k]) for k in ('buy_market_key','sell_market_key')]
-            unmapped=[str(m.key) for m in markets if m.key not in self.market.mapping]
+            mapping=self.market.mapping
+            unmapped=[str(m.key) for m in markets if m.key not in mapping]
             if unmapped:
                 self.store.skip(identity,'market_unmapped',stage='review',markets=unmapped)
                 return
-            instruments=[self.market.mapping[m.key] for m in markets]
+            instruments=[mapping[m.key] for m in markets]
             for i in instruments:
                 self.external.check_order(dict(instrument=i.dump()))
             config=self.settings.read()
@@ -1184,7 +1185,7 @@ class Engine:
                 self.accounts.check_instruments(instruments)
             except LeverageMismatch as mismatch:
                 self.accounts.ensure_opening_leverage(
-                    mismatch.contracts, self.store, lambda: self.live and self.can_open())
+                    mismatch.contracts, self.store, lambda: self.live and self.can_open(), instruments=instruments)
             except BitgetLeverageSkipped as error:
                 outcome = 'leverage_set_skipped'
                 record_leverage_outcome(self.store, error, exchange='bitget', symbol=error.symbol,

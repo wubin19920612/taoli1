@@ -10,6 +10,8 @@ import pytest
 from tools.crossex_exec.accounts import Accounts, FeeSnapshot
 from tools.crossex_exec.adapters import Bitget, CrossEx
 from tools.crossex_exec.engine import Engine
+from tools.crossex_exec.market import native_instrument
+from tools.crossex_exec.policy import Instrument
 from tools.crossex_exec.security import Credentials
 from tools.crossex_exec.storage import Store
 from tools.crossex_exec.transport import APIError, Transport
@@ -19,6 +21,7 @@ from round18_fixtures import OfflineAccountHTTP
 from test_engine import FakeMarket, trigger
 from test_exec import FakeVenue, instrument, setUpModule, tearDownModule
 from test_round2 import settings
+from test_round11_external import rule as crossex_rule
 
 
 GATE = instrument().symbol
@@ -140,6 +143,76 @@ def test_gate_sets_full_symbol_and_continues_this_review(engine, http):
     assert ('GET', GATE_LEVERAGE, {'symbols': GATE}) == http.calls[-1]
     assert events(engine, 'LEVERAGE_SET') == [dict(exchange='crossex', symbol=GATE, before={'leverage': '10'},
             target={'leverage': '3'}, result='success', error=None)]
+
+
+def catalog_instrument(default_leverage):
+    native = dict(symbol='BTCUSDT', status='TRADING', contractType='PERPETUAL', baseAsset='BTC', quoteAsset='USDT',
+                  underlyingType='COIN', underlyingSubType=[], filters=[
+                      dict(filterType='PRICE_FILTER', tickSize='.01'),
+                      dict(filterType='LOT_SIZE', stepSize='.001', minQty='.001', maxQty='1000')])
+    matched = crossex_rule(GATE)
+    if default_leverage is not None:
+        matched['default_leverage'] = default_leverage
+    other = dict(crossex_rule('OKX_FUTURE_BTC_USDT'), default_leverage='1')
+    return native_instrument('binance', native, [other, matched])
+
+
+def test_missing_catalog_default_preserves_legacy_and_bitget_rows():
+    for selected in (catalog_instrument(None), instrument('bitget')):
+        row = selected.dump()
+        assert 'default_leverage' not in row
+        assert Instrument.load(row).dump() == row
+
+
+@pytest.mark.parametrize(('raw', 'parsed', 'target'), [
+    ('2', '2', '2'), ('1', '1', '1'), ('2.00', '2.00', '2'), ('3', '3', '3'), ('5', '5', '3'),
+    ('2.5', '2.5', '3'), (None, None, '3'), ('garbage', None, '3'), ('0', None, '3'),
+    ('-1', None, '3'), ('NaN', None, '3'),
+])
+def test_crossex_catalog_default_controls_write_and_audit(engine, http, raw, parsed, target):
+    selected = catalog_instrument(raw)
+    restored = Instrument.load(selected.dump())
+    assert restored.default_leverage == parsed
+    engine.market.mapping[restored.market.key] = restored
+    engine.accounts.leverages[GATE] = http.responses[GATE_LEVERAGE][GATE] = '5'
+
+    reviewed(engine)
+
+    assert http.writes == [(GATE_LEVERAGE, dict(symbol=GATE, leverage=target))]
+    assert http.calls[-1] == ('GET', GATE_LEVERAGE, {'symbols': GATE})
+    assert engine.accounts.leverages[GATE] == target
+    attempt, = events(engine, 'LEVERAGE_SET_ATTEMPT')
+    assert attempt == dict(exchange='crossex', symbol=GATE, before={'leverage': '5'}, target={'leverage': target})
+    assert events(engine, 'LEVERAGE_SET') == [dict(attempt, result='success', error=None)]
+
+
+def test_catalog_refresh_during_review_preserves_selected_cap_and_bitget_target(engine, http):
+    selected = catalog_instrument('2')
+    refreshed = catalog_instrument('1')
+    key = selected.market.key
+    engine.market.mapping[key] = selected
+    http.responses[BG_SETTINGS]['symbolConfigList'][0]['leverage'] = '5'
+
+    def publish_refresh(path):
+        if path == BG_SETTINGS:
+            engine.market.mapping = {**engine.market.mapping, key: refreshed}
+
+    http.after_read = publish_refresh
+    reviewed(engine)
+    assert engine.market.mapping[key] is refreshed
+    assert http.writes == [(GATE_LEVERAGE, dict(symbol=GATE, leverage='2')),
+                           (BG_LEVERAGE, dict(symbol=BITGET, category='USDT-FUTURES', marginMode='crossed', leverage='3'))]
+
+
+def test_crossex_capped_write_accepts_readback_above_catalog_target(engine, http):
+    selected = catalog_instrument('1')
+    engine.market.mapping[selected.market.key] = selected
+    http.apply_write = False
+    http.before_write = lambda: http.responses[GATE_LEVERAGE].update({GATE: '3'})
+
+    reviewed(engine)
+    assert http.writes == [(GATE_LEVERAGE, dict(symbol=GATE, leverage='1'))]
+    assert engine.accounts.leverages[GATE] == '3'
 
 
 @pytest.mark.parametrize('leverage', ['1', '2', '2.5'])

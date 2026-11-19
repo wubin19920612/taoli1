@@ -351,7 +351,8 @@ class MarketData:
             if not self.closed:
                 self.mapping=dict(mapped)
                 self.catalog_errors=dict(errors)
-                self.store.set_meta('mapping',dict(at=self.clock(),errors=errors,instruments={k:v.dump() for k,v in mapped.items()}))
+                self.store.set_meta('mapping',dict(at=self.clock(),errors=errors,
+                                                   instruments={k:v.dump() for k,v in self.mapping.items()}))
 
     def books(self,instruments):
         return self._books(instruments,parse_book)

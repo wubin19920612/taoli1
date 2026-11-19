@@ -15,6 +15,7 @@ class Instrument:
     quantity_multiplier: str = '1'
     mapping_id: str = None
     rule_type: str = None
+    default_leverage: str | None = None
 
     @property
     def base(self):
@@ -41,11 +42,15 @@ class Instrument:
                       for levels in (book.bids, book.asks)], book.received_at, book.exchange_at)
 
     def dump(self):
-        return asdict(self)
+        row = asdict(self)
+        if self.default_leverage is None:
+            del row['default_leverage']  # Preserve legacy catalog fingerprints when the optional rule is absent.
+        return row
 
     @classmethod
     def load(cls, row):
         return cls(Market(**row['market']),Spec(**row['spec']),row['symbol'],row['tick'],
+                   default_leverage=row.get('default_leverage'),
                    **{k:row[k] for k in ('category','canonical_base','quantity_multiplier','mapping_id','rule_type') if k in row})
 
     @property
@@ -75,7 +80,14 @@ def mapped_instrument(market, spec, native_tick, rules):
                    min_qty=str(max(dec(spec.min_qty),dec(r['min_size']))),
                    min_notional=str(max(dec(spec.min_notional),dec(r['min_notional'] or 0))),
                    max_qty=str(min(dec(spec.max_qty),dec(r['max_limit_size']))))
-    return Instrument(market,spec,symbol,str(common_step(native_tick,r['tick_size'])))
+    # A malformed optional default still leaves the validated trading rule usable.
+    try:
+        leverage = dec(r.get('default_leverage'))
+        default_leverage = str(leverage) if leverage > 0 else None
+    except ValueError:
+        default_leverage = None
+    return Instrument(market,spec,symbol,str(common_step(native_tick,r['tick_size'])),
+                      default_leverage=default_leverage)
 
 
 def limit_price(deepest, side, tick, bps=3):

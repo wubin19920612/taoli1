@@ -172,6 +172,16 @@ def _opening_leverage_allowed(leverage):
     return leverage is not None and MIN_OPENING_LEVERAGE <= leverage <= dec(TARGET_LEVERAGE)
 
 
+def _crossex_leverage_target(default_leverage):
+    try:
+        cap = dec(default_leverage)
+    except ValueError:
+        return TARGET_LEVERAGE
+    if MIN_OPENING_LEVERAGE <= cap < dec(TARGET_LEVERAGE) and cap == cap.to_integral_value():
+        return str(int(cap))
+    return TARGET_LEVERAGE
+
+
 class LeverageMismatch(ValueError):
     def __init__(self, contracts):
         self.contracts = contracts
@@ -278,13 +288,14 @@ class _LeverageDeadline:
 
 class _LeverageAttempt:
     """Transport guard for one contract. A reservation survives an ambiguous exit."""
-    def __init__(self, exchange, symbol, venue, store, can_open, clock, deadline, before):
+    def __init__(self, exchange, symbol, venue, store, can_open, clock, deadline, before, target_leverage):
         self.exchange, self.symbol, self.venue = exchange, symbol, venue
         self.store, self.can_open, self.clock = store, can_open, clock
         self.deadline = deadline
         self.reservation = None
         self.sent = False
-        target = dict(leverage=TARGET_LEVERAGE)
+        self.target_leverage = target_leverage
+        target = dict(leverage=target_leverage)
         previous = dict(leverage=str(before) if before is not None else None)
         if exchange == 'bitget':
             target['marginMode'] = 'crossed'
@@ -364,7 +375,7 @@ class _LeverageAttempt:
         self.window(self.clock())
         self.stage = 'write'  # A rate-limit refusal at write admission also counts.
         try:
-            self.venue.set_leverage(self.symbol, TARGET_LEVERAGE, before_send=self, deadline=self.deadline())
+            self.venue.set_leverage(self.symbol, self.target_leverage, before_send=self, deadline=self.deadline())
             self.deadline()
             self.stage = 'readback'
             readback = read_leverage(self.exchange, self.symbol, self.deadline, allow_missing=False)
@@ -606,11 +617,13 @@ class Accounts:
         if mismatches:
             raise LeverageMismatch(mismatches)
 
-    def ensure_opening_leverage(self, contracts, store, can_open):
+    def ensure_opening_leverage(self, contracts, store, can_open, *, instruments=()):
         any_sent = False
         current = dict(exchange=None, symbol=None, step='start')
         try:
             deadline = _LeverageDeadline(self.clock)
+            targets = {('crossex', i.symbol): _crossex_leverage_target(i.default_leverage)
+                       for i in instruments if i.market.exchange != 'bitget'}
             for exchange, symbol in contracts:
                 current.update(exchange=exchange, symbol=symbol, step='read_leverage')
                 attempt = None
@@ -623,7 +636,8 @@ class Accounts:
                     continue
                 venue = self.bitget if exchange == 'bitget' else self.cross
                 current['step'] = 'set_and_confirm'
-                attempt = _LeverageAttempt(exchange, symbol, venue, store, can_open, self.clock, deadline, before)
+                target = targets.get((exchange, symbol), TARGET_LEVERAGE)
+                attempt = _LeverageAttempt(exchange, symbol, venue, store, can_open, self.clock, deadline, before, target)
                 try:
                     attempt.set_and_confirm(self._read_leverage)
                 finally:
