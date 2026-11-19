@@ -33,8 +33,8 @@ class OpeningQueueTests(unittest.TestCase):
         self.store=self.enterContext(Store(Path(temp)/'db'))
         self.legs=[instrument(),instrument('bitget')]
 
-    def market(self,limiter,transport):
-        market=MarketData(self.store,clock=limiter.clock,client=PublicClient(limiter,transport))
+    def market(self,limiter,transport,*,clock=None):
+        market=MarketData(self.store,clock=clock or limiter.clock,client=PublicClient(limiter,transport))
         self.addCleanup(market.close)
         return market
 
@@ -166,21 +166,29 @@ class OpeningQueueTests(unittest.TestCase):
         self.assertFalse(limiter.admit_send('bybit',opening_book=True))
 
     def test_one_batch_sends_both_oi_legs_and_keeps_binance_payload_order(self):
-        together=threading.Barrier(3,timeout=3)
+        first_sends=threading.Barrier(3,timeout=3)
         payloads=oi_payloads(self.legs,previous.NOW)
         by_url={url:row for i,leg in zip(self.legs,payloads) for url,row in zip(oi_urls(i.market),leg)}
+        live,history,mark=oi_urls(self.legs[0].market)
+        sent={}
         def transport(url):
-            together.wait()
+            sent[url]=time.monotonic()
+            if url!=mark:
+                first_sends.wait()
             return by_url[url]
-        market=self.market(Limiter(clock=lambda:previous.NOW),transport)
-        with patch.object(market,'batch',wraps=market.batch) as batch:
+        limiter=Limiter(clock=time.monotonic,opening_book_reserve=True)
+        market=self.market(limiter,transport,clock=lambda:previous.NOW)
+        with (patch.object(market,'batch',wraps=market.batch) as batch,
+              patch.object(market.opening_queue,'submit',wraps=market.opening_queue.submit) as book_submit):
             # Aster has no verified OI URL and must not shift the following leg.
             rows=market.open_interest_payloads([self.legs[0],instrument('aster'),self.legs[1]])
         batch.assert_called_once()
+        book_submit.assert_not_called()
         self.assertEqual(rows,[payloads[0],[],payloads[1]])
+        self.assertGreaterEqual(sent[mark]-max(sent[live],sent[history]),1)
         self.legs[1].quantity_multiplier='1000'
         book=Book([['.100','10']],[['.102','10']],previous.NOW)
-        partial=value_open_interests(self.legs,[book,book],[[payloads[0][0],None],payloads[1]],previous.NOW)
+        partial=value_open_interests(self.legs,[book,book],[[*payloads[0][:2],None],payloads[1]],previous.NOW)
         self.assertIsNone(partial[0])
         self.assertEqual(dec(partial[1]['usd']),101*100000)
 
@@ -210,8 +218,8 @@ class OpeningReviewTests(unittest.TestCase):
     trigger=previous.EngineAdmissionTests.trigger
 
     def oi_market(self,transport):
-        clock=lambda:self.now[0]
-        market=MarketData(self.store,clock=clock,client=PublicClient(Limiter(clock=clock),transport))
+        # Venue quota rolls forward even when the admission-time fixture is held at a freshness boundary.
+        market=MarketData(self.store,clock=lambda:self.now[0],client=PublicClient(Limiter(),transport))
         self.addCleanup(market.close)
         return market
 
@@ -346,7 +354,6 @@ class OpeningReviewTests(unittest.TestCase):
             release.set()
             for worker in market.queue.workers:
                 worker.result(timeout=3)
-        self.now[0]+=1  # Advance the simulated venue rate-limit window.
         self.assertEqual(market.open_interest_payloads(instruments),raw)
         self.assertCountEqual(sent,(urls[0]+urls[1])*2)
 
@@ -355,8 +362,8 @@ class OpeningReviewTests(unittest.TestCase):
         raw=oi_payloads(instruments,self.now[0])
         urls=[oi_urls(i.market) for i in instruments]
         by_url={url:row for group,leg in zip(urls,raw) for url,row in zip(group,leg)}
-        mark_url=urls[0][1]
-        marks=iter((TimeoutError('wire timeout'),dict(raw[0][1],markPrice='NaN'),raw[0][1]))
+        mark_url=urls[0][2]
+        marks=iter((TimeoutError('wire timeout'),dict(raw[0][2],markPrice='NaN'),raw[0][2]))
         sent=[]
         def transport(url):
             sent.append(url)
@@ -380,9 +387,7 @@ class OpeningReviewTests(unittest.TestCase):
         market=self.oi_market(by_url.__getitem__)
         self.assertEqual(market.open_interest_payloads(instruments),raw)
         self.now[0]+=.001
-        # Open the next venue window while keeping the exchange age at 300.001 s.
-        with (patch.object(market.client.limiter,'clock',return_value=self.now[0]+1),
-              patch.object(self.market,'open_interest_payloads',market.open_interest_payloads),
+        with (patch.object(self.market,'open_interest_payloads',market.open_interest_payloads),
               patch.object(market,'batch',wraps=market.batch) as batch):
             self.assert_oi_skip('oi-expired')
         batch.assert_called_once()

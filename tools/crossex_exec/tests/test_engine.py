@@ -23,7 +23,8 @@ def oi_payloads(instruments, at, quantity='100000'):
     for i in instruments:
         symbol=i.market.raw_symbol
         if i.market.exchange=='binance':
-            legs.append([[dict(symbol=symbol,sumOpenInterest=quantity,sumOpenInterestValue=str(dec(quantity)*100),
+            legs.append([dict(symbol=symbol,openInterest=quantity,time=stamp),
+                         [dict(symbol=symbol,sumOpenInterest=quantity,sumOpenInterestValue=str(dec(quantity)*100),
                                timestamp=stamp)],dict(symbol=symbol,markPrice='100',time=stamp)])
         elif i.market.exchange=='bitget':
             legs.append([dict(code='00000',data=dict(openInterestList=[dict(symbol=symbol,size=quantity)],ts=stamp))])
