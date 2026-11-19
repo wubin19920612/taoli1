@@ -267,7 +267,7 @@ class World:
         seed_baseline(self.store,self.now,'50.01' if opening_fault == 'baseline_not_flat' else '5')
         self.market = SimpleNamespace(mapping={i.market.key:i for i in self.instruments}, books=self.books,
             funding=self.funding,
-            open_interest_payloads=lambda instruments:oi_payloads(instruments,self.now),
+            open_interest_payloads=lambda instruments,**_:oi_payloads(instruments,self.now),
             turnovers=lambda instruments:['999999' if self.opening_fault=='volume_too_low' else '10000000']*len(instruments),
             cached_turnovers=lambda instruments:['999999' if self.opening_fault=='volume_too_low' else '10000000']*len(instruments))
         if opening_fault=='size_too_small':

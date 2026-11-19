@@ -292,7 +292,7 @@ class PublicBatchTests(unittest.TestCase):
         from tools.crossex_exec.baseline import BATCH_URLS
         with tempfile.TemporaryDirectory() as tmp, Store(Path(tmp)/'db') as store:
             market = MarketData(store, clock=lambda:NOW)
-            def batch(items, priority=1, partial=False):
+            def batch(items, priority=1, partial=False, **_):
                 self.assertEqual(len(items),6)
                 self.assertTrue(partial)
                 self.assertEqual(priority,2)

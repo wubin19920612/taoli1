@@ -22,7 +22,7 @@ class BatchMarketTests(unittest.TestCase):
         self.rows = [native(ex, base) for ex in ('binance', 'bitget') for base in ('BTC', 'ETH')]
         self.market.publish_mapping({i.market.key: i for i in self.rows}, {})
 
-    def batch(self, items, priority=1, partial=False):
+    def batch(self, items, priority=1, partial=False, **_):
         result = []
         for ex, url, convert in items:
             if ex == 'binance':
@@ -71,7 +71,7 @@ class BatchMarketTests(unittest.TestCase):
         self.assertEqual(bases,())
 
     def test_server_timestamp_after_request_start_uses_receipt_for_age(self):
-        def delayed(items,priority=1,partial=False):
+        def delayed(items,priority=1,partial=False,**_):
             self.now+=.5
             return self.batch(items,priority,partial)
         with patch.object(self.market,'batch',side_effect=delayed):

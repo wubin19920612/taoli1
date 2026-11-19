@@ -66,7 +66,7 @@ class FakeMarket:
         # This fake is entirely in memory; production uses the read-only cache.
         return self.turnovers(instruments)
 
-    def open_interest_payloads(self,instruments):
+    def open_interest_payloads(self,instruments,**_):
         return oi_payloads(instruments,self.clock())
 
 

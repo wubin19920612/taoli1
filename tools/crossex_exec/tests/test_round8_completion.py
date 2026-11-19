@@ -225,7 +225,7 @@ class CompletionTests(unittest.TestCase):
                 captured_at=now,history_ok=True,max_abs_24h='0') for _ in instruments],
             turnovers=lambda instruments:['9000000']*len(instruments),
             cached_turnovers=lambda instruments:['9000000']*len(instruments),
-            open_interest_payloads=lambda instruments:oi_payloads(instruments,now,quantity='1000000'))
+            open_interest_payloads=lambda instruments,**_:oi_payloads(instruments,now,quantity='1000000'))
         accounts = SimpleNamespace(cross=venues[0],bitget=venues[1],snapshot=snapshot,
             position_snapshot=snapshot,validate_startup=snapshot,check_instruments=lambda rows:None,
             fee_snapshots={i.market.key:FeeSnapshot('0',now) for i in rows})

@@ -2,7 +2,6 @@
 import time
 import threading
 from copy import deepcopy
-from inspect import signature
 from urllib.parse import urlencode
 from tools.fill_sim.core import Market, dec
 from tools.fill_sim.exchanges import endpoint, parse_spec, parse_book, exact, check_response
@@ -18,17 +17,6 @@ from .external_fx import NATIVE_USD, spot_urls, parse_spot_quote, quote_band
 
 OPENING_OI_TIMEOUT = 3
 OI_DATA_ERRORS = (AttributeError, IndexError, KeyError, TypeError, ValueError, ArithmeticError)
-
-
-def oi_diagnostic_kwargs(method, implementation, **options):
-    """Older injected providers can still serve the request with a single call."""
-    try:
-        if getattr(method, '__func__', None) is not implementation:
-            signature(method).bind_partial(**options)
-        return options
-    except Exception:
-        return {}
-
 
 RULES_URL='https://api.gateio.ws/api/v4/crossex/rule/symbols'
 CATALOGS={
@@ -216,6 +204,22 @@ class MarketData:
 
     def batch(self,items,priority=1,partial=False,*,opening_books=False,timings=None,deadline=None,errors=None):
         """Optional errors follow job order, with None for a successful result."""
+        error_types = {}
+
+        def publish_errors(count):
+            # A caller's collector may block. Only publish after the last job decision.
+            if errors is None:
+                return
+            for index in range(count):
+                try:
+                    error_type = error_types.get(index)
+                    kind = None
+                    if error_type is not None:
+                        kind = 'timeout' if issubclass(error_type, TimeoutError) else 'request_failed'
+                    errors.append(kind)
+                except Exception:
+                    pass
+
         queue,pool=(self.opening_queue,self.opening_pool) if opening_books else (self.queue,self.pool)
         with queue.lock:
             jobs=[queue.submit(ex,url,priority,convert,opening_book=opening_books) for ex,url,convert in items]
@@ -227,7 +231,6 @@ class MarketData:
             time.sleep(.01)
         results=[]
         for j in jobs:
-            failure=None
             try:
                 if not j.done():
                     j.cancel()
@@ -235,22 +238,18 @@ class MarketData:
                 results.append(j.result())
             except Exception as error:
                 if errors is not None:
-                    failure='timeout' if issubclass(type(error),TimeoutError) else 'request_failed'
+                    error_types[len(results)] = type(error)
                 if not partial:
+                    publish_errors(len(results)+1)
                     raise ValueError('public_data_unavailable') from None
                 results.append(None)
-            finally:
-                if errors is not None:
-                    try:
-                        errors.append(failure)
-                    except Exception:
-                        pass
             if opening_books and timings is not None:
                 # A running send can complete while the batch is returning at its deadline.
                 returned,sent=j.returned_at,j.sent_at
                 timings.append(dict(queue_wait_ms=None if sent is None else round((sent-j.queued_at)*1000,1),
                                     wire_ms=None if returned is None else round((returned-sent)*1000,1),
                                     limiter_blocked=j.limiter_blocked))
+        publish_errors(len(results))
         return results
 
     def fetch(self,ex,url,priority=1):
@@ -476,9 +475,7 @@ class MarketData:
             return results
         errors=[] if failures is not None else None
         try:
-            batch=self.batch
-            options=oi_diagnostic_kwargs(batch,MarketData.batch,errors=errors) if errors is not None else {}
-            responses=batch(items,priority=1,partial=True,deadline=deadline,**options)
+            responses=self.batch(items,priority=1,partial=True,deadline=deadline,errors=errors)
         except Exception:
             if failures is not None:
                 for n,market,_ in routed_legs:

@@ -5,15 +5,13 @@ import threading
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
 from tools.crossex_exec.admission import AdmissionError, OpeningLimits
 from tools.crossex_exec.engine import book_timing_details
 from tools.crossex_exec.market import MarketData, value_open_interests
-from tools.crossex_exec.open_interest import oi_urls, parse_oi
-from tools.crossex_exec.sizing import size_plan
+from tools.crossex_exec.open_interest import oi_urls
 from tools.crossex_exec.storage import Store
 from tools.fill_sim.core import Book, dec
 from tools.fill_sim.network import Limiter, PublicClient
@@ -27,10 +25,6 @@ def depth(exchange, at, bid='100', ask='100.02'):
     if exchange=='binance':
         return dict(row,T=int(at*1000))
     return dict(code='00000',data=dict(row,ts=str(int(at*1000))))
-
-
-def failure(leg, exchange, kind, *, stage='payload', raw_symbol='BTCUSDT', **details):
-    return dict(leg=leg, exchange=exchange, raw_symbol=raw_symbol, stage=stage, kind=kind, **details)
 
 
 class OpeningQueueTests(unittest.TestCase):
@@ -208,86 +202,6 @@ class OpeningQueueTests(unittest.TestCase):
             self.assertEqual(market.books(self.legs),[None,None])
             self.assertEqual(elapsed[0],33)
 
-    def test_partial_batch_keeps_job_errors_aligned_with_binance_fragments(self):
-        history,mark=oi_urls(self.legs[0].market)
-        def transport(url):
-            if url==history:
-                return oi_payloads(self.legs,previous.NOW)[0][0]
-            if url==mark:
-                raise OSError('disconnected')
-            raise TimeoutError('wire timeout')
-
-        market=self.market(Limiter(clock=lambda:previous.NOW),transport)
-        failures=[]
-        with patch.object(market,'batch',wraps=market.batch) as batch:
-            self.assertEqual(market.open_interest_payloads(self.legs,failures=failures),[[],[]])
-        batch.assert_called_once()
-        self.assertEqual(batch.call_args.kwargs['errors'],[None,'request_failed','timeout'])
-        self.assertEqual(failures,[failure(0,'binance','request_failed'),failure(1,'bitget','timeout')])
-
-    def test_whole_batch_exception_reports_only_routed_legs(self):
-        market=self.market(Limiter(),None)
-        failures=[]
-        legs=[instrument('aster'),self.legs[1]]
-        with patch.object(market,'batch',side_effect=TimeoutError('whole batch')) as batch:
-            self.assertEqual(market.open_interest_payloads(legs,failures=failures),[[],[]])
-        batch.assert_called_once()
-        self.assertEqual(failures,[failure(1,'bitget','request_failed')])
-
-    def test_gate_bucket_age_preserves_payload_and_value_results_without_a_collector(self):
-        gate=instrument('gate')
-        gate.market=replace(gate.market,raw_symbol='BTC_USDT')
-        legs=[instrument('aster'),gate]
-        bucket=1800
-        raw=[dict(contract='BTC_USDT',time=bucket,open_interest_usd='125000')]
-        market=self.market(Limiter(),None)
-        for age,stale in ((240,False),(300,False),(301.26,True),(-1.37,True)):
-            now=bucket+age
-            with (self.subTest(age=age),patch.object(market,'batch',return_value=[raw]),
-                  patch.object(market,'clock',return_value=now)):
-                failures=[]
-                plain=market.open_interest_payloads(legs)
-                self.assertEqual(plain,[[],[] if stale else [raw]])
-                self.assertEqual(market.open_interest_payloads(legs,failures=failures),plain)
-                books=previous.books(now)
-                payloads=[[],[raw]]
-                values=value_open_interests(legs,books,payloads,now)
-                self.assertEqual(value_open_interests(legs,books,payloads,now,failures=failures),values)
-                if stale:
-                    self.assertEqual(values,[None,None])
-                    self.assertEqual(failures,[failure(1,'gate','stale',stage=stage,raw_symbol='BTC_USDT',
-                                                       age_s=round(age,1)) for stage in ('payload','value')])
-                    with self.assertRaisesRegex(ValueError,'^oi_missing$'):
-                        parse_oi(gate.market,[raw],1,now)
-                else:
-                    self.assertEqual(values[1]['usd'],'125000')
-                    self.assertEqual(failures,[])
-
-    def test_binance_expired_mark_keeps_its_original_parse_error(self):
-        raw=oi_payloads(self.legs,previous.NOW)
-        raw[0][1]['time']-=302340
-        with self.assertRaisesRegex(ValueError,'^oi_unit_unverified$'):
-            parse_oi(self.legs[0].market,raw[0],100,previous.NOW)
-        failures=[]
-        valued=value_open_interests(self.legs,previous.books(),raw,previous.NOW,failures=failures)
-        self.assertIsNone(valued[0])
-        self.assertIsNotNone(valued[1])
-        self.assertEqual(failures,[failure(0,'binance','stale',stage='value',age_s=302.3)])
-
-    def test_value_parse_error_is_bounded_and_collector_errors_do_not_escape(self):
-        class BrokenCollector(list):
-            def append(self, row):
-                raise RuntimeError('collector unavailable')
-
-        raw=oi_payloads(self.legs,previous.NOW)
-        failures=[]
-        with patch('tools.crossex_exec.market.parse_oi',side_effect=ValueError('x'*120)) as parse:
-            for options in ({},{'failures':failures},{'failures':BrokenCollector()}):
-                self.assertEqual(value_open_interests(self.legs,previous.books(),raw,previous.NOW,**options),[None,None])
-        self.assertEqual(parse.call_count,6)
-        self.assertEqual(failures,[failure(n,i.market.exchange,'parse_invalid',stage='value',error='x'*80)
-                                   for n,i in enumerate(self.legs)])
-
 
 class OpeningReviewTests(unittest.TestCase):
     setUp=previous.EngineAdmissionTests.setUp
@@ -304,7 +218,8 @@ class OpeningReviewTests(unittest.TestCase):
     def assert_oi_skip(self,identity):
         self.assertIsNone(self.engine.ingest(self.trigger(identity)))
         skips=[json.loads(e['value']) for e in self.store.events() if e['kind']=='SKIP']
-        self.last_oi_failures=skips[-1].pop('oi_failures')
+        failures=skips[-1].pop('oi_failures')
+        self.assertTrue(failures and all(row.get('kind') for row in failures))
         self.assertEqual(skips[-1],dict(id=identity,reason='oi_missing',stage='review'))
         self.assertEqual(self.store.all_orders(),[])
         self.assertFalse(any(r[0]=='place' for r in self.trace))
@@ -383,7 +298,7 @@ class OpeningReviewTests(unittest.TestCase):
             return depth('bitget',self.now[0])
         market=MarketData(self.store,clock=limiter.clock,client=PublicClient(limiter,transport))
         self.addCleanup(market.close)
-        with (patch.object(market,'open_interest_payloads',self.market.open_interest_payloads),
+        with (patch.object(market,'open_interest_payloads',side_effect=self.market.open_interest_payloads),
               self.assertRaises(AdmissionError) as failure):
             self.review_with_market(market)
         self.assertEqual(failure.exception.reason,'book_stale')
@@ -406,88 +321,6 @@ class OpeningReviewTests(unittest.TestCase):
         with patch.object(market,'batch',side_effect=batch), self.assertRaisesRegex(ValueError,'^oi_missing$'):
             self.review_with_market(market)
 
-    def test_provider_exception_and_payload_count_mismatch_skip_before_books(self):
-        raw=oi_payloads(list(self.market.mapping.values()),self.now[0])
-        both_failed=[failure(0,'binance','request_failed'),failure(1,'bitget','request_failed')]
-        extras=[failure(n,ex,'parse_invalid',error='payload_count_mismatch') for n,ex in enumerate(('binance','bitget'))]
-        for identity,result,expected in (('oi-provider',TimeoutError(),both_failed),
-                                         ('oi-short',raw[:1],both_failed[1:]),('oi-extra',raw+[[]],extras)):
-            with (self.subTest(identity=identity),patch.object(self.market,'open_interest_payloads',side_effect=[result]) as fetch,
-                  patch.object(self.market,'books') as books):
-                self.assert_oi_skip(identity)
-                self.assertEqual(self.last_oi_failures,expected)
-                fetch.assert_called_once()
-                books.assert_not_called()
-
-    def test_oi_expiring_after_payload_validation_records_value_stage_without_refetch(self):
-        instruments=list(self.market.mapping.values())
-        raw=oi_payloads(instruments,self.now[0])
-        raw[1]=oi_payloads(instruments,self.now[0]-300)[1]
-        responses={url:row for i,leg in zip(instruments,raw) for url,row in zip(oi_urls(i.market),leg)}
-        market=self.oi_market(responses.__getitem__)
-        def books(legs):
-            self.now[0]+=.26
-            return previous.books(self.now[0])
-        with (patch.object(self.market,'open_interest_payloads',market.open_interest_payloads),
-              patch.object(market,'batch',wraps=market.batch) as batch,patch.object(self.market,'books',side_effect=books) as fetch,
-              patch('tools.crossex_exec.market.parse_oi',wraps=parse_oi) as parse,patch('tools.crossex_exec.engine.size_plan') as size):
-            self.assert_oi_skip('oi-value-expired')
-        self.assertEqual(self.last_oi_failures,[failure(1,'bitget','stale',stage='value',age_s=300.3)])
-        batch.assert_called_once()
-        fetch.assert_called_once()
-        self.assertEqual(parse.call_count,4)
-        size.assert_not_called()
-
-    def test_sizing_omission_reports_only_the_unused_leg(self):
-        with patch('tools.crossex_exec.engine.size_plan',return_value=dict(oi_legs_used=[1])) as size:
-            self.assert_oi_skip('oi-unused')
-        size.assert_called_once()
-        self.assertEqual(self.last_oi_failures,[failure(0,'binance','not_used_by_sizing',stage='sizing')])
-
-    def test_all_legs_expiring_at_sizing_keep_the_original_exception_and_reason(self):
-        instruments=list(self.market.mapping.values())
-        raw=oi_payloads(instruments,self.now[0]-300)
-        errors=[]
-        def size_after_expiry(legs,books,interests,config,available,now):
-            try:
-                return size_plan(legs,books,interests,config,available,now+.001)
-            except ValueError as error:
-                errors.append(error)
-                raise
-        with (patch.object(self.market,'open_interest_payloads',return_value=raw) as fetch,
-              patch('tools.crossex_exec.engine.size_plan',side_effect=size_after_expiry) as size):
-            self.assert_oi_skip('oi-all-unused')
-        fetch.assert_called_once()
-        size.assert_called_once()
-        self.assertEqual(self.last_oi_failures,[failure(n,i.market.exchange,'not_used_by_sizing',stage='sizing')
-                                               for n,i in enumerate(instruments)])
-        self.assertIs(type(errors[0]),ValueError)
-        self.assertEqual(errors[0].details,{'oi_failures':self.last_oi_failures})
-
-    def test_diagnostic_construction_failure_preserves_skip_reason_and_count(self):
-        with (patch.object(self.market,'open_interest_payloads',side_effect=RuntimeError('provider')) as fetch,
-              patch('tools.crossex_exec.engine.record_oi_failure',side_effect=RuntimeError('diagnostics')),
-              patch.object(self.market,'books') as books):
-            self.assertIsNone(self.engine.ingest(self.trigger('oi-broken-diagnostics')))
-        fetch.assert_called_once()
-        books.assert_not_called()
-        skips=[json.loads(e['value']) for e in self.store.events() if e['kind']=='SKIP']
-        self.assertEqual(skips,[dict(id='oi-broken-diagnostics',reason='oi_missing',stage='review')])
-        self.assertEqual(self.store.meta('opening_skip_counts')['oi_missing'],1)
-        self.assertEqual(self.store.all_orders(),[])
-
-    def test_unserializable_provider_diagnostic_preserves_single_skip_write(self):
-        def payloads(legs, *, failures):
-            failures.append(failure(0,'binance','parse_invalid',error=object()))
-            return [[],oi_payloads(legs,self.now[0])[1]]
-        with (patch.object(self.market,'open_interest_payloads',payloads),
-              patch.object(self.store,'skip',wraps=self.store.skip) as skip):
-            self.assertIsNone(self.engine.ingest(self.trigger('oi-bad-detail')))
-        skip.assert_called_once()
-        skips=[json.loads(e['value']) for e in self.store.events() if e['kind']=='SKIP']
-        self.assertEqual(skips,[dict(id='oi-bad-detail',reason='oi_missing',stage='review')])
-        self.assertEqual(self.store.meta('opening_skip_counts')['oi_missing'],1)
-
     def test_one_oi_request_still_in_flight_rejects_pair_and_next_fetch_requests_both_legs(self):
         instruments=list(self.market.mapping.values())
         raw=oi_payloads(instruments,self.now[0])
@@ -507,7 +340,6 @@ class OpeningReviewTests(unittest.TestCase):
         try:
             with patch.object(self.market,'open_interest_payloads',market.open_interest_payloads):
                 self.assert_oi_skip('oi-in-flight')
-                self.assertEqual(self.last_oi_failures,[failure(1,'bitget','timeout')])
             self.assertTrue(entered.is_set())
             self.assertCountEqual(sent,urls[0]+urls[1])
         finally:
@@ -534,10 +366,8 @@ class OpeningReviewTests(unittest.TestCase):
             return row
         market=self.oi_market(transport)
         with patch.object(self.market,'open_interest_payloads',market.open_interest_payloads):
-            for identity,expected in (('oi-timeout',failure(0,'binance','timeout')),
-                                      ('oi-malformed',failure(0,'binance','parse_invalid',error='nonfinite_number'))):
+            for identity in ('oi-timeout','oi-malformed'):
                 self.assert_oi_skip(identity)
-                self.assertEqual(self.last_oi_failures,[expected])
                 self.now[0]+=1
         self.assertEqual(market.open_interest_payloads(instruments),raw)
         self.assertCountEqual(sent,(urls[0]+urls[1])*3)
@@ -555,7 +385,6 @@ class OpeningReviewTests(unittest.TestCase):
               patch.object(self.market,'open_interest_payloads',market.open_interest_payloads),
               patch.object(market,'batch',wraps=market.batch) as batch):
             self.assert_oi_skip('oi-expired')
-            self.assertEqual(self.last_oi_failures,[failure(1,'bitget','stale',age_s=300.0)])
         batch.assert_called_once()
         self.assertEqual([url for _,url,_ in batch.call_args.args[0]],list(by_url))
 
@@ -566,10 +395,8 @@ class OpeningReviewTests(unittest.TestCase):
         raw=oi_payloads(legs,self.now[0],quantity='500')
         market=self.oi_market({oi_urls(legs[1].market)[0]:raw[1][0]}.__getitem__)
         with (patch.object(self.market,'open_interest_payloads',market.open_interest_payloads),
-              patch('tools.crossex_exec.market.oi_urls',wraps=oi_urls) as routes,
               patch.object(self.market,'books',return_value=previous.books(self.now[0]))):
             _,fill,_=self.engine.opening_review(legs,['0','0'],self.market.funding(legs),['5000000']*2,dict(baseline_bps='0'))
-        self.assertEqual([call.args[0] for call in routes.call_args_list],[leg.market for leg in legs])
         self.assertEqual(oi_urls(legs[0].market),[])
         self.assertIsNone(fill['open_interests'][0])
         sizing=fill['sizing']

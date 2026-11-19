@@ -1,5 +1,6 @@
 """Single coordinator owns pair state; parallel workers only own individual orders."""
-import json
+import math
+import sys
 import time
 import threading
 import uuid
@@ -20,7 +21,7 @@ from .baseline import Baseline
 from .admission import OpeningLimits, AdmissionError, BOOK_RETRIES, book_skew_ms, SKIP_REASONS, REVIEW_SKIP_REASONS
 from .settings import Settings, risk_settings
 from .sizing import size_plan
-from .market import MarketData, oi_diagnostic_kwargs, value_open_interests
+from .market import value_open_interests
 from .open_interest import oi_urls, record_oi_failure
 from .universe import Universe, check_mapping_ratio
 from .external import ExternalRegistry, ExternalAdmin, ExternalUnverifiable, plain
@@ -100,6 +101,32 @@ def oi_missing_error(instruments, legs, stage, kind, failures=(), *, unmatched=(
     except Exception:
         pass  # Diagnostics never change the rejection.
     return error
+
+
+def bounded_oi_failures(failures):
+    """Copy only bounded, serializable fields into the durable SKIP event."""
+    if type(failures) not in (list, tuple):
+        raise TypeError('invalid OI failures')
+    rows = []
+    for source in failures[:4]:
+        leg = source['leg']
+        if type(leg) is not int or not 0 <= leg <= sys.maxsize:
+            raise ValueError('invalid OI leg index')
+        row = {'leg': leg}
+        for key, limit in (('exchange', 16), ('raw_symbol', 40), ('stage', 16), ('kind', 24), ('error', 80)):
+            if key == 'error' and key not in source:
+                continue
+            value = source[key]
+            if type(value) is not str:
+                raise TypeError('invalid OI text field')
+            row[key] = value[:limit]
+        if 'age_s' in source:
+            age = float(source['age_s'])
+            if not math.isfinite(age):
+                raise ValueError('nonfinite OI age')
+            row['age_s'] = age
+        rows.append(row)
+    return rows
 
 
 class Engine:
@@ -335,9 +362,7 @@ class Engine:
         routed_legs=[n for n,i in enumerate(instruments) if oi_urls(i.market)]
         failures=[]
         try:
-            fetch=self.market.open_interest_payloads
-            options=oi_diagnostic_kwargs(fetch,MarketData.open_interest_payloads,failures=failures)
-            payloads=fetch(instruments,**options)
+            payloads=self.market.open_interest_payloads(instruments,failures=failures)
         except Exception:
             raise oi_missing_error(instruments,routed_legs,'payload','request_failed') from None
         payload_count=len(payloads or ())
@@ -368,8 +393,11 @@ class Engine:
                     sizing=size_plan(common,books,interests,values,available,self.clock())
                 except ValueError as error:
                     # With no usable legs size_plan raises before it can return oi_legs_used.
-                    if type(error) is ValueError and error.args==('oi_missing',):
-                        oi_missing_error(instruments,routed_legs,'sizing','not_used_by_sizing',error=error)
+                    try:
+                        if str(error)=='oi_missing':
+                            oi_missing_error(instruments,routed_legs,'sizing','not_used_by_sizing',error=error)
+                    except Exception:
+                        pass
                     raise
                 if any(n not in sizing['oi_legs_used'] for n in routed_legs):
                     missing=(n for n in routed_legs if n not in sizing['oi_legs_used'])
@@ -1169,8 +1197,7 @@ class Engine:
                 details=getattr(error,'details',None) if isinstance(error,AdmissionError) or reason=='oi_missing' else None
                 if isinstance(details,dict):
                     if 'oi_failures' in details:
-                        # Freeze provider diagnostics as plain JSON before the single durable SKIP write.
-                        diagnostics['oi_failures']=json.loads(json.dumps(details['oi_failures'],allow_nan=False))
+                        diagnostics['oi_failures']=bounded_oi_failures(details['oi_failures'])
                     elif isinstance(error,AdmissionError):
                         diagnostics['book_timing']=details
             except Exception:
