@@ -19,6 +19,8 @@ from .baseline import Baseline
 from .admission import OpeningLimits, AdmissionError, BOOK_RETRIES, book_skew_ms, SKIP_REASONS, REVIEW_SKIP_REASONS
 from .settings import Settings, risk_settings
 from .sizing import size_plan
+from .market import value_open_interests
+from .open_interest import oi_urls
 from .universe import Universe, check_mapping_ratio
 from .external import ExternalRegistry, ExternalAdmin, ExternalUnverifiable, plain
 from .external_accounting import ExternalAccounting
@@ -41,7 +43,7 @@ class DailyBaselinePending(ValueError):
 import re as _re
 
 
-def book_timing_details(instruments,books,started,fetched,now,attempt,checkpoint):
+def book_timing_details(instruments,books,started,fetched,now,attempt,checkpoint,timings=()):
     """Diagnostics only (book_skew/book_stale): per-leg ages in ms, never book contents."""
     def ms(value):
         try:
@@ -49,15 +51,20 @@ def book_timing_details(instruments,books,started,fetched,now,attempt,checkpoint
         except (TypeError,ValueError,ArithmeticError):
             return None
     legs=[]
-    for i,book in zip(instruments,books):
+    for n,(i,book) in enumerate(zip(instruments,books)):
+        timing=timings[n] if n<len(timings) else {}
+        leg=dict(exchange=i.market.exchange,fetched=False,receipt_age_ms=None,exchange_age_ms=None,
+                 queue_wait_ms=timing.get('queue_wait_ms'),wire_ms=timing.get('wire_ms'),
+                 limiter_blocked=timing.get('limiter_blocked'))
         try:
             row=None if book is None else (book if isinstance(book,dict) else book.to_dict())
             exchange_at=row.get('exchange_at') if row else None
-            legs.append(dict(exchange=i.market.exchange,fetched=row is not None,
+            leg.update(fetched=row is not None,
                 receipt_age_ms=ms(now-float(row['received_at'])) if row else None,
-                exchange_age_ms=ms(now-float(exchange_at)) if exchange_at is not None else None))
+                exchange_age_ms=ms(now-float(exchange_at)) if exchange_at is not None else None)
         except Exception:
-            legs.append(dict(exchange=i.market.exchange,fetched=False,receipt_age_ms=None,exchange_age_ms=None))
+            pass
+        legs.append(leg)
     skew=book_skew_ms(books) if all(b is not None for b in books) else None
     return dict(attempt=attempt,checkpoint=checkpoint,fetch_ms=ms(fetched-started),
                 review_ms=ms(now-started),skew_ms=None if skew is None else float(skew),legs=legs)
@@ -288,12 +295,12 @@ class Engine:
         if any(dec(o['quantity'])*i.multiplier>dec(plan['quantity']) for o,i in zip(orders,instruments)):
             raise ValueError('send_size_changed')
 
-    def fetch_opening_books(self,instruments):
-        # MarketData submits the whole pair together through the existing
-        # shared public queue/limiter. Never refresh only the failing leg.
+    def fetch_opening_books(self,instruments,*,timings=None):
+        # Both legs are refreshed together under the shared public limiter.
         try:
-            fetch=getattr(self.market,'opening_books',self.market.books)
-            return [i.common_book(b) for i,b in zip(instruments,fetch(instruments))]
+            fetch=getattr(self.market,'opening_books',None)
+            books=fetch(instruments,timings=timings) if fetch else self.market.books(instruments)
+            return [i.common_book(b) for i,b in zip(instruments,books)]
         except Exception:
             return [None,None]
 
@@ -301,25 +308,35 @@ class Engine:
         config=config or self.settings.read()
         values=config['values']
         limits=self.opening_limits.restricted(values)
-        interests=None
         common=[i.common() for i in instruments]
+        routed_legs=[n for n,i in enumerate(instruments) if oi_urls(i.market)]
+        try:
+            payloads=self.market.open_interest_payloads(instruments)
+        except Exception:
+            raise AdmissionError('oi_missing') from None
+        if len(payloads or ())!=len(instruments) or any(not payloads[n] for n in routed_legs):
+            raise AdmissionError('oi_missing')
+        first_book_timing=None
         for attempt in range(BOOK_RETRIES+1):
             started=self.clock()
-            books=self.fetch_opening_books(instruments)
+            timings=[]
+            books=self.fetch_opening_books(instruments,timings=timings)
             fetched=self.clock()
             checkpoint='after_fetch'
             try:
                 limits.books(books,self.clock())
                 check_mapping_ratio(common,books)
                 self.universe.check_identity_prices(instruments,books)
-                if interests is None:
-                    interests=self.market.open_interests(instruments,books)
-                # Public OI reads also consume the opening book age budget.
+                interests=value_open_interests(instruments,books,payloads,self.clock())
+                if any(interests[n] is None for n in routed_legs):
+                    raise AdmissionError('oi_missing')
                 checkpoint='after_open_interest'
                 limits.books(books,self.clock())
                 available=max(dec(0),min(self.limits.total,dec(values['max_total_open_usd']))-
                               self.limits.exposure(self.account_cache.read()))
                 sizing=size_plan(common,books,interests,values,available,self.clock())
+                if any(n not in sizing['oi_legs_used'] for n in routed_legs):
+                    raise AdmissionError('oi_missing')
                 fill=review(common,books,fees,funding,turnovers,self.clock(),baseline_bps=baseline['baseline_bps'],
                             quantity=sizing['quantity'],min_turnover=values['min_quote_volume_usd'],min_excess_bps=values['min_excess_bps'])
                 fill.update(sizing=sizing,open_interests=interests)
@@ -327,11 +344,18 @@ class Engine:
                     self.reference_snapshot(instruments),fill['excess_bps'],self.clock())
                 checkpoint='final'
                 limits.books(books,self.clock())
+                if first_book_timing is not None:
+                    try:
+                        self.store.event('BOOK_RETRY',{'book_timing':first_book_timing})
+                    except Exception:
+                        pass  # Diagnostic writes cannot change the review result.
                 return books,fill,evidence
             except AdmissionError as error:
                 if error.reason in ('book_skew','book_stale'):
                     try:
-                        error.details=book_timing_details(instruments,books,started,fetched,self.clock(),attempt,checkpoint)
+                        error.details=book_timing_details(instruments,books,started,fetched,self.clock(),attempt,checkpoint,timings)
+                        if attempt==0:
+                            first_book_timing=error.details
                     except Exception:
                         pass  # Diagnostics never change the rejection.
                 if error.reason not in ('book_skew','book_stale') or attempt==BOOK_RETRIES:

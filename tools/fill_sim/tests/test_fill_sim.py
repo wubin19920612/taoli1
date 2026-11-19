@@ -234,6 +234,35 @@ class MathTests(OfflineCase):
 
 
 class NetworkTests(OfflineCase):
+    def test_default_limiter_has_no_opening_book_reserve(self):
+        limiter = Limiter(clock=Clock())
+        self.assertTrue(send(limiter, ['gate','gate']))
+        self.assertFalse(limiter.available('gate', opening_book=True))
+        self.assertFalse(limiter.admit_send('gate', opening_book=True))
+        for ex in ('binance','bybit','okx'):
+            self.assertTrue(send(limiter, [ex,ex]))
+        self.assertFalse(limiter.admit_send('aster', opening_book=True))
+        self.assertEqual(limiter.stats['aster']['requests'], 0)
+
+    def test_opt_in_reserve_adds_one_per_venue_and_respects_restart_and_pause(self):
+        clock = Clock()
+        limiter = Limiter(per_exchange=1, clock=clock, state={'gate':{}}, opening_book_reserve=True)
+        self.assertFalse(limiter.available('gate', opening_book=True))
+        self.assertFalse(limiter.admit_send('gate', opening_book=True))
+        clock.advance(1)
+        self.assertTrue(limiter.admit_send('gate'))
+        self.assertFalse(limiter.admit_send('gate'))
+        self.assertTrue(limiter.admit_send('gate', opening_book=True))
+        self.assertFalse(limiter.admit_send('gate', opening_book=True))
+        limiter.finish_send('gate')
+        limiter.finish_send('gate')
+        clock.advance(1)
+        limiter.throttled('gate')
+        self.assertFalse(limiter.available('gate', opening_book=True))
+        self.assertFalse(limiter.admit_send('gate', opening_book=True))
+        self.assertEqual(limiter.stats['gate']['requests'], 2)
+        self.assertTrue(limiter.admit_send('bitget'))
+
     def test_per_exchange_and_global_limits(self):
         c, limiter = Clock(), None
         limiter = Limiter(clock=c)

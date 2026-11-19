@@ -5,6 +5,7 @@ import tempfile
 import threading
 import time
 import unittest
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -64,7 +65,7 @@ class Round3Tests(unittest.TestCase):
         self.addCleanup(self.store.close)
         self.now = [1794355200.0]
         self.trace = []
-        self.market = FakeMarket()
+        self.market = FakeMarket(clock=lambda:self.now[0])
         self.market.books = lambda instruments: [Book([['100' if i.market.exchange == 'binance' else '102', '10']],
                                                      [['100' if i.market.exchange == 'binance' else '102', '10']], self.now[0])
                                                 for i in instruments]
@@ -534,10 +535,9 @@ class Round3PolicyTests(unittest.TestCase):
             self.assertEqual(checked_status(raw, i, gate=gate)['average_price'], '101.2')
 
     def test_r4_one_catalog_failure_keeps_healthy_venue_and_retries(self):
-        with tempfile.TemporaryDirectory() as temp, Store(Path(temp)/'db') as store:
-            market = MarketData(store, client=Mock())
-            self.addCleanup(market.queue.close)
-            self.addCleanup(market.pool.shutdown, wait=False)
+        with (tempfile.TemporaryDirectory() as temp, Store(Path(temp)/'db') as store,
+              closing(MarketData(store,client=Mock())) as market):
+            market.client.limiter.snapshot.return_value={}
             failed = [True]
             def fetch(ex, url, **kwargs):
                 if ex == 'binance' and failed[0]:

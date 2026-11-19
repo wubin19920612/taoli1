@@ -16,8 +16,25 @@ from test_exec import instrument, intent, setUpModule, tearDownModule
 from baseline_fixtures import seed_baseline
 
 
+def oi_payloads(instruments, at, quantity='100000'):
+    """Raw public responses for the Binance/Bitget engine fixtures."""
+    stamp=int(at*1000)
+    legs=[]
+    for i in instruments:
+        symbol=i.market.raw_symbol
+        if i.market.exchange=='binance':
+            legs.append([[dict(symbol=symbol,sumOpenInterest=quantity,sumOpenInterestValue=str(dec(quantity)*100),
+                               timestamp=stamp)],dict(symbol=symbol,markPrice='100',time=stamp)])
+        elif i.market.exchange=='bitget':
+            legs.append([dict(code='00000',data=dict(openInterestList=[dict(symbol=symbol,size=quantity)],ts=stamp))])
+        else:
+            legs.append([])
+    return legs
+
+
 class FakeMarket:
-    def __init__(self):
+    def __init__(self,clock=time.time):
+        self.clock=clock
         self.mapping={i.market.key:i for i in (instrument(),instrument('bitget'))}
         self.missing=False
 
@@ -49,9 +66,8 @@ class FakeMarket:
         # This fake is entirely in memory; production uses the read-only cache.
         return self.turnovers(instruments)
 
-    def open_interests(self,instruments,books):
-        return [dict(market_key=i.market.key,usd='10000000',at=b.received_at,
-                     unit='base',unit_verified=True,source='fixture') for i,b in zip(instruments,books)]
+    def open_interest_payloads(self,instruments):
+        return oi_payloads(instruments,self.clock())
 
 
 class FakeAccounts:

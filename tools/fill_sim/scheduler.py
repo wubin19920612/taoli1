@@ -88,8 +88,9 @@ class RequestQueue:
     is temporarily full, retain that fourth slot until it can send. No quota
     is reserved by the engine or when submitting a thread-pool job.
     """
-    def __init__(self, client, clock):
+    def __init__(self, client, clock, *, record_timing=False):
         self.client, self.clock = client, clock
+        self.record_timing = record_timing
         self.lock = threading.RLock()
         self.heap = []
         self.sequence = 0
@@ -98,10 +99,14 @@ class RequestQueue:
         self.workers = []
         self.closed = False
 
-    def submit(self, ex, url, priority=1, convert=None):
+    def submit(self, ex, url, priority=1, convert=None, *, opening_book=False):
         with self.lock:
             future = RequestFuture(self.clock())
             future.priority = priority
+            future.opening_book = opening_book
+            if self.record_timing:
+                future.returned_at = None
+                future.limiter_blocked = False
             if self.closed:
                 future.cancel()
                 return future
@@ -136,15 +141,28 @@ class RequestQueue:
                 item = heapq.heappop(self.heap)
                 priority, _, ex, _, future, _ = item
                 if limiter.stats[ex]["paused_until"] > self.clock():
+                    if self.record_timing:
+                        future.limiter_blocked = True
                     future.set_exception(RateLimited("exchange_paused"))
                     continue
-                if (not require_open or priority == 1) and limiter.available(ex):
-                    if not future.set_running_or_notify_cancel():
-                        continue
-                    limiter.admit_send(ex)
-                    chosen = item
-                    break
-                deferred.append(item)
+                if require_open and priority != 1:
+                    deferred.append(item)
+                    continue
+                if not limiter.available(ex, opening_book=future.opening_book):
+                    if self.record_timing:
+                        future.limiter_blocked = True
+                    deferred.append(item)
+                    continue
+                if not future.set_running_or_notify_cancel():
+                    continue
+                admitted = limiter.admit_send(ex, opening_book=future.opening_book)
+                if not admitted and (self.record_timing or future.opening_book):
+                    # A timed send needs a successful final admission before stamping sent_at.
+                    future.limiter_blocked = True
+                    future.set_exception(RateLimited("local_rate_limit"))
+                    continue
+                chosen = item
+                break
             for item in deferred:
                 heapq.heappush(self.heap, item)
             if chosen is None:
@@ -155,9 +173,16 @@ class RequestQueue:
             future.send_order = self.send_count
             future.sent_at = self.clock()
         try:
-            data = self.client._perform(ex, url)
+            try:
+                data = self.client._perform(ex, url)
+            finally:
+                # Measure through the public response or error, before caller-side conversion.
+                if self.record_timing:
+                    future.returned_at = self.clock()
             future.set_result(convert(data) if convert else data)
         except BaseException as exc:
+            if self.record_timing and isinstance(exc, RateLimited):
+                future.limiter_blocked = True
             future.set_exception(exc)
 
     def pump(self, executor):

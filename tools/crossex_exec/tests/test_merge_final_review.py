@@ -11,6 +11,7 @@ from tools.crossex_exec.api_data import JournalView
 from tools.crossex_exec.settings import Settings
 from tools.crossex_exec.storage import Store
 from baseline_fixtures import seed_baseline
+from test_engine import oi_payloads
 from test_exec import setUpModule, tearDownModule
 from test_round8_universe import native
 import test_round7 as previous
@@ -74,12 +75,11 @@ class MergeReleaseTests(unittest.TestCase):
         self.assert_rejected(errors, 'send_size_changed')
 
     def test_oi_expiring_during_commit_rejects_even_when_books_are_fresh(self):
-        interests = self.market.open_interests
-        def nearly_expired(instruments, books):
-            return [dict(row, at=self.now[0]-299.75) for row in interests(instruments, books)]
+        def nearly_expired(instruments):
+            return oi_payloads(instruments,self.now[0]-299.75)
         def change(rows):
             self.now[0] += .5
-        with patch.object(self.market, 'open_interests', side_effect=nearly_expired):
+        with patch.object(self.market, 'open_interest_payloads', side_effect=nearly_expired):
             _, errors = self.after_sent(change)
         self.assert_rejected(errors, 'oi_missing')
         self.assertEqual(self.store.meta('opening_skip_counts')['oi_missing'], 1)

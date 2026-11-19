@@ -197,10 +197,11 @@ def get_json(url, headers=None, timeout=3, total_timeout=8, clock=time.monotonic
 
 class Limiter:
     """One rolling send gate shared by depth, specifications and funding."""
-    def __init__(self, per_exchange=2, global_rate=8, clock=time.time, state=None):
+    def __init__(self, per_exchange=2, global_rate=8, clock=time.time, state=None, *, opening_book_reserve=False):
         if not 0 < per_exchange <= 2 or not 0 < global_rate <= 8:
             raise ValueError("rate_ceiling")
         self.clock, self.lock = clock, threading.RLock()
+        self.opening_book_reserve = opening_book_reserve
         self.rates = {"global": global_rate, **{ex: per_exchange for ex in EXCHANGES}}
         self.history = {k: deque() for k in self.rates}
         self.sending = Counter()
@@ -211,7 +212,7 @@ class Limiter:
             for ex in EXCHANGES:
                 self.stats[ex].update(state.get(ex, {}))
 
-    def available(self, ex):
+    def available(self, ex, *, opening_book=False):
         with self.lock:
             now = self.clock()
             if now < self.restart_until or self.stats[ex]["paused_until"] > now:
@@ -221,13 +222,16 @@ class Limiter:
                 period = max(1, 1 / self.rates[key])
                 while history and history[0] <= now - period:
                     history.popleft()
-                if len(history) + self.sending[key] >= max(1, int(self.rates[key])):
+                capacity = max(1, int(self.rates[key]))
+                if self.opening_book_reserve and opening_book:
+                    capacity += 2 if key == "global" else 1
+                if len(history) + self.sending[key] >= capacity:
                     return False
             return True
 
-    def admit_send(self, ex):
+    def admit_send(self, ex, *, opening_book=False):
         with self.lock:
-            if not self.available(ex):
+            if not self.available(ex, opening_book=opening_book):
                 return False
             for key in (ex, "global"):
                 self.sending[key] += 1

@@ -16,7 +16,7 @@ from tools.crossex_exec.accounts import FeeSnapshot
 from tools.crossex_exec.engine import Engine
 from tools.crossex_exec.execution import NONTERMINAL
 from tools.crossex_exec.transport import APIError
-from test_engine import trigger
+from test_engine import oi_payloads, trigger
 from test_exec import instrument, setUpModule, tearDownModule
 from baseline_fixtures import seed_baseline
 
@@ -267,8 +267,7 @@ class World:
         seed_baseline(self.store,self.now,'50.01' if opening_fault == 'baseline_not_flat' else '5')
         self.market = SimpleNamespace(mapping={i.market.key:i for i in self.instruments}, books=self.books,
             funding=self.funding,
-            open_interests=lambda instruments,books:[dict(market_key=i.market.key,usd='10000000',at=self.now,
-                unit='base',unit_verified=True,source='fixture') for i in instruments],
+            open_interest_payloads=lambda instruments:oi_payloads(instruments,self.now),
             turnovers=lambda instruments:['999999' if self.opening_fault=='volume_too_low' else '10000000']*len(instruments),
             cached_turnovers=lambda instruments:['999999' if self.opening_fault=='volume_too_low' else '10000000']*len(instruments))
         if opening_fault=='size_too_small':

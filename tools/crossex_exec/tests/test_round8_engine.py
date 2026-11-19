@@ -24,7 +24,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertIsNone(self.engine.ingest(self.trigger('low')))
         self.assertTrue(self.skipped('volume_too_low'))
         settings.update({'min_quote_volume_usd': 1000000}, source='admin_api')
-        with patch.object(self.market, 'open_interests', return_value=[None, None]):
+        with patch.object(self.market, 'open_interest_payloads', return_value=[None, None]):
             self.assertIsNone(self.engine.ingest(self.trigger('oi')))
         self.assertTrue(self.skipped('oi_missing'))
         self.assertFalse(self.store.all_orders())

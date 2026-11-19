@@ -15,6 +15,9 @@ from .universe import Universe, category, alias, PRE_IPO_BASES, COMMODITY_BASES
 from .open_interest import oi_urls, parse_oi
 from .external_fx import NATIVE_USD, spot_urls, parse_spot_quote, quote_band
 
+OPENING_OI_TIMEOUT = 3
+OI_DATA_ERRORS = (AttributeError, IndexError, KeyError, TypeError, ValueError, ArithmeticError)
+
 RULES_URL='https://api.gateio.ws/api/v4/crossex/rule/symbols'
 CATALOGS={
     'gate':'https://api.gateio.ws/api/v4/futures/usdt/contracts',
@@ -175,9 +178,12 @@ def turnover(m,data):
 class MarketData:
     def __init__(self,store,clock=time.time,client=None):
         self.store,self.clock=store,clock
-        self.client=client or PublicClient(Limiter(state=store.meta('public_limiter')))
+        self.client=client or PublicClient(Limiter(state=store.meta('public_limiter'),opening_book_reserve=True))
         self.queue=RequestQueue(self.client,clock)
         self.pool=DaemonPool(max_workers=4,thread_name_prefix='exec-public')
+        # Only opening depth uses these workers. Both queues admit through the same limiter.
+        self.opening_queue=RequestQueue(self.client,clock,record_timing=True)
+        self.opening_pool=DaemonPool(max_workers=2,thread_name_prefix='exec-opening-book')
         self.mapping={}
         self.catalog_errors={}
         self._pump_lock=threading.Lock()
@@ -190,15 +196,21 @@ class MarketData:
         with self.store.lock, self._mapping_lock:
             self.closed=True
             self.store.set_meta('public_limiter',self.client.limiter.snapshot())
-        self.queue.close()
-        self.pool.shutdown(wait=False)
+        with self._pump_lock:
+            self.queue.close()
+            self.opening_queue.close()
+            self.pool.shutdown(wait=False)
+            self.opening_pool.shutdown(wait=False)
 
-    def batch(self,items,priority=1,partial=False):
-        jobs=[self.queue.submit(ex,url,priority,convert) for ex,url,convert in items]
-        deadline=time.monotonic()+10
+    def batch(self,items,priority=1,partial=False,*,opening_books=False,timings=None,deadline=None):
+        queue,pool=(self.opening_queue,self.opening_pool) if opening_books else (self.queue,self.pool)
+        with queue.lock:
+            jobs=[queue.submit(ex,url,priority,convert,opening_book=opening_books) for ex,url,convert in items]
+        if deadline is None:
+            deadline=time.monotonic()+10
         while not all(j.done() for j in jobs) and time.monotonic()<deadline:
             with self._pump_lock:
-                self.queue.pump(self.pool)
+                queue.pump(pool)
             time.sleep(.01)
         results=[]
         for j in jobs:
@@ -211,6 +223,12 @@ class MarketData:
                 if not partial:
                     raise ValueError('public_data_unavailable') from None
                 results.append(None)
+            if opening_books and timings is not None:
+                # A running send can complete while the batch is returning at its deadline.
+                returned,sent=j.returned_at,j.sent_at
+                timings.append(dict(queue_wait_ms=None if sent is None else round((sent-j.queued_at)*1000,1),
+                                    wire_ms=None if returned is None else round((returned-sent)*1000,1),
+                                    limiter_blocked=j.limiter_blocked))
         return results
 
     def fetch(self,ex,url,priority=1):
@@ -301,13 +319,14 @@ class MarketData:
     def books(self,instruments):
         return self._books(instruments,parse_book)
 
-    def opening_books(self,instruments):
-        return self._books(instruments,parse_execution_book)
+    def opening_books(self,instruments,*,timings=None):
+        return self._books(instruments,parse_execution_book,opening_books=True,timings=timings)
 
-    def _books(self,instruments,parser):
+    def _books(self,instruments,parser,**batch_options):
         return self.batch([(i.market.exchange,endpoint(i.market,'depth').replace('/fapi/v1/','/fapi/v3/')
                             if i.market.exchange=='aster' else endpoint(i.market,'depth'),
-                            lambda d,i=i:parser(i.market,i.spec,d,self.clock())) for i in instruments],priority=0,partial=True)
+                            lambda d,i=i:parser(i.market,i.spec,d,self.clock())) for i in instruments],
+                          priority=0,partial=True,**batch_options)
 
     def baseline_quotes(self,bases):
         if not bases:
@@ -411,17 +430,57 @@ class MarketData:
                 mids.setdefault(ex,{})[base]=str(dec(row['mid'])/multiplier)
         return mids,bases
 
-    def open_interests(self,instruments,books):
+    def open_interest_payloads(self,instruments,*,timeout=OPENING_OI_TIMEOUT):
+        """Fetch all routed legs in one batch and return their raw responses in leg order."""
+        deadline=time.monotonic()+timeout
+
+        def received(data):
+            # A running transport can return just after the batch deadline.
+            if time.monotonic() >= deadline:
+                raise TimeoutError('public_deadline')
+            return data
+
         results=[]
-        for i,book in zip(instruments,books):
+        items=[]
+        routed_legs=[]
+        for n,i in enumerate(instruments):
+            results.append([])
+            urls=oi_urls(i.market)
+            if urls:
+                start=len(items)
+                items.extend((i.market.exchange,url,received) for url in urls)
+                routed_legs.append((n,i.market,slice(start,len(items))))
+        if not items:
+            return results
+        try:
+            responses=self.batch(items,priority=1,partial=True,deadline=deadline)
+        except Exception:
+            return results
+        for n,market,span in routed_legs:
+            raw=responses[span]
+            if len(raw) != span.stop-span.start or any(row is None for row in raw):
+                continue
             try:
-                urls=oi_urls(i.market)
-                if not urls or not book:
-                    raise ValueError('oi_missing')
-                payloads=self.batch([(i.market.exchange,u,None) for u in urls],priority=1)
-                # Engine passes common-unit books; public base OI is native.
-                price=(dec(book.bids[0][0])+dec(book.asks[0][0]))/2*i.multiplier
-                results.append(parse_oi(i.market,payloads,price,self.clock()))
-            except Exception:
-                results.append(None)
+                # A unit price validates base quantities before a book is available.
+                parse_oi(market,raw,1,self.clock())
+            except OI_DATA_ERRORS:
+                continue
+            results[n]=raw
         return results
+
+    def open_interests(self,instruments,books):
+        payloads=self.open_interest_payloads(instruments,timeout=10)
+        return value_open_interests(instruments,books,payloads,self.clock())
+
+
+def value_open_interests(instruments,books,payloads,now):
+    """Value already-fetched OI against this attempt's common-unit books."""
+    results=[]
+    for i,book,leg in zip(instruments,books,payloads):
+        try:
+            # Convert the common midpoint back to the venue's native denomination.
+            price=(dec(book.bids[0][0])+dec(book.asks[0][0]))/2*i.multiplier
+            results.append(parse_oi(i.market,leg,price,now))
+        except OI_DATA_ERRORS:
+            results.append(None)
+    return results

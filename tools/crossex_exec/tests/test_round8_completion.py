@@ -13,6 +13,7 @@ from tools.crossex_exec.api_data import position, trade
 from tools.crossex_exec.engine import Engine
 from tools.crossex_exec.settings import Settings
 from tools.crossex_exec.storage import Store
+from test_engine import oi_payloads
 from test_exec import setUpModule, tearDownModule
 from test_round8_universe import native
 import test_round6 as previous
@@ -224,8 +225,7 @@ class CompletionTests(unittest.TestCase):
                 captured_at=now,history_ok=True,max_abs_24h='0') for _ in instruments],
             turnovers=lambda instruments:['9000000']*len(instruments),
             cached_turnovers=lambda instruments:['9000000']*len(instruments),
-            open_interests=lambda instruments,books:[dict(market_key=i.market.key,usd='1000000',
-                at=now,unit_verified=True) for i in instruments])
+            open_interest_payloads=lambda instruments:oi_payloads(instruments,now,quantity='1000000'))
         accounts = SimpleNamespace(cross=venues[0],bitget=venues[1],snapshot=snapshot,
             position_snapshot=snapshot,validate_startup=snapshot,check_instruments=lambda rows:None,
             fee_snapshots={i.market.key:FeeSnapshot('0',now) for i in rows})
