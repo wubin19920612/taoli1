@@ -37,7 +37,6 @@ def oi_urls(market):
     raw, ex = market.raw_symbol, market.exchange
     if ex == 'binance':
         return ['https://fapi.binance.com/fapi/v1/openInterest?'+urlencode(dict(symbol=raw)),
-                'https://fapi.binance.com/futures/data/openInterestHist?'+urlencode(dict(symbol=raw, period='5m', limit=1)),
                 'https://fapi.binance.com/fapi/v1/premiumIndex?'+urlencode(dict(symbol=raw))]
     if ex == 'bitget':
         return ['https://api.bitget.com/api/v2/mix/market/open-interest?'+urlencode(dict(symbol=raw, productType='USDT-FUTURES'))]
@@ -89,30 +88,21 @@ def parse_oi(market, payloads, price, now, *, contract_size=None, received_at=No
     evidence = {}
     if ex == 'binance':
         try:
-            live, history, mark = data
+            live, mark = data
             live = exact([live], 'symbol', raw)
-            hist = exact(history, 'symbol', raw)
             mark = exact([mark], 'symbol', raw)
             quantity, at = dec(live['openInterest']), dec(live['time'])/1000
             mark_price, mark_at = dec(mark['markPrice']), dec(mark['time'])/1000
-            hist_quantity = dec(hist['sumOpenInterest'])
-            hist_value = dec(hist['sumOpenInterestValue'])
-            hist_at = dec(hist['timestamp'])/1000
-        except (AttributeError, KeyError, TypeError, ValueError):
+            value = quantity*mark_price
+        except (ArithmeticError, AttributeError, KeyError, TypeError, ValueError):
             raise ValueError('oi_unit_unverified') from None
-        if min(quantity, mark_price, hist_quantity, hist_value) <= 0:
+        if min(quantity, mark_price, value) <= 0:
             raise ValueError('oi_unit_unverified')
         mark_age = dec(now)-mark_at
         if not 0 <= mark_age <= 300:
             raise OIStaleError('oi_unit_unverified', mark_age)
-        # The five-minute bucket verifies native units across the two OI endpoints.
-        implied = hist_value/hist_quantity
-        if (not 0 <= dec(now)-hist_at <= 900 or abs(implied/mark_price-1) > dec('.05')
-                or not dec('.8') <= quantity/hist_quantity <= dec('1.25')):
-            raise ValueError('oi_unit_unverified')
-        value, unit = quantity*mark_price, 'native_base'
-        evidence = dict(quantity=str(quantity), mark_price=str(mark_price), mark_at=str(mark_at),
-                        hist_quantity=str(hist_quantity), implied_price=str(implied), quote='USDT')
+        unit = 'native_base'
+        evidence = dict(quantity=str(quantity), mark_price=str(mark_price), mark_at=str(mark_at), quote='USDT')
     elif ex == 'bitget':
         check_response(ex, data)
         if not isinstance(data.get('data'), dict):

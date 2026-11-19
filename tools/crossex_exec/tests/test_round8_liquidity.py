@@ -81,17 +81,18 @@ class OpenInterestTests(unittest.TestCase):
         with self.assertRaises((ValueError, KeyError)):
             parse_oi(m, [{'code': '00000', 'data': [{'symbol': 'BTCUSDT', 'openInterest': '25'}]}], 100, 1000)
 
-    def test_binance_ratio_verification_keeps_native_1000_symbol_units(self):
+    def test_binance_live_oi_keeps_native_1000_symbol_units(self):
         m = Market('binance', 'future', '1000SHIBUSDT')
         live = dict(symbol=m.raw_symbol, openInterest='100000', time=1000000)
-        history = [dict(symbol=m.raw_symbol, sumOpenInterest='100000', sumOpenInterestValue='400', timestamp=1000000)]
         mark = dict(symbol=m.raw_symbol, markPrice='.004', time=1000000)
-        row = parse_oi(m, [live, history, mark], '.004', 1000)
-        self.assertEqual(dec(row['usd']), 400)
-        self.assertEqual(row['unit'], 'native_base')
-        for value in ('.000004', '.005', '0', 'NaN'):
-            with self.subTest(value=value), self.assertRaises(ValueError):
-                parse_oi(m, [live, history, dict(mark, markPrice=value)], '.004', 1000)
+        for price, expected in (('.004', '400'), ('.000004', '.4'), ('.005', '500')):
+            with self.subTest(price=price):
+                row = parse_oi(m, [live, dict(mark, markPrice=price)], '.004', 1000)
+                self.assertEqual(dec(row['usd']), dec(expected))
+                self.assertEqual(row['unit'], 'native_base')
+        for invalid in (dict(mark, symbol='SHIBUSDT'), dict(mark, markPrice='0'), dict(mark, markPrice='NaN')):
+            with self.subTest(mark=invalid), self.assertRaisesRegex(ValueError, '^oi_unit_unverified$'):
+                parse_oi(m, [live, invalid], '.004', 1000)
 
     def test_other_documented_units_and_unsupported_aster(self):
         fixtures = [
@@ -114,80 +115,58 @@ class BinanceLiveOITests(unittest.TestCase):
     def setUp(self):
         self.market = Market('binance', 'future', 'EVAAUSDT')
         self.now_ms = 1795073433251
-        # Observed EVAA quantities and live timestamp; the fixture mark and historical price are illustrative.
+        # Observed EVAA quantity and live timestamp, paired with a fixture mark.
         self.live = dict(symbol='EVAAUSDT', openInterest='13678940.8', time=1795073431751)
-        self.hist = dict(symbol='EVAAUSDT', sumOpenInterest='13700379.3',
-                         sumOpenInterestValue=str(dec('13700379.3')*dec('.49')), timestamp=1795073400000)
         self.mark = dict(symbol='EVAAUSDT', markPrice='0.50', time=1795073432000)
 
     def parse(self):
-        return parse_oi(self.market, [self.live, [self.hist], self.mark], 1, dec(self.now_ms)/1000)
+        return parse_oi(self.market, [self.live, self.mark], 1, dec(self.now_ms)/1000)
 
     def test_evaa_uses_live_quantity_mark_and_exchange_timestamp(self):
         urls = oi_urls(self.market)
         self.assertEqual(urls, [
             'https://fapi.binance.com/fapi/v1/openInterest?symbol=EVAAUSDT',
-            'https://fapi.binance.com/futures/data/openInterestHist?symbol=EVAAUSDT&period=5m&limit=1',
             'https://fapi.binance.com/fapi/v1/premiumIndex?symbol=EVAAUSDT',
         ])
         row = self.parse()
         self.assertEqual(dec(row['usd']), dec('13678940.8')*dec('0.50'))
         self.assertEqual(row['at'], 1795073431.751)
         self.assertEqual((row['unit'], row['unit_verified'], row['source']), ('native_base', True, urls[0]))
-        self.assertEqual(row['evidence'], dict(quantity='13678940.8', mark_price='0.50', mark_at='1795073432',
-                                               hist_quantity='13700379.3', implied_price='0.49', quote='USDT'))
+        self.assertEqual(row['evidence'], dict(quantity='13678940.8', mark_price='0.50', mark_at='1795073432', quote='USDT'))
 
-    def test_implied_price_may_differ_from_mark_by_at_most_five_percent(self):
-        for ratio in ('.95', '1.05', '.94999', '1.05001'):
-            self.hist['sumOpenInterestValue'] = str(dec(self.hist['sumOpenInterest'])*dec(self.mark['markPrice'])*dec(ratio))
-            with self.subTest(ratio=ratio):
-                if ratio in ('.95', '1.05'):
-                    self.assertTrue(self.parse()['unit_verified'])
-                else:
-                    with self.assertRaisesRegex(ValueError, '^oi_unit_unverified$'):
-                        self.parse()
+    def test_live_and_mark_timestamps_accept_both_freshness_boundaries(self):
+        for row in (self.live, self.mark):
+            for age_ms in (0, 300000):
+                with self.subTest(row=row, age_ms=age_ms), patch.dict(row, time=self.now_ms-age_ms):
+                    self.assertEqual(self.parse()['at'], self.live['time']/1000)
 
-    def test_live_to_history_quantity_ratio_has_inclusive_bounds(self):
-        for ratio in ('.8', '1.25', '.79999', '1.25001'):
-            self.live['openInterest'] = str(dec(self.hist['sumOpenInterest'])*dec(ratio))
-            with self.subTest(ratio=ratio):
-                if ratio in ('.8', '1.25'):
-                    self.assertTrue(self.parse()['unit_verified'])
-                else:
-                    with self.assertRaisesRegex(ValueError, '^oi_unit_unverified$'):
-                        self.parse()
-
-    def test_history_is_unit_evidence_for_up_to_900_seconds(self):
-        self.hist['timestamp'] = self.now_ms - 900000
-        self.assertEqual(self.parse()['at'], self.live['time']/1000)
-        for stamp in (self.now_ms - 900001, self.now_ms + 1):
-            self.hist['timestamp'] = stamp
-            with self.subTest(stamp=stamp), self.assertRaisesRegex(ValueError, '^oi_unit_unverified$'):
-                self.parse()
-
-    def test_all_three_symbols_must_match_the_raw_market(self):
-        for row in (self.live, self.hist, self.mark):
+    def test_both_symbols_must_match_the_raw_market(self):
+        for row in (self.live, self.mark):
             with (self.subTest(row=row), patch.dict(row, symbol='OTHERUSDT'),
                   self.assertRaisesRegex(ValueError, '^oi_unit_unverified$')):
                 self.parse()
 
-    def test_incomplete_responses_and_ambiguous_history_fail_verification(self):
-        for rows in ([], [[self.hist], self.mark], [self.live, [], self.mark],
-                     [self.live, [self.hist, self.hist], self.mark]):
+    def test_exactly_one_live_row_and_one_mark_row_are_required_in_order(self):
+        for rows in ([], [self.live], [self.mark, self.live], [self.live, None],
+                     [[self.live], self.mark], [self.live, self.mark, self.mark]):
             with self.subTest(rows=rows), self.assertRaisesRegex(ValueError, '^oi_unit_unverified$'):
                 parse_oi(self.market, rows, 1, dec(self.now_ms)/1000)
 
     def test_required_quantities_prices_and_timestamps(self):
-        for row, field in ((self.live, 'openInterest'), (self.hist, 'sumOpenInterest'),
-                           (self.hist, 'sumOpenInterestValue'), (self.mark, 'markPrice')):
-            for invalid in ('0', '-1', 'Infinity'):
+        for row, field in ((self.live, 'openInterest'), (self.mark, 'markPrice')):
+            for invalid in ('0', '-1', 'Infinity', 'NaN', 'invalid', '1e1000100', '1e-1000100'):
                 with (self.subTest(field=field, invalid=invalid), patch.dict(row, {field: invalid}),
                       self.assertRaisesRegex(ValueError, '^oi_unit_unverified$')):
                     self.parse()
-        for row, field in ((self.live, 'time'), (self.mark, 'time'), (self.hist, 'timestamp')):
-            with self.subTest(row=row), patch.dict(row), self.assertRaisesRegex(ValueError, '^oi_unit_unverified$'):
-                del row[field]
-                self.parse()
+        for row in (self.live, self.mark):
+            for field in tuple(row):
+                with self.subTest(field=field), patch.dict(row), self.assertRaisesRegex(ValueError, '^oi_unit_unverified$'):
+                    del row[field]
+                    self.parse()
+            for invalid in ('Infinity', 'NaN', 'invalid', '1e1000100'):
+                with (self.subTest(time=invalid), patch.dict(row, time=invalid),
+                      self.assertRaisesRegex(ValueError, '^oi_unit_unverified$')):
+                    self.parse()
 
 
 class GateTickerOITests(unittest.TestCase):

@@ -61,23 +61,21 @@ class OIMarketDiagnosticsTests(unittest.TestCase):
     market = latency.OpeningQueueTests.market
 
     def test_partial_batch_keeps_job_errors_aligned_with_binance_fragments(self):
-        live,history,mark=oi_urls(self.legs[0].market)
+        live,mark=oi_urls(self.legs[0].market)
         raw=oi_payloads(self.legs,previous.NOW)[0]
         def transport(url):
             if url==live:
                 return raw[0]
-            if url==history:
-                return raw[1]
             if url==mark:
                 raise OSError('disconnected')
             raise TimeoutError('wire timeout')
 
-        market=self.market(Limiter(),transport,clock=lambda:previous.NOW)
+        market=self.market(Limiter(clock=lambda:previous.NOW),transport)
         failures=[]
         with patch.object(market,'batch',wraps=market.batch) as batch:
             self.assertEqual(market.open_interest_payloads(self.legs,failures=failures),[[],[]])
         batch.assert_called_once()
-        self.assertEqual(batch.call_args.kwargs['errors'],[None,None,'request_failed','timeout'])
+        self.assertEqual(batch.call_args.kwargs['errors'],[None,'request_failed','timeout'])
         self.assertEqual(failures,[failure(0,'binance','request_failed'),failure(1,'bitget','timeout')])
 
     def test_whole_batch_exception_reports_only_routed_legs(self):
@@ -122,13 +120,14 @@ class OIMarketDiagnosticsTests(unittest.TestCase):
                     self.assertEqual(failures,[])
 
     def test_binance_live_and_mark_timestamps_keep_their_stale_reasons_and_ages(self):
-        for fragment,reason in ((0,'oi_missing'),(2,'oi_unit_unverified')):
-            for age_ms in (302340,-1370):
+        for fragment,reason in ((0,'oi_missing'),(1,'oi_unit_unverified')):
+            for age_ms in (302340,-1370,300001,-1):
                 with self.subTest(fragment=fragment,age_ms=age_ms):
                     raw=oi_payloads(self.legs,previous.NOW)
                     raw[0][fragment]['time']-=age_ms
-                    with self.assertRaisesRegex(OIStaleError,'^'+reason+'$'):
+                    with self.assertRaisesRegex(OIStaleError,'^'+reason+'$') as stale:
                         parse_oi(self.legs[0].market,raw[0],100,previous.NOW)
+                    self.assertEqual(stale.exception.age_s*1000,age_ms)
                     failures=[]
                     valued=value_open_interests(self.legs,previous.books(),raw,previous.NOW,failures=failures)
                     self.assertIsNone(valued[0])
@@ -237,9 +236,9 @@ class OIMarketDiagnosticsTests(unittest.TestCase):
     def test_payload_parses_the_300_second_leg_before_publishing_the_first_failure(self):
         now = [previous.NOW]
         raw = oi_payloads(self.legs, now[0] - 300)
-        raw[0][2]['markPrice'] = 'NaN'
+        raw[0][1]['markPrice'] = 'NaN'
         by_url = {url: row for leg, data in zip(self.legs, raw) for url, row in zip(oi_urls(leg.market), data)}
-        market = self.market(Limiter(), by_url.__getitem__, clock=lambda: now[0])
+        market = self.market(Limiter(clock=lambda: now[0]), by_url.__getitem__)
         failures = Mock()
 
         def slow_write(_):
@@ -257,14 +256,14 @@ class OIMarketDiagnosticsTests(unittest.TestCase):
         now = [previous.NOW]
         raw = oi_payloads(self.legs, now[0] - 300)
         by_url = {url: row for leg, data in zip(self.legs, raw) for url, row in zip(oi_urls(leg.market), data)}
-        mark = oi_urls(self.legs[0].market)[2]
+        mark = oi_urls(self.legs[0].market)[1]
 
         def transport(url):
             if url == mark:
                 raise TimeoutError()
             return by_url[url]
 
-        market = self.market(Limiter(), transport, clock=lambda: now[0])
+        market = self.market(Limiter(clock=lambda: now[0]), transport)
         failures = []
         with slow_batch_writes(market, now):
             self.assertEqual(market.open_interest_payloads(self.legs, failures=failures), [[], raw[1]])
@@ -359,7 +358,7 @@ class OIReviewDiagnosticsTests(unittest.TestCase):
                 fetch.assert_called_once()
                 books.assert_not_called()
 
-    def test_review_at_300_seconds_keeps_four_oi_and_two_book_requests_with_slow_batch_writes(self):
+    def test_review_at_300_seconds_keeps_three_oi_and_two_book_requests_with_slow_batch_writes(self):
         legs = list(self.market.mapping.values())
         raw = oi_payloads(legs, self.now[0] - 300)
         by_url = {url: row for leg, data in zip(legs, raw) for url, row in zip(oi_urls(leg.market), data)}
@@ -377,8 +376,8 @@ class OIReviewDiagnosticsTests(unittest.TestCase):
         market.client.limiter.opening_book_reserve = True
         with slow_batch_writes(market, self.now):
             books, fill, _ = self.review_with_market(market)
-        self.assertCountEqual(requests[:4], by_url.keys())
-        self.assertEqual(len(requests), 6)
+        self.assertCountEqual(requests[:3], by_url.keys())
+        self.assertEqual(len(requests), 5)
         self.assertEqual(len(books), 2)
         self.assertEqual(fill['sizing']['oi_legs_used'], [0, 1])
 
@@ -530,8 +529,8 @@ class OIReviewDiagnosticsTests(unittest.TestCase):
         raw = oi_payloads(legs, self.now[0])
         urls = [oi_urls(leg.market) for leg in legs]
         expired = oi_payloads(legs, self.now[0] - 300.001)[1][0]
-        live, history, mark = raw[0]
-        live_url, history_url, mark_url = urls[0]
+        live, mark = raw[0]
+        live_url, mark_url = urls[0]
         cases = (
             ('oi-wire-timeout', urls[1][0], TimeoutError(), failure(1, 'bitget', 'timeout')),
             ('oi-mark-timeout', mark_url, TimeoutError(), failure(0, 'binance', 'timeout')),
@@ -539,8 +538,6 @@ class OIReviewDiagnosticsTests(unittest.TestCase):
              failure(0, 'binance', 'parse_invalid', error='oi_unit_unverified')),
             ('oi-live-expired', live_url, dict(live, time=live['time']-300340), failure(0, 'binance', 'stale', age_s=300.3)),
             ('oi-mark-expired', mark_url, dict(mark, time=mark['time']-302340), failure(0, 'binance', 'stale', age_s=302.3)),
-            ('oi-history-expired', history_url, [dict(history[0], timestamp=history[0]['timestamp']-900001)],
-             failure(0, 'binance', 'parse_invalid', error='oi_unit_unverified')),
             ('oi-bucket-expired', urls[1][0], expired, failure(1, 'bitget', 'stale', age_s=300.0)),
         )
         for identity, url, response, expected in cases:
