@@ -204,6 +204,27 @@ def test_catalog_refresh_during_review_preserves_selected_cap_and_bitget_target(
                            (BG_LEVERAGE, dict(symbol=BITGET, category='USDT-FUTURES', marginMode='crossed', leverage='3'))]
 
 
+@pytest.mark.parametrize(('before', 'after', 'changed'), [
+    ('2', '2.00', False), (None, '5', False), ('2', '5', True),
+])
+def test_send_catalog_check_uses_effective_leverage_cap(engine, before, after, changed):
+    selected = catalog_instrument(before)
+    key = selected.market.key
+    engine.market.mapping[key] = selected
+    engine.accounts.leverages[GATE] = '3'
+    engine.live = engine.executor.live = False
+    pair = engine.ingest(trigger())
+    assert pair['state'] == 'SHADOW'
+
+    engine.market.mapping[key] = catalog_instrument(after)
+    instruments = [Instrument.load(row) for row in pair['instruments']]
+    if changed:
+        with pytest.raises(ValueError, match='^send_catalog_changed$'):
+            engine.check_send_config(pair, instruments)
+    else:
+        engine.check_send_config(pair, instruments)
+
+
 def test_crossex_capped_write_accepts_readback_above_catalog_target(engine, http):
     selected = catalog_instrument('1')
     engine.market.mapping[selected.market.key] = selected

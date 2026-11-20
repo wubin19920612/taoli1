@@ -4,6 +4,20 @@ from decimal import ROUND_CEILING, ROUND_FLOOR
 from tools.fill_sim.core import Book, Market, Spec, common_step, opening, dec, walk
 
 
+TARGET_LEVERAGE = '3'
+MIN_OPENING_LEVERAGE = dec('1')
+
+
+def _crossex_leverage_target(default_leverage):
+    try:
+        cap = dec(default_leverage)
+    except ValueError:
+        return TARGET_LEVERAGE
+    if MIN_OPENING_LEVERAGE <= cap < dec(TARGET_LEVERAGE) and cap == cap.to_integral_value():
+        return str(int(cap))
+    return TARGET_LEVERAGE
+
+
 @dataclass
 class Instrument:
     market: Market
@@ -44,7 +58,7 @@ class Instrument:
     def dump(self):
         row = asdict(self)
         if self.default_leverage is None:
-            del row['default_leverage']  # Preserve legacy catalog fingerprints when the optional rule is absent.
+            del row['default_leverage']  # Preserve legacy fingerprints when the rule does not lower the target.
         return row
 
     @classmethod
@@ -80,14 +94,9 @@ def mapped_instrument(market, spec, native_tick, rules):
                    min_qty=str(max(dec(spec.min_qty),dec(r['min_size']))),
                    min_notional=str(max(dec(spec.min_notional),dec(r['min_notional'] or 0))),
                    max_qty=str(min(dec(spec.max_qty),dec(r['max_limit_size']))))
-    # A malformed optional default still leaves the validated trading rule usable.
-    try:
-        leverage = dec(r.get('default_leverage'))
-        default_leverage = str(leverage) if leverage > 0 else None
-    except ValueError:
-        default_leverage = None
+    target = _crossex_leverage_target(r.get('default_leverage'))
     return Instrument(market,spec,symbol,str(common_step(native_tick,r['tick_size'])),
-                      default_leverage=default_leverage)
+                      default_leverage=None if target == TARGET_LEVERAGE else target)
 
 
 def limit_price(deepest, side, tick, bps=3):

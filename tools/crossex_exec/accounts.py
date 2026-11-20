@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from tools.fill_sim.core import dec
 from .background import exception_details
 from .history import error_details
-from .policy import Instrument
+from .policy import MIN_OPENING_LEVERAGE, TARGET_LEVERAGE, Instrument, _crossex_leverage_target
 
 
 def gate_margin(data,mode):
@@ -161,8 +161,6 @@ class FeeSnapshot:
     captured_at: float
 
 
-TARGET_LEVERAGE = '3'
-MIN_OPENING_LEVERAGE = dec('1')
 LEVERAGE_TIMEOUT = 5
 LEVERAGE_COOLDOWN = 600
 LEVERAGE_HOURLY_LIMIT = 30
@@ -170,16 +168,6 @@ LEVERAGE_HOURLY_LIMIT = 30
 
 def _opening_leverage_allowed(leverage):
     return leverage is not None and MIN_OPENING_LEVERAGE <= leverage <= dec(TARGET_LEVERAGE)
-
-
-def _crossex_leverage_target(default_leverage):
-    try:
-        cap = dec(default_leverage)
-    except ValueError:
-        return TARGET_LEVERAGE
-    if MIN_OPENING_LEVERAGE <= cap < dec(TARGET_LEVERAGE) and cap == cap.to_integral_value():
-        return str(int(cap))
-    return TARGET_LEVERAGE
 
 
 class LeverageMismatch(ValueError):
