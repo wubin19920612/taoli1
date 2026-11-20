@@ -4,7 +4,7 @@
 
 ## 目录与开仓复核
 
-`mapped_instrument` 从精确匹配的 CrossEx 规则行读取 `default_leverage`，用项目的 `dec` 解析。缺失、无效、非有限或非正值均视为未知。有效值随合约目录保存和恢复。未知值省略该字段，兼容旧目录及 Bitget 的序列化格式。 [规则匹配与合约模型](../tools/crossex_exec/policy.py) · [目录发布](../tools/crossex_exec/market.py)
+`mapped_instrument` 从精确匹配的 CrossEx 规则行读取 `default_leverage`，用项目的 `dec` 解析。目录只保存生效上限：值为整数 1 或 2 时存 "1"/"2"；其余（缺失、无效、≥3、非整数）省略该字段，目标按 3，兼容旧目录及 Bitget 的序列化格式。 [规则匹配与合约模型](../tools/crossex_exec/policy.py) · [目录发布](../tools/crossex_exec/market.py)
 
 开仓复核从同一份目录选取两腿，将选定的合约传给账户检查。需要设置杠杆时，CrossEx 默认值为整数 1 或 2 就发送对应的整数字符串，其余情况发送 `"3"`。Bitget 仍发送 `"3"` 和 `marginMode=crossed`。`LEVERAGE_SET_ATTEMPT` 和 `LEVERAGE_SET` 的 `target.leverage` 均记录实际发送值。 [开仓入口](../tools/crossex_exec/engine.py) · [目标选择、发送与审计](../tools/crossex_exec/accounts.py)
 
