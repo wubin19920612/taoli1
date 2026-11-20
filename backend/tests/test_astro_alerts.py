@@ -17,7 +17,8 @@ pytestmark = pytest.mark.usefixtures("astro_attempts_for_services")
 
 @pytest.fixture(autouse=True)
 def stub_gate_hl_symbols(monkeypatch):
-    async def fetch_symbol(self, symbol):
+    async def fetch_symbol(self, symbols):
+        symbol = symbols.split(",")[-1]  # legacy name; prefixed HIP-3 names are not listed here
         coin = symbol.removeprefix("HYPERLIQUID_FUTURE_").removesuffix("_USDC")
         dex = {"TTWO": "para", "CIFR": "para", "NET": "xyz", "BTC": ""}.get(coin)
         return [] if dex is None else [{

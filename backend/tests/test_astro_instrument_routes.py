@@ -249,9 +249,9 @@ def test_hl_preview_matches_exact_gate_dex_with_gc_default(
         async def find_astro_card_settings(self):
             return AstroCardSettings(card_variant="gc")
 
-    async def fetch_symbol(symbol):
+    async def fetch_symbol(symbols):
         return [{
-            "symbol": symbol, "exchange_type": "HYPERLIQUID", "business_type": "FUTURE",
+            "symbol": symbols.split(",")[-1], "exchange_type": "HYPERLIQUID", "business_type": "FUTURE",
             "state": "live", "tag": "xyz", "support_cross": "false",
         }]
 

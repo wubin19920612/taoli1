@@ -28,14 +28,44 @@ async def test_same_ticker_requires_exact_dex_and_isolated_markets_are_supported
     assert not await catalog.supports_market("io:NET")
     assert await catalog.supports_market("xyz:NET")
     assert not await catalog.supports_market("NET")
-    assert calls == ["HYPERLIQUID_FUTURE_NET_USDC"]
+    assert calls == [
+        "HYPERLIQUID_FUTURE_para:NET_USDC,HYPERLIQUID_FUTURE_NET_USDC",
+        "HYPERLIQUID_FUTURE_io:NET_USDC,HYPERLIQUID_FUTURE_NET_USDC",
+        "HYPERLIQUID_FUTURE_xyz:NET_USDC,HYPERLIQUID_FUTURE_NET_USDC",
+        "HYPERLIQUID_FUTURE_NET_USDC",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("raw_symbol", "records", "supported"), [
+    pytest.param(" Io:sndk ", [record("io:SNDK", " Io ")], True, id="prefixed-only"),
+    pytest.param("io:SNDK", [record("io:SNDK", "xyz")], False, id="wrong-prefixed-tag"),
+    pytest.param("xyz:NET", [record("xyz:NET"), record(dex="para")], True, id="prefixed-wins"),
+    pytest.param("xyz:NET", [record("xyz:NET", "para"), record()], False, id="prefixed-tag-mismatch"),
+    pytest.param(
+        "xyz:NET", [record("xyz:NET"), record("xyz:NET", "para")], False, id="prefixed-conflict",
+    ),
+    pytest.param(
+        "xyz:NET", [record("xyz:NET", state="suspend"), record()],
+        True, id="suspended-prefixed-with-legacy-match",
+    ),
+    pytest.param(
+        "xyz:NET", [record("xyz:NET", state="suspend"), record(dex="para")],
+        False, id="suspended-prefixed-with-legacy-mismatch",
+    ),
+])
+async def test_prefixed_symbol_precedes_legacy_symbol(raw_symbol, records, supported):
+    async def fetch(symbol):
+        return records
+
+    assert await GateCrossExHyperliquidCatalog(fetch).supports_market(raw_symbol) is supported
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("records", [
     [], [record(state="suspend")], [record(coin="OTHER")], [record(exchange_type="GATE")],
     [record(business_type="SPOT")], [record(tag=None)],
-    [record(), record(dex="para")], {"error": "unavailable"}, ["invalid"],
+    [record(), record(dex="para")], {"error": "unavailable"}, [record("xyz:NET"), "invalid"],
 ])
 async def test_unlisted_suspended_malformed_or_ambiguous_symbols_are_unconfirmed(records):
     async def fetch(symbol):
@@ -133,7 +163,10 @@ async def test_uses_raw_market_instead_of_canonical_alias_and_checks_both_legs()
         sell_exchange="hyperliquid", sell_raw_symbol="io:ANTH",
     )
     assert await catalog.supports_opportunity(opportunity)
-    assert calls == ["HYPERLIQUID_FUTURE_BTC_USDC", "HYPERLIQUID_FUTURE_ANTH_USDC"]
+    assert calls == [
+        "HYPERLIQUID_FUTURE_BTC_USDC",
+        "HYPERLIQUID_FUTURE_io:ANTH_USDC,HYPERLIQUID_FUTURE_ANTH_USDC",
+    ]
     assert not await catalog.supports_opportunity(
         opportunity.model_copy(update={"sell_raw_symbol": "para:ANTH"})
     )
@@ -159,12 +192,14 @@ async def test_queries_the_public_gate_symbol_endpoint_without_credentials(monke
     def handle(request):
         assert request.method == "GET"
         assert str(request.url).split("?", 1)[0] == SYMBOLS_URL
-        assert request.url.params["symbols"] == "HYPERLIQUID_FUTURE_NET_USDC"
+        assert request.url.params["symbols"] == (
+            "HYPERLIQUID_FUTURE_io:SNDK_USDC,HYPERLIQUID_FUTURE_SNDK_USDC"
+        )
         assert "authorization" not in request.headers
         assert "key" not in request.headers
-        return httpx.Response(200, json=[record()])
+        return httpx.Response(200, json=[record("io:SNDK", "io")])
 
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: real_client(
         transport=httpx.MockTransport(handle), **kwargs,
     ))
-    assert await GateCrossExHyperliquidCatalog().supports_market("xyz:NET")
+    assert await GateCrossExHyperliquidCatalog().supports_market("io:SNDK")
