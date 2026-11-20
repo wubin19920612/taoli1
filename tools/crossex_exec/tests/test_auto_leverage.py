@@ -165,8 +165,8 @@ def test_missing_catalog_default_preserves_legacy_and_bitget_rows():
 
 
 @pytest.mark.parametrize(('raw', 'parsed', 'target'), [
-    ('2', '2', '2'), ('1', '1', '1'), ('2.00', '2.00', '2'), ('3', '3', '3'), ('5', '5', '3'),
-    ('2.5', '2.5', '3'), (None, None, '3'), ('garbage', None, '3'), ('0', None, '3'),
+    ('2', '2', '2'), ('1', '1', '1'), ('2.00', '2', '2'), ('3', None, '3'), ('5', None, '3'),
+    ('2.5', None, '3'), (None, None, '3'), ('garbage', None, '3'), ('0', None, '3'),
     ('-1', None, '3'), ('NaN', None, '3'),
 ])
 def test_crossex_catalog_default_controls_write_and_audit(engine, http, raw, parsed, target):
