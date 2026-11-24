@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from app.api.routes_instruments import _lookup_instrument
 from app.models.market import MarketSnapshot
 from app.services.mobile_summary import summary
 from app.services.snapshot_store import SnapshotStore
@@ -184,3 +185,52 @@ async def test_fifty_cards_time_and_single_snapshot_read():
     request.app.state.snapshot_store.get_all_markets.assert_called_once()
     print(f"50 cards: {duration * 1000:.1f} ms")
     assert duration < 1
+
+
+@pytest.mark.parametrize(("card_dex", "age", "expected_raw"), [
+    ("", 0, None), (" MAIN ", 0, "ANTHROPIC"), ("io", 0, "xyz:ANTH"),
+    ("io", 3600, None),
+])
+async def test_hl_matches_floating_panel_instrument_candidates(card_dex, age, expected_raw):
+    # ANTHROPIC resolves to io on an unscoped instrument query. The main book
+    # exists in the store but is absent from the page's returned candidates.
+    pair = dict(FF, name="ANTHROPIC", buyEx="hl", aHlDex=card_dex)
+    io = market("hyperliquid", 101, 102, age=age).model_copy(
+        update={"dex": "io", "raw_symbol": "xyz:ANTH"}
+    )
+    request = request_for([market("hyperliquid", 90, 91), io, market("gate", 110, 111)])
+    result = await _lookup_instrument(
+        "ANTHROPICUSDT", request, card_dex.strip().lower() or None, include_astro_routes=False
+    )
+    candidates = [row for row in result.markets if row.exchange == "hyperliquid"]
+    assert candidates
+    requested = card_dex.strip().lower() or "main"
+    # FloatingWatchPanel.astroMarket searches result.markets before exchanges.
+    web_match = next((
+        row for row in candidates
+        if row.market_type == "future" and row.data_status == "live"
+        and (row.dex or (row.raw_symbol.split(":", 1)[0] if ":" in row.raw_symbol else "main")).lower() == requested
+    ), None)
+    assert (web_match.raw_symbol if web_match else None) == expected_raw
+    (card,) = (await summary(request, [pair])).cards
+    assert card.raw_symbol_a == expected_raw and card.dex_a == requested
+    if web_match is None:
+        assert card.open_spread_now is None and card.metric_error == "未找到 Hyperliquid 永续实时行情"
+    else:
+        assert card.open_spread_now is not None and card.metric_error == ""
+
+
+async def test_card_lookup_exception_preserves_other_quotes():
+    rows = [market(ex, 99, 101, base=base) for ex in ("gate", "binance") for base in ("BTC", "ETH")]
+    request = request_for(rows)
+
+    def annotate(row):
+        if row.base == "BTC":
+            raise ValueError("unreadable snapshot")
+        return row
+
+    request.app.state.market_validation = SimpleNamespace(annotate=annotate)
+    result = await summary(request, [dict(FF, name="BTC", aExPosition=1), dict(FF, name="ETH")])
+    bad, good = result.cards
+    assert bad.name == "BTC" and bad.qty_a == 1 and bad.metric_error == "卡片数据格式异常"
+    assert good.name == "ETH" and good.open_spread_now is not None and good.metric_error == ""

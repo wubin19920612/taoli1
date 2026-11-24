@@ -11,6 +11,7 @@ from app.services.mobile_summary import (
     reference,
     spread_pct,
     summary,
+    text_field,
 )
 from app.services.pair_spread_query import PairSpreadQueryError, PairSpreadQueryService
 
@@ -23,12 +24,20 @@ async def mobile_summary(request: Request):
 
 
 @router.get("/cards/{name}/history", response_model=CardHistory)
-async def card_history(name: str, request: Request, hours: int = Query(24, ge=1, le=72)):
-    pairs = [pair for pair in await list_astro_pairs(request) if pair.get("name") == name]
+async def card_history(
+    name: str, request: Request, hours: int = Query(24, ge=1, le=72),
+    card_type: str | None = Query(None, alias="type"),
+):
+    pairs = [
+        pair for pair in await list_astro_pairs(request)
+        if isinstance(pair, dict) and pair.get("name") == name
+        and (card_type is None or text_field(pair, "type", "FF") == card_type)
+    ]
     if not pairs:
         raise HTTPException(404, "找不到卡片")
     if len(pairs) != 1:
-        raise HTTPException(409, "卡片名称重复，无法确定两腿")
+        types = sorted({text_field(pair, "type", "FF") for pair in pairs})
+        raise HTTPException(409, detail={"message": "卡片名称重复，无法确定两腿", "types": types})
     pair = pairs[0]
     route = legs_for(pair)
     if not route:
@@ -41,7 +50,7 @@ async def card_history(name: str, request: Request, hours: int = Query(24, ge=1,
                 exchange=leg.exchange,
                 symbol=leg.symbol,
                 market_type=leg.market_type,
-                dex=leg.dex or None,
+                dex=(leg.dex or "main") if leg.exchange == "hyperliquid" else None,
             )
             for leg in route
         ]

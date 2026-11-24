@@ -12,6 +12,7 @@ from typing import AsyncIterator, Iterator
 from uuid import NAMESPACE_URL, uuid5
 from zoneinfo import ZoneInfo
 
+import aiosqlite
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -456,7 +457,7 @@ async def _maybe_send_big_spread_phone(
             try:
                 async with delivery_store.db.execute(
                     """
-                    SELECT 1 FROM alert_events_rule_history
+                    SELECT 1 FROM alert_events
                     WHERE rule_id = ? AND symbol = ? AND status IN ('sent', 'muted')
                       AND created_at >= ? AND created_at <= ? AND id != ?
                     LIMIT 1
@@ -1107,7 +1108,13 @@ def create_app(
         app.state.astro_alert_service.attempts = AstroCardAttemptRepository(attempts_db)
         app.state.alert_rule_repo = AlertRuleRepository(db)
         app.state.alert_event_repo = AlertEventRepository(db)
-        app.state.mobile_alert_repo = MobileAlertRepository(db)
+        mobile_db = db
+        if db_path != ":memory:":
+            # A timed-out aiosqlite await cannot cancel a queued SQLite statement.
+            # Keep it off the delivery connection and commit the INSERT atomically.
+            mobile_db = await aiosqlite.connect(db_path, isolation_level=None, timeout=0.9)
+            mobile_db.row_factory = aiosqlite.Row
+        app.state.mobile_alert_repo = MobileAlertRepository(mobile_db)
 
         async def prune_mobile_alerts():
             try:
@@ -1464,6 +1471,8 @@ def create_app(
                     await preset_db.close()
                 if attempts_db is not db:
                     await attempts_db.close()
+                if mobile_db is not db:
+                    await mobile_db.close()
                 await app.state.auth_store.close()
                 await db.close()
 

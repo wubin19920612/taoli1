@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -12,8 +13,8 @@ import httpx
 from app.models.alert import AlertRule
 from app.models.opportunity import Opportunity
 from app.models.settings import AlertMessageTemplateSettings
-from app.services.alert_metrics import AlertObservation
 from app.services.alert_messages import build_alert_message
+from app.services.alert_metrics import AlertObservation
 from app.services.big_spread_alert import BIG_SPREAD_RULE_ID
 
 logger = logging.getLogger(__name__)
@@ -22,16 +23,22 @@ logger = logging.getLogger(__name__)
 def _event_text(text: str, secrets: tuple[str, ...]) -> str:
     # A notification can contain signed URLs, credential headers or echoed
     # configuration. Only the persisted copy is redacted.
-    text = re.sub(r"https?://[^\s<>]+", "[链接]", text, flags=re.I)
+    text = re.sub(r"https?://[^\s<>]+", "[链接]", text, flags=re.IGNORECASE)
     text = re.sub(r"-----BEGIN [\w ]*PRIVATE KEY-----.*?(?:-----END [\w ]*PRIVATE KEY-----|$)",
-                  "[已隐藏]", text, flags=re.S)
+                  "[已隐藏]", text, flags=re.DOTALL)
     text = re.sub(r"(?i)\b(Bearer|Basic)\s+[^\s,;]+", r"\1 [已隐藏]", text)
+    # A Cookie header can contain several credentials separated by semicolons.
     text = re.sub(
-        r"""(?ix)(["']?(?:[\w-]*(?:token|secret|password|api[_-]?key)|authorization|taoli1_session)["']?\s*[:=]\s*)"""
-        r"""(?:"[^"]*"|'[^']*'|[^\s,;}]+)""",
+        r"""(?i)(\b(?:set-cookie|cookie)["']?[ \t]*[:=][ \t]*)[^\r\n]+""",
         r"\1[已隐藏]", text,
     )
-    text = re.sub(r"(?i)\b[a-f0-9]{64}\b", "[已隐藏]", text)
+    text = re.sub(
+        r"""(?ix)(?<![\w-])(["']?(?:[\w-]*(?:token|secret|password|passphrase|api[_-]?key|access[_-]?key|private[_-]?key)"""
+        r"""|ok-access-[\w-]+|sign(?:ature)?|authorization|taoli1_session)["']?\s*[:=]\s*)"""
+        r"""(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}]+)""",
+        r"\1[已隐藏]", text,
+    )
+    text = re.sub(r"(?i)(?<![a-z0-9])(?:0x)?[a-f0-9]{64}(?![a-z0-9])", "[已隐藏]", text)
     for secret in secrets:
         if secret:
             text = text.replace(secret, "[已隐藏]")
@@ -56,10 +63,16 @@ class FeishuNotifier:
         self._client = client
         self._owns_client = client is None
         self.event_repo = None
+        self._record_tasks: set[asyncio.Task] = set()
 
-    async def _record(self, text: str, *, kind=None, symbol=None, level="normal"):
+    def _schedule_record(self, text: str, *, kind=None, symbol=None, level="normal"):
         if self.event_repo is None:
             return
+        task = asyncio.create_task(self._record(text, kind=kind, symbol=symbol, level=level))
+        self._record_tasks.add(task)
+        task.add_done_callback(self._record_tasks.discard)
+
+    async def _record(self, text: str, *, kind, symbol, level):
         try:
             secrets = (self.config.webhook_url, self.config.secret, self.config.app_secret)
             body = _event_text(text, secrets)[:2000]
@@ -69,9 +82,11 @@ class FeishuNotifier:
                     ("大价差", "big_spread"), ("公告", "announcement"), ("登录", "auth"),
                     ("价格提醒", "price"), ("资金费", "funding"),
                 ) if word in title), "general")
-            await self.event_repo.record(kind=kind, title=title, body=body, level=level,
-                                         symbol=_event_text(symbol, secrets) if symbol else None)
-        except Exception:
+            await asyncio.wait_for(self.event_repo.record(
+                kind=kind, title=title, body=body, level=level,
+                symbol=_event_text(symbol, secrets) if symbol else None,
+            ), timeout=1)
+        except Exception:  # noqa: BLE001 - journal failures must never affect delivery.
             logger.warning("Failed to record mobile alert event")
 
     @property
@@ -81,6 +96,8 @@ class FeishuNotifier:
         return self._client
 
     async def aclose(self) -> None:
+        if self._record_tasks:
+            await asyncio.gather(*self._record_tasks)
         if self._client is not None and self._owns_client:
             await self._client.aclose()
 
@@ -93,6 +110,8 @@ class FeishuNotifier:
         template: AlertMessageTemplateSettings | None = None,
         prebuilt_text: str | None = None,
     ) -> None:
+        if not self.config.webhook_url:
+            raise RuntimeError("Feishu webhook is not configured")
         payload = self._build_payload(
             rule,
             opportunity,
@@ -101,15 +120,12 @@ class FeishuNotifier:
             template=template,
             prebuilt_text=prebuilt_text,
         )
-        kind = "big_spread" if getattr(rule, "id", None) == BIG_SPREAD_RULE_ID else "spread"
-        await self._record(payload["content"]["text"], kind=kind, symbol=opportunity.symbol)
-        if not self.config.webhook_url:
-            raise RuntimeError("Feishu webhook is not configured")
         response = await self.client.post(self.config.webhook_url, json=payload)
         self._checked_webhook_payload(response, "send alert")
+        kind = "big_spread" if getattr(rule, "id", None) == BIG_SPREAD_RULE_ID else "spread"
+        self._schedule_record(payload["content"]["text"], kind=kind, symbol=opportunity.symbol)
 
     async def send_text(self, text: str) -> None:
-        await self._record(text)
         if not self.config.webhook_url:
             raise RuntimeError("Feishu webhook is not configured")
         payload: dict = {
@@ -124,9 +140,9 @@ class FeishuNotifier:
             payload["sign"] = self._sign(timestamp)
         response = await self.client.post(self.config.webhook_url, json=payload)
         self._checked_webhook_payload(response, "send text")
+        self._schedule_record(text)
 
     async def send_phone_urgent_text(self, text: str) -> None:
-        await self._record(text, level="urgent")
         user_ids = self.config.phone_user_ids or []
         if (
             not self.config.phone_enabled
@@ -139,6 +155,7 @@ class FeishuNotifier:
         token = await self._tenant_access_token()
         message_id = await self._create_open_platform_text_message(token, text)
         await self._send_phone_urgent(token, message_id, user_ids)
+        self._schedule_record(text, level="urgent")
 
     async def _tenant_access_token(self) -> str:
         response = await self.client.post(

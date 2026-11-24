@@ -3,6 +3,7 @@
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import cache
 from math import isfinite
 from time import monotonic
 
@@ -11,7 +12,6 @@ from app.api.routes_instruments import (
     _best_symbol,
     _candidate_symbols,
     _market_age_seconds,
-    _market_hyperliquid_dex,
     _market_identity,
     _matches_hyperliquid_dex,
     _risk_settings,
@@ -52,6 +52,11 @@ def positive(value):
     return parsed if parsed is not None and parsed > 0 else None
 
 
+def text_field(pair, key, default=""):
+    value = pair.get(key)
+    return value if isinstance(value, str) and value else default
+
+
 def spread_pct(left, right):
     return (right - left) / ((left + right) / 2) * 100
 
@@ -83,16 +88,16 @@ def legs_for(pair):
     bases = _astro_pair_bases(pair)
     if bases is None:
         return ()
-    kind = (pair.get("type") or "FF").upper()
+    kind = text_field(pair, "type", "FF").upper()
     legs = []
     for index, (base, side, prefix) in enumerate(zip(bases, ("buyEx", "sellEx"), ("a", "b"))):
-        venue = (pair.get(side) or "").strip().lower().removeprefix("gc-")
+        venue = text_field(pair, side).strip().lower().removeprefix("gc-")
         exchange = {"hl": "hyperliquid", "bitgetr": "bitget"}.get(venue, venue)
         symbol = base.strip().upper().translate(str.maketrans("", "", "-_/"))
         if not symbol.endswith(("USDT", "USDC", "USD")):
             symbol += "USDT"
         dex = (
-            (pair.get(prefix + "EffectiveHlDex") or pair.get(prefix + "HlDex") or "")
+            (text_field(pair, prefix + "EffectiveHlDex") or text_field(pair, prefix + "HlDex"))
             .strip()
             .lower()
         )
@@ -101,13 +106,13 @@ def legs_for(pair):
                 exchange,
                 MarketType.SPOT if kind[index : index + 1] == "S" else MarketType.FUTURE,
                 symbol,
-                (dex or "main") if exchange == "hyperliquid" else "",
+                dex if exchange == "hyperliquid" else "",
             )
         )
     return tuple(legs)
 
 
-def lookup_markets(request, legs, settings):
+def market_lookup(request, settings):
     # Index the same collector publication once. The instrument page selects
     # its canonical candidate within the requested DEX, then the latest row per
     # exact raw identity. Avoid building unrelated spreads or fetching routes.
@@ -118,8 +123,11 @@ def lookup_markets(request, legs, settings):
     resolver = SymbolAliasResolver(settings.symbol_aliases)
     validator = getattr(request.app.state, "market_validation", None)
     by_query = {}
-    result = {}
-    for leg in dict.fromkeys(legs):
+
+    @cache
+    def lookup(leg):
+        # The instrument query resolves aliases when the card omits its DEX.
+        # astroMarket then requires main within that query's returned markets.
         dex = leg.dex or None
         key = (leg.symbol, dex)
         if key not in by_query:
@@ -145,17 +153,21 @@ def lookup_markets(request, legs, settings):
                     if identity not in latest or row.timestamp > latest[identity].timestamp:
                         latest[identity] = row
             by_query[key] = sorted(latest.values(), key=lambda row: row.raw_symbol)
-        result[leg] = [
-            validator.annotate(row) if validator else row
-            for row in by_query[key]
-            if row.exchange == leg.exchange
-            and row.market_type == leg.market_type
-            and (
-                row.dex or (_market_hyperliquid_dex(row) if leg.exchange == "hyperliquid" else "")
-            ).lower()
-            == leg.dex
-        ]
-    return result
+        requested_dex = (leg.dex or "main") if leg.exchange == "hyperliquid" else ""
+        matches = []
+        for row in by_query[key]:
+            if row.exchange != leg.exchange or row.market_type != leg.market_type:
+                continue
+            row = validator.annotate(row) if validator else row
+            market_dex = row.dex
+            if not market_dex and leg.exchange == "hyperliquid":
+                prefix, separator, _ = row.raw_symbol.partition(":")
+                market_dex = (prefix if separator else "") or "main"
+            if (market_dex or "").lower() == requested_dex:
+                matches.append(row)
+        return matches
+
+    return lookup
 
 
 def executable_price(market: MarketSnapshot, side: str):
@@ -174,11 +186,12 @@ def difference(left, right):
     return left - right if left is not None and right is not None else None
 
 
-def build_card(pair, legs, quotes, now, stale_after):
+def build_card(pair, legs, lookup, now, stale_after):
     markets, ages = [], []
     error = "" if legs else "无法从卡片名称识别两腿标的"
     for leg in legs:
-        candidates = [(row, _market_age_seconds(row, now)) for row in quotes[leg]]
+        candidates = [(row, _market_age_seconds(row, now)) for row in lookup(leg)]
+        # InstrumentMarketCandidate.data_status is live exactly at this cutoff.
         selected = next(((row, age) for row, age in candidates if age <= stale_after), None)
         markets.append(selected[0] if selected else None)
         ages.append(selected[1] if selected else min((age for _, age in candidates), default=None))
@@ -235,16 +248,16 @@ def build_card(pair, legs, quotes, now, stale_after):
     cost_a = 0 if a and a.market_type == MarketType.SPOT else funding_a
     income_b = 0 if b and b.market_type == MarketType.SPOT else funding_b
     return MobileCard(
-        name=pair.get("name") or "",
-        type=pair.get("type") or "FF",
-        buy_ex=pair.get("buyEx") or "",
-        sell_ex=pair.get("sellEx") or "",
+        name=text_field(pair, "name"),
+        type=text_field(pair, "type", "FF"),
+        buy_ex=text_field(pair, "buyEx"),
+        sell_ex=text_field(pair, "sellEx"),
         symbol_a=legs[0].symbol if legs else None,
         symbol_b=legs[1].symbol if legs else None,
         raw_symbol_a=a.raw_symbol if a else None,
         raw_symbol_b=b.raw_symbol if b else None,
-        dex_a=(legs[0].dex or None) if legs else None,
-        dex_b=(legs[1].dex or None) if legs else None,
+        dex_a=(legs[0].dex or "main") if legs and legs[0].exchange == "hyperliquid" else None,
+        dex_b=(legs[1].dex or "main") if legs and legs[1].exchange == "hyperliquid" else None,
         enabled=enabled,
         disable_open=disable_open,
         disable_close=disable_close,
@@ -290,12 +303,30 @@ async def summary(request, pairs):
     cached_at = getattr(request.app.state.astro_client, "_pairs_cached_at", None)
     age = max(0.0, monotonic() - cached_at) if cached_at is not None else None
     settings = await _risk_settings(request)
-    routes = [legs_for(pair) for pair in pairs]
-    quotes = lookup_markets(request, (leg for route in routes for leg in route), settings)
-    cards = [
-        build_card(pair, route, quotes, now, settings.stale_after_seconds)
-        for pair, route in zip(pairs, routes)
-    ]
+    lookup = market_lookup(request, settings)
+    cards = []
+    for pair in pairs:
+        try:
+            malformed_text = not isinstance(pair.get("name"), str) or any(
+                pair.get(key) is not None and not isinstance(pair[key], str)
+                for key in ("type", "buyEx", "sellEx", "aEffectiveHlDex", "aHlDex",
+                            "bEffectiveHlDex", "bHlDex")
+            )
+            legs = () if malformed_text else legs_for(pair)
+            card = build_card(pair, legs, lookup, now, settings.stale_after_seconds)
+            malformed_number = legs and any(
+                pair.get(key) not in (None, "") and number(pair[key]) is None
+                for key in ("openPosition", "closePosition", "regressionValue",
+                            "aExPosition", "bExPosition", "avgOpenAExPrice", "avgOpenBExPrice",
+                            "avgCloseAExPrice", "avgCloseBExPrice", "profit", "realizedProfit")
+            )
+            if malformed_text or malformed_number:
+                card.metric_error = "卡片数据格式异常"
+        except Exception:  # noqa: BLE001 - isolate malformed cards from the rest of the summary.
+            card = build_card(pair if isinstance(pair, dict) else {}, (), lookup, now,
+                              settings.stale_after_seconds)
+            card.metric_error = "卡片数据格式异常"
+        cards.append(card)
     cards.sort(key=_card_order)
     stale = (
         age is None

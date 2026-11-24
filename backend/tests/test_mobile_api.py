@@ -1,3 +1,4 @@
+import asyncio
 import sqlite3
 import time
 from datetime import UTC, datetime, timedelta
@@ -105,8 +106,9 @@ async def test_old_db_preserves_rule_events_and_sessions(tmp_path):
     token = "b" * 64
     connection = sqlite3.connect(path)
     connection.executescript("""
-        CREATE TABLE alert_events (id TEXT PRIMARY KEY, rule_id TEXT, opportunity_id TEXT,
-                                   symbol TEXT, status TEXT, message TEXT, created_at TEXT);
+        CREATE TABLE alert_events (id TEXT PRIMARY KEY, rule_id TEXT NOT NULL,
+                                   opportunity_id TEXT NOT NULL, symbol TEXT NOT NULL,
+                                   status TEXT NOT NULL, message TEXT NOT NULL, created_at TEXT NOT NULL);
         INSERT INTO alert_events VALUES ('id', 'rule', 'op', 'BTC', 'sent', 'old message', '2026-01-01');
         CREATE TABLE auth_sessions (id_hash TEXT PRIMARY KEY, created_at REAL, expires_at REAL,
                                     last_seen_at REAL, ip TEXT, user_agent TEXT, revoked_at REAL);
@@ -115,12 +117,19 @@ async def test_old_db_preserves_rule_events_and_sessions(tmp_path):
         "INSERT INTO auth_sessions VALUES (?,1,100,1,'ip','browser',NULL)", (session_hash(token),)
     )
     connection.commit()
+    columns = connection.execute("PRAGMA table_info(alert_events)").fetchall()
+    schema_query = "SELECT type, name, sql FROM sqlite_master WHERE tbl_name='alert_events' ORDER BY name"
+    definition = connection.execute(schema_query).fetchall()
     connection.close()
     db = await connect_database(path)
     try:
         for _ in range(2):
             await initialize_schema(db)
-        async with db.execute("SELECT message FROM alert_events_rule_history") as cursor:
+        async with db.execute("PRAGMA table_info(alert_events)") as cursor:
+            assert [tuple(row) for row in await cursor.fetchall()] == columns
+        async with db.execute(schema_query) as cursor:
+            assert [tuple(row) for row in await cursor.fetchall()] == definition
+        async with db.execute("SELECT message FROM alert_events") as cursor:
             assert (await cursor.fetchone())[0] == "old message"
         assert await MobileAlertRepository(db).list(0, 200) == []
         store = await AuthStore.open(path)
@@ -177,13 +186,16 @@ async def test_alert_journal_order_redaction_and_retention(mobile_app):
     repo = app.state.mobile_alert_repo
     notifier = app.state.feishu_notifier
     notifier.config = FeishuConfig(
-        webhook_url="https://test.invalid/hook", app_secret="fixture-hidden"
+        webhook_url="https://test.invalid/hook", app_secret="fixture-hidden", app_id="id",
+        alert_chat_id="chat", phone_user_ids=["id"], phone_enabled=True,
     )
+    notifier._tenant_access_token = AsyncMock(return_value="token")
+    notifier._create_open_platform_text_message = AsyncMock(return_value="message")
+    notifier._send_phone_urgent = AsyncMock()
     sent = []
 
     async def post(url, *, json):
-        # The row is already committed when the send begins.
-        assert len(await repo.list(0, 200)) == len(sent) + 1
+        assert len(await repo.list(0, 200)) == len(sent)
         sent.append(json["content"]["text"])
         return httpx.Response(200, json={"code": 0}, request=httpx.Request("POST", url))
 
@@ -193,8 +205,11 @@ async def test_alert_journal_order_redaction_and_retention(mobile_app):
         + "测" * 2100
     )
     await notifier.send_text(body)
+    await asyncio.gather(*notifier._record_tasks)
     await notifier.send_alert(None, SimpleNamespace(symbol="ETH"), prebuilt_text="合约价差")
+    await asyncio.gather(*notifier._record_tasks)
     await notifier.send_phone_urgent_text("电话")
+    await asyncio.gather(*notifier._record_tasks)
     assert sent == [body, "合约价差"]
     headers = {"X-Api-Token": "a" * 64}
     events = (await client.get("/api/mobile/alerts", headers=headers)).json()
@@ -216,7 +231,7 @@ async def test_alert_journal_order_redaction_and_retention(mobile_app):
     now = datetime.now(UTC)
     for event, days in ((normal, 31), (spread, 30)):
         await repo.db.execute(
-            "UPDATE alert_events SET created_at=? WHERE id=?",
+            "UPDATE mobile_alert_events SET created_at=? WHERE id=?",
             ((now - timedelta(days=days)).timestamp(), event["id"]),
         )
     await repo.db.commit()
@@ -247,7 +262,138 @@ async def test_event_failure_preserves_all_feishu_sends(caplog):
     await notifier.send_text("普通")
     await notifier.send_alert(None, SimpleNamespace(symbol="ETH"), prebuilt_text="价差")
     await notifier.send_phone_urgent_text("加急")
+    await notifier.aclose()
     assert notifier.event_repo.record.await_count == 3 and transport.post.await_count == 2
     notifier._send_phone_urgent.assert_awaited_once()
     assert caplog.text.count("Failed to record mobile alert event") == 3
     assert "private detail" not in caplog.text
+
+
+async def test_slow_journal_never_blocks_feishu_and_times_out(caplog):
+    sent = []
+    cancelled = []
+
+    async def record(*, body, **event):
+        assert body in sent
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            cancelled.append(body)
+            raise
+
+    async def post(url, *, json):
+        sent.append(json["content"]["text"])
+        return httpx.Response(200, json={"code": 0}, request=httpx.Request("POST", url))
+
+    notifier = FeishuNotifier(FeishuConfig(
+        "https://test", app_id="id", app_secret="secret", alert_chat_id="chat",
+        phone_user_ids=["id"], phone_enabled=True,
+    ), SimpleNamespace(post=post))
+    notifier.event_repo = SimpleNamespace(record=record)
+    notifier._tenant_access_token = AsyncMock(return_value="token")
+    notifier._create_open_platform_text_message = AsyncMock(return_value="message")
+    notifier._send_phone_urgent = AsyncMock(side_effect=lambda *args: sent.append("电话"))
+    for send in (
+        notifier.send_text("普通"),
+        notifier.send_alert(None, SimpleNamespace(symbol="BTC"), prebuilt_text="价差"),
+        notifier.send_phone_urgent_text("电话"),
+    ):
+        started = time.perf_counter()
+        await send
+        assert time.perf_counter() - started < 0.2
+    await asyncio.wait_for(notifier.aclose(), timeout=2)
+    assert sorted(cancelled) == sorted(sent) == sorted(["普通", "价差", "电话"])
+    assert not notifier._record_tasks
+    assert caplog.text.count("Failed to record mobile alert event") == 3
+
+
+async def test_unconfigured_webhook_rejected_before_build_or_record():
+    notifier = FeishuNotifier(FeishuConfig(""))
+    notifier.event_repo = SimpleNamespace(record=AsyncMock())
+    with pytest.raises(RuntimeError, match="Feishu webhook is not configured"):
+        await notifier.send_alert(None, None)
+    await notifier.send_phone_urgent_text("未启用")
+    await notifier.aclose()
+    notifier.event_repo.record.assert_not_awaited()
+
+
+async def test_locked_journal_does_not_commit_or_block_rule_delivery(mobile_app, caplog):
+    app, _ = mobile_app
+    db = app.state.db
+    notifier = app.state.feishu_notifier
+    notifier.config = FeishuConfig("https://test")
+    response = httpx.Response(200, json={"code": 0}, request=httpx.Request("POST", "https://test"))
+    notifier._client = SimpleNamespace(post=AsyncMock(return_value=response), aclose=AsyncMock())
+    await db.execute("BEGIN IMMEDIATE")
+    try:
+        await asyncio.wait_for(notifier.send_text("locked"), timeout=0.2)
+        await asyncio.wait_for(asyncio.gather(*notifier._record_tasks), timeout=2)
+        assert db.in_transaction
+        assert "Failed to record mobile alert event" in caplog.text
+        # A cancelled await can leave SQLite finishing its busy handler. Queue
+        # this read behind the INSERT before releasing the simulated writer.
+        assert await app.state.mobile_alert_repo.list(0, 200) == []
+    finally:
+        await db.rollback()
+    await notifier.send_text("unlocked")
+    await asyncio.gather(*notifier._record_tasks)
+    assert [row["body"] for row in await app.state.mobile_alert_repo.list(0, 200)] == ["unlocked"]
+    assert notifier._client.post.await_count == 2
+
+
+@pytest.mark.parametrize("credential", [
+    "passphrase: 'first second'", "access_key=first", "access-key=first", "accessKey=first",
+    '"OK-ACCESS-KEY": "first"', "OK-ACCESS-SIGN: first", "OK-ACCESS-TIMESTAMP: first",
+    "OK-ACCESS-PASSPHRASE: first", "X-MBX-APIKEY: first", "sign=first", "signature=first",
+    "private_key=first", "private-key=first", "privateKey=first",
+    "Cookie: key=first; other=second", "Set-Cookie: session=first; Path=/second",
+    "private material 0x" + "ab" * 32,
+])
+async def test_credentials_hidden_in_persisted_title_body_and_symbol(credential):
+    response = httpx.Response(200, json={"code": 0}, request=httpx.Request("POST", "https://test"))
+    client = SimpleNamespace(post=AsyncMock(return_value=response))
+    notifier = FeishuNotifier(FeishuConfig("https://test"), client)
+    notifier.event_repo = SimpleNamespace(record=AsyncMock())
+    await notifier.send_alert(None, SimpleNamespace(symbol=credential), prebuilt_text=credential)
+    await notifier.aclose()
+    assert client.post.await_args.kwargs["json"]["content"]["text"] == credential
+    event = notifier.event_repo.record.await_args.kwargs
+    for field in ("title", "body", "symbol"):
+        assert "[已隐藏]" in event[field]
+        assert all(value not in event[field] for value in ("first", "second", "ab" * 32))
+
+
+async def test_history_selects_type_for_same_name(mobile_app):
+    app, client = mobile_app
+    pair = {"name": "BTC", "buyEx": "gate", "sellEx": "binance", "openPosition": ".01"}
+    app.state.astro_client.list_pairs_cached.return_value = [
+        dict(pair, type="FF"), dict(pair, type="SF", openPosition=".02")
+    ]
+    service = SimpleNamespace(query=AsyncMock(return_value=SimpleNamespace(points=[])), aclose=AsyncMock())
+    app.state.pair_spread_query_service_factory = lambda: service
+    client.headers["X-Api-Token"] = "a" * 64
+    path = "/api/mobile/cards/BTC/history"
+    ambiguous = await client.get(path)
+    assert ambiguous.status_code == 409 and ambiguous.json()["detail"]["types"] == ["FF", "SF"]
+    assert (await client.get(path, params={"type": "FR"})).status_code == 404
+    service.query.assert_not_awaited()
+    for kind, market_type, threshold in (("FF", "future", 1), ("SF", "spot", 2)):
+        result = await client.get(path, params={"type": kind})
+        assert result.status_code == 200 and result.json()["open_condition"] == threshold
+        assert service.query.await_args.args[0].market_type == market_type
+
+
+async def test_malformed_cards_leave_summary_available(mobile_app):
+    app, client = mobile_app
+    pair = {"name": "BTC", "type": "FF", "buyEx": "gate", "sellEx": "binance", "aExPosition": 2}
+    app.state.astro_client.list_pairs_cached.return_value = [
+        pair, dict(pair, type=123), dict(pair, name=None),
+        dict(pair, openPosition="oops"), dict(pair, buyEx=123), dict(pair, bHlDex=["io"]),
+    ]
+    response = await client.get("/api/mobile/summary", headers={"X-Api-Token": "a" * 64})
+    assert response.status_code == 200
+    cards = response.json()["cards"]
+    assert len(cards) == 6 and all(card["qty_a"] == 2 and card["holding"] for card in cards)
+    assert cards[0]["metric_error"] == "未找到 Gate 永续实时行情"
+    assert all(card["metric_error"] == "卡片数据格式异常" for card in cards[1:])
+    assert cards[2]["name"] == "" and cards[3]["open_condition"] is None
