@@ -98,7 +98,8 @@ async def test_cookie_hash_only_notification_and_replay(context, caplog):
     assert token not in str(row)
     sessions = await client.get("/api/auth/sessions")
     assert sessions.json()[0]["current"] is True
-    assert set(sessions.json()[0]) == {"created_at", "expires_at", "last_seen_at", "ip", "user_agent", "current"}
+    assert set(sessions.json()[0]) == {"created_at", "expires_at", "last_seen_at", "ip", "user_agent", "current", "scope"}
+    assert sessions.json()[0]["scope"] == "full"
     assert row["expires_at"] - row["created_at"] == 30 * 86400
     assert (await client.get("/private")).status_code == 200
     assert (await sign_in(app, client)).json() == {"detail": LOGIN_ERROR}
