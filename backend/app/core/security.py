@@ -3,6 +3,7 @@ import ipaddress
 import time
 
 from fastapi import HTTPException, Request
+from starlette.responses import JSONResponse
 
 from app.core.totp import decode_secret
 
@@ -67,14 +68,51 @@ def browser_label(request: Request) -> str:
     return f"{browser} / {platform}"
 
 
+def _mobile_route(request: Request) -> bool:
+    path = request.url.path
+    if request.method == "GET":
+        return path.startswith("/api/mobile/") or path == "/api/health" or path.startswith("/api/health/")
+    return request.method == "POST" and path == "/api/auth/logout"
+
+
+async def _read_session(request: Request):
+    store = getattr(request.app.state, "auth_store", None)
+    try:
+        current = await store.authenticate(request.cookies.get(COOKIE_NAME), time.time()) if store else None
+    except Exception:
+        raise HTTPException(503, "Authentication unavailable") from None
+    if current and current[1] != "full" and not _mobile_route(request):
+        raise HTTPException(403, "手机只读会话无权访问")
+    return current
+
+
+class SessionScopeMiddleware:
+    """Apply the same session guard to public docs, redirects and method mismatches."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            request = Request(scope)
+            if COOKIE_NAME in request.cookies and not _mobile_route(request):
+                try:
+                    request.state.initial_session = await _read_session(request)
+                except HTTPException as exc:
+                    response = JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+                    await response(scope, receive, send)
+                    return
+        await self.app(scope, receive, send)
+
+
 async def require_dashboard_password(request: Request) -> None:
     """Retained import name for the central route matrix; no password headers."""
-    if (request.method, request.url.path) in PUBLIC_API_ROUTES:
-        return
-    await require_authentication(request)
+    if (request.method, request.url.path) not in PUBLIC_API_ROUTES:
+        await require_authentication(request, use_initial_session=True)
 
 
-async def require_authentication(request: Request, *, session_only=False, allow_development_bypass=True) -> None:
+async def require_authentication(request: Request, *, session_only=False, allow_development_bypass=True,
+                                 use_initial_session=False) -> None:
     settings = request.app.state.settings
     if not session_only and allow_development_bypass and development_bypass(settings):
         return
@@ -85,15 +123,15 @@ async def require_authentication(request: Request, *, session_only=False, allow_
             and not constant_time_equal(api_token, settings.dashboard_password)
             and constant_time_equal(api_token, request.headers.get("x-api-token", ""))):
         return
-    store = getattr(request.app.state, "auth_store", None)
-    try:
-        current = await store.authenticate(request.cookies.get(COOKIE_NAME), time.time()) if store else None
-    except Exception:
-        raise HTTPException(503, "Authentication unavailable") from None
+    # SSE calls without this flag so each snapshot observes revocations.
+    if use_initial_session and hasattr(request.state, "initial_session"):
+        current = request.state.initial_session
+    else:
+        current = await _read_session(request)
     if not current:
         raise HTTPException(401, "Authentication required")
-    request.state.auth_session_hash = current
+    request.state.auth_session_hash = current[0]
 
 
 async def require_session(request: Request) -> None:
-    await require_authentication(request, session_only=True)
+    await require_authentication(request, session_only=True, use_initial_session=True)

@@ -19,7 +19,8 @@ async def seed_sessions(store):
     for label in LEGACY_LABELS:
         token = session_headers(label)["Cookie"].split("=", 1)[1]
         await store.db.execute(
-            "INSERT OR IGNORE INTO auth_sessions VALUES (?, ?, ?, ?, ?, ?, NULL)",
+            "INSERT OR IGNORE INTO auth_sessions (id_hash, created_at, expires_at, last_seen_at, ip, user_agent)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
             (session_hash(token), now, now + 86400, now, "127.0.0.1", "Test browser"),
         )
     await store.db.commit()

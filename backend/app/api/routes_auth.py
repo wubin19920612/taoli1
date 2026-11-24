@@ -40,7 +40,8 @@ async def login(request: Request, response: Response, tasks: BackgroundTasks):
             pass
     password = payload.get("password") if isinstance(payload, dict) else None
     code = payload.get("code") if isinstance(payload, dict) else None
-    valid_shape = isinstance(password, str) and isinstance(code, str)
+    scope = payload.get("scope", "full") if isinstance(payload, dict) else None
+    valid_shape = isinstance(password, str) and isinstance(code, str) and scope in ("full", "mobile_readonly")
     if not auth_configured(settings):
         raise HTTPException(401, LOGIN_ERROR)
     ip, browser, now = client_ip(request), browser_label(request), time.time()
@@ -49,7 +50,7 @@ async def login(request: Request, response: Response, tasks: BackgroundTasks):
         result = await request.app.state.auth_store.login(
             password_ok=password_ok and valid_shape, secret=settings.dashboard_totp_secret,
             code=code if valid_shape else "", ip=ip, browser=browser, now=now,
-            days=settings.dashboard_session_days,
+            days=settings.dashboard_session_days, scope=scope,
         )
     except Exception:
         raise HTTPException(503, "Authentication unavailable") from None

@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import aiosqlite
 
@@ -112,6 +113,20 @@ async def _ensure_oil_news_columns(db: aiosqlite.Connection) -> None:
 
 
 async def initialize_schema(db: aiosqlite.Connection) -> None:
+    # Earlier databases used this name for rule delivery history (text UUIDs).
+    async with db.execute("PRAGMA table_info(alert_events)") as cursor:
+        legacy = any(row[1] == "rule_id" for row in await cursor.fetchall())
+    if legacy:
+        try:
+            await db.execute("ALTER TABLE alert_events RENAME TO alert_events_rule_history")
+        except sqlite3.OperationalError:
+            # Another starting process may have completed the atomic rename.
+            async with db.execute("PRAGMA table_info(alert_events)") as cursor:
+                if any(row[1] == "rule_id" for row in await cursor.fetchall()):
+                    raise
+            async with db.execute("PRAGMA table_info(alert_events_rule_history)") as cursor:
+                if not any(row[1] == "rule_id" for row in await cursor.fetchall()):
+                    raise
     await db.executescript(
         """
         CREATE TABLE IF NOT EXISTS alert_rules (
@@ -143,6 +158,12 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
         );
 
         CREATE TABLE IF NOT EXISTS alert_events (
+          id INTEGER PRIMARY KEY, created_at REAL NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL,
+          body TEXT NOT NULL, level TEXT NOT NULL, symbol TEXT, card_name TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_alert_events_created_at ON alert_events(created_at);
+
+        CREATE TABLE IF NOT EXISTS alert_events_rule_history (
           id TEXT PRIMARY KEY,
           rule_id TEXT NOT NULL,
           opportunity_id TEXT NOT NULL,
@@ -721,10 +742,9 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
 
 
 async def initialize_auth_schema(db: aiosqlite.Connection) -> None:
-    from app.db.auth import AUTH_SCHEMA
+    from app.db.auth import initialize_sessions
 
-    await db.executescript(AUTH_SCHEMA)
-    await db.commit()
+    await initialize_sessions(db)
 
 
 async def initialize_shadow_schema(db: aiosqlite.Connection) -> None:

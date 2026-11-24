@@ -13,7 +13,8 @@ from app.core.totp import matching_counter
 AUTH_SCHEMA = """
 CREATE TABLE IF NOT EXISTS auth_sessions (
     id_hash TEXT PRIMARY KEY, created_at REAL NOT NULL, expires_at REAL NOT NULL,
-    last_seen_at REAL NOT NULL, ip TEXT NOT NULL, user_agent TEXT NOT NULL, revoked_at REAL
+    last_seen_at REAL NOT NULL, ip TEXT NOT NULL, user_agent TEXT NOT NULL, revoked_at REAL,
+    scope TEXT NOT NULL DEFAULT 'full'
 );
 CREATE INDEX IF NOT EXISTS auth_sessions_expiry ON auth_sessions(expires_at);
 CREATE TABLE IF NOT EXISTS auth_totp_state (
@@ -42,6 +43,20 @@ def session_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+async def initialize_sessions(db):
+    await db.executescript(AUTH_SCHEMA)
+    await db.execute("BEGIN IMMEDIATE")
+    try:
+        async with db.execute("PRAGMA table_info(auth_sessions)") as cursor:
+            columns = {row[1] for row in await cursor.fetchall()}
+        if "scope" not in columns:
+            await db.execute("ALTER TABLE auth_sessions ADD COLUMN scope TEXT NOT NULL DEFAULT 'full'")
+        await db.commit()
+    except BaseException:
+        await db.rollback()
+        raise
+
+
 class AuthStore:
     def __init__(self, db):
         self.db = db
@@ -52,7 +67,7 @@ class AuthStore:
         db = await aiosqlite.connect(path)
         db.row_factory = aiosqlite.Row
         await db.execute("PRAGMA busy_timeout=5000")
-        await db.executescript(AUTH_SCHEMA)
+        await initialize_sessions(db)
         # Retire locks created by the previous global-failure policy.
         await db.execute("DELETE FROM auth_locks WHERE scope = 'global'")
         await db.commit()
@@ -72,7 +87,7 @@ class AuthStore:
                 await self.db.rollback()
                 raise
 
-    async def login(self, *, password_ok, secret, code, ip, browser, now, days):
+    async def login(self, *, password_ok, secret, code, ip, browser, now, days, scope="full"):
         """Consume a code and issue its session atomically, across processes too."""
         async with self.transaction():
             # Shared rolling admission budget, not a global lock. Denied attempts
@@ -113,8 +128,9 @@ class AuthStore:
             await self.db.execute("UPDATE auth_totp_state SET last_counter = ? WHERE singleton = 1", (counter,))
             token = secrets.token_hex(32)
             await self.db.execute(
-                "INSERT INTO auth_sessions VALUES (?, ?, ?, ?, ?, ?, NULL)",
-                (session_hash(token), now, now + days * 86400, now, ip, browser),
+                "INSERT INTO auth_sessions (id_hash, created_at, expires_at, last_seen_at, ip, user_agent, scope)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (session_hash(token), now, now + days * 86400, now, ip, browser, scope),
             )
             return LoginResult(token=token)
 
@@ -124,7 +140,7 @@ class AuthStore:
         hashed = session_hash(token)
         async with self.lock:
             async with self.db.execute(
-                "SELECT last_seen_at FROM auth_sessions WHERE id_hash = ? AND expires_at > ? AND revoked_at IS NULL",
+                "SELECT last_seen_at, scope FROM auth_sessions WHERE id_hash = ? AND expires_at > ? AND revoked_at IS NULL",
                 (hashed, now),
             ) as cursor:
                 row = await cursor.fetchone()
@@ -143,7 +159,7 @@ class AuthStore:
                 except BaseException:
                     await self.db.rollback()
                     raise
-        return hashed
+        return hashed, row["scope"]
 
     async def sessions(self, current, now):
         async with self.lock:
@@ -152,7 +168,7 @@ class AuthStore:
                 (now,),
             ) as cursor:
                 rows = await cursor.fetchall()
-        return [{**{key: row[key] for key in ("created_at", "expires_at", "last_seen_at", "ip", "user_agent")},
+        return [{**{key: row[key] for key in ("created_at", "expires_at", "last_seen_at", "ip", "user_agent", "scope")},
                  "current": row["id_hash"] == current} for row in rows]
 
     async def revoke(self, current, now, *, all_sessions=False):

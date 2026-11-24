@@ -318,6 +318,31 @@ class AlertRuleRepository:
         await self.db.commit()
 
 
+class MobileAlertRepository:
+    def __init__(self, db: aiosqlite.Connection):
+        self.db = db
+
+    async def record(self, *, kind, title, body, level, symbol=None, card_name=None):
+        await self.db.execute(
+            "INSERT INTO alert_events (created_at, kind, title, body, level, symbol, card_name)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (datetime.now(UTC).timestamp(), kind, title, body[:2000], level, symbol, card_name),
+        )
+        await self.db.commit()
+
+    async def list(self, since: float, limit: int):
+        async with self.db.execute(
+            "SELECT * FROM alert_events WHERE created_at > ? ORDER BY created_at DESC, id DESC LIMIT ?",
+            (since, limit),
+        ) as cursor:
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def prune(self, now: datetime):
+        cutoff = (now - timedelta(days=30)).timestamp()
+        await self.db.execute("DELETE FROM alert_events WHERE created_at < ?", (cutoff,))
+        await self.db.commit()
+
+
 class AlertEventRepository:
     def __init__(self, db: aiosqlite.Connection):
         self.db = db
@@ -325,7 +350,7 @@ class AlertEventRepository:
     async def create(self, event: AlertEvent) -> AlertEvent:
         await self.db.execute(
             """
-            INSERT INTO alert_events (id, rule_id, opportunity_id, symbol, status, message, created_at)
+            INSERT INTO alert_events_rule_history (id, rule_id, opportunity_id, symbol, status, message, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
@@ -343,7 +368,7 @@ class AlertEventRepository:
 
     async def list(self, limit: int = 100) -> list[AlertEvent]:
         cursor = await self.db.execute(
-            "SELECT * FROM alert_events ORDER BY created_at DESC LIMIT ?",
+            "SELECT * FROM alert_events_rule_history ORDER BY created_at DESC LIMIT ?",
             (limit,),
         )
         rows = await cursor.fetchall()

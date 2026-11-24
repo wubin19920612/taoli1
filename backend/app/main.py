@@ -43,15 +43,17 @@ from app.api import (
     routes_phone_alerts,
     routes_settings,
     routes_market_identities,
+    routes_mobile,
     routes_trade_availability,
     stream,
 )
 from app.core.config import Settings, get_settings
-from app.core.security import require_dashboard_password
+from app.core.security import SessionScopeMiddleware, require_dashboard_password
 from app.db.database import connect_database
 from app.db.repositories import (
     AccountConnectionRepository,
     AlertEventRepository,
+    MobileAlertRepository,
     AnnouncementRepository,
     IndexComponentRepository,
     AlertRuleRepository,
@@ -454,7 +456,7 @@ async def _maybe_send_big_spread_phone(
             try:
                 async with delivery_store.db.execute(
                     """
-                    SELECT 1 FROM alert_events
+                    SELECT 1 FROM alert_events_rule_history
                     WHERE rule_id = ? AND symbol = ? AND status IN ('sent', 'muted')
                       AND created_at >= ? AND created_at <= ? AND id != ?
                     LIMIT 1
@@ -1105,6 +1107,23 @@ def create_app(
         app.state.astro_alert_service.attempts = AstroCardAttemptRepository(attempts_db)
         app.state.alert_rule_repo = AlertRuleRepository(db)
         app.state.alert_event_repo = AlertEventRepository(db)
+        app.state.mobile_alert_repo = MobileAlertRepository(db)
+
+        async def prune_mobile_alerts():
+            try:
+                await app.state.mobile_alert_repo.prune(datetime.now(UTC))
+            except Exception:
+                logger.warning("Failed to prune mobile alert history")
+
+        async def daily_alert_retention():
+            while not stop_event.is_set():
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=86400)
+                except TimeoutError:
+                    await prune_mobile_alerts()
+
+        await prune_mobile_alerts()
+        app.state.feishu_notifier.event_repo = app.state.mobile_alert_repo
         app.state.alert_delivery_store = AlertDeliveryStore(db)
         await _restore_alert_delivery_state(app)
         app.state.phone_price_alert_rule_repo = PhonePriceAlertRuleRepository(db)
@@ -1190,6 +1209,7 @@ def create_app(
                 "loop-stall-watchdog", loop_stall_watchdog.run, restart=False, critical=False,
             )
         if start_background_workers:
+            _start_background_task(supervisor, daily_alert_retention, name="mobile-alert-retention")
             _start_background_task(
                 supervisor,
                 lambda: app.state.pair_spread_funding_recorder.run(stop_event),
@@ -1529,6 +1549,7 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(SessionScopeMiddleware)
     # Every API router uses the same guard; public exceptions live in security.py.
     for router in (
         routes_shadow.router,
@@ -1556,6 +1577,7 @@ def create_app(
         routes_gate_twap.router,
         routes_settings.router,
         routes_market_identities.router,
+        routes_mobile.router,
         routes_admin.router,
         stream.router,
     ):
