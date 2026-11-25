@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from app.api.routes_astro import list_astro_pairs
 from app.api.routes_pair_spread import _resolved_leg, _symbol_alias_resolver
-from app.core.security import client_ip, require_session
+from app.core.security import browser_label, client_ip, require_session
 from app.models.mobile import (
     CardControlUpdate,
     CardHistory,
@@ -32,7 +32,6 @@ from app.models.mobile import (
 from app.models.pair_range_backtest import PairRangeBacktestRequest
 from app.models.pair_spread import PairSpreadLegQuery
 from app.models.settings import FeeSettings
-from app.services.mobile_card_control import control_enabled
 from app.services.mobile_summary import (
     condition,
     legs_for,
@@ -139,10 +138,12 @@ class _CardControlRoute(_MobileInputRoute):
         handle = super().get_route_handler()
 
         async def handle_request(request):
-            if request.method == "POST" and not control_enabled(request.app.state.settings):
-                # Authenticate even malformed requests before exposing the feature state.
-                await require_session(request)
-                raise HTTPException(503, "手机改卡未启用")
+            # Authenticate before accessing service state, including for malformed requests.
+            await require_session(request)
+            if request.method == "POST":
+                service = getattr(request.app.state, "mobile_card_control", None)
+                if service is None or not await service.control_enabled():
+                    raise HTTPException(503, "手机改卡未启用")
             try:
                 return await handle(request)
             except (sqlite3.Error, ValueError):
@@ -151,7 +152,12 @@ class _CardControlRoute(_MobileInputRoute):
         return handle_request
 
 
-controls = APIRouter(dependencies=[Depends(require_session)], route_class=_CardControlRoute)
+controls = APIRouter(route_class=_CardControlRoute)
+
+
+@router.post("/ops/kill", dependencies=[Depends(require_session)])
+async def kill_card_control(request: Request):
+    return await request.app.state.mobile_card_control.kill(request.state.auth_session_hash, browser_label(request))
 
 
 @controls.get("/ops/status")

@@ -188,6 +188,23 @@ export function listOpportunities(filters: OpportunityFilters): Promise<Opportun
   });
 }
 
+export interface MobileCardControlState {
+  env_enabled: boolean;
+  dry_run: boolean;
+  runtime_enabled: boolean;
+  effective: boolean;
+  changed_at: number | null;
+  changed_by: string | null;
+}
+
+export function getMobileCardControl(): Promise<MobileCardControlState> {
+  return fetchJson("/settings/mobile-card-control");
+}
+
+export function setMobileCardControl(enabled: boolean): Promise<MobileCardControlState> {
+  return fetchJson("/settings/mobile-card-control", { method: "PUT", body: JSON.stringify({ enabled }) });
+}
+
 export function listMarkets(filters: MarketFilters = {}): Promise<MarketSnapshot[]> {
   const url = buildUrl("/markets", filters);
   return sessionFetch(url).then(async (response) => {

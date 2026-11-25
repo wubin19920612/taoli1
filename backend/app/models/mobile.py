@@ -16,6 +16,11 @@ class PushKinds(BaseModel):
     stale: bool
 
 
+class MobileCardControlSwitchUpdate(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    enabled: bool
+
+
 class PushToken(BaseModel):
     token: SecretStr = Field(min_length=1, max_length=4096)
 

@@ -45,6 +45,7 @@ from app.api import (
     routes_settings,
     routes_market_identities,
     routes_mobile,
+    routes_mobile_admin,
     routes_trade_availability,
     stream,
 )
@@ -1620,6 +1621,7 @@ def create_app(
         routes_settings.router,
         routes_market_identities.router,
         routes_mobile.router,
+        routes_mobile_admin.router,
         routes_admin.router,
         stream.router,
     ):

@@ -450,6 +450,27 @@ class MobileOpsRepository:
     def __init__(self, db: aiosqlite.Connection):
         self.db = db
 
+    async def runtime_switch(self):
+        rows = await self.db.execute_fetchall(
+            "SELECT enabled, changed_at, changed_by FROM mobile_ops_switch WHERE singleton = 1"
+        )
+        if not rows:
+            return True, None, None
+        enabled, changed_at, changed_by = rows[0]
+        return enabled == 1, changed_at, changed_by
+
+    async def change_runtime_switch(self, enabled, now, source, title, body) -> bool:
+        # The predicate, persistence and audit insert execute as one SQLite statement.
+        rows = await self.db.execute_fetchall(
+            """INSERT INTO mobile_ops_switch_change(enabled, changed_at, changed_by, title, body)
+               SELECT ?, ?, ?, ?, ?
+               WHERE COALESCE((SELECT enabled FROM mobile_ops_switch WHERE singleton = 1), 1) <> ?
+               RETURNING enabled""",
+            (enabled, now, source, title, body, enabled),
+        )
+        await self.db.commit()
+        return bool(rows)
+
     async def devices(self) -> list[dict]:
         rows = await self.db.execute_fetchall(
             "SELECT device_id, label, created_at FROM mobile_ops_devices "

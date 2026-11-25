@@ -1,4 +1,5 @@
 import { LoginDevices } from "../components/LoginDevices";
+import { MobileCardControlSwitch } from "../components/MobileCardControlSwitch";
 import { CloseOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import {
   Alert,
@@ -1275,6 +1276,7 @@ export function SettingsPage() {
                     </Form.Item>
                   </Form>
                 </section>
+                {activeTab === "astro" && <MobileCardControlSwitch />}
               </div>
             )
           },

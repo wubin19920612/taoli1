@@ -84,6 +84,7 @@ def _mobile_route(request: Request) -> bool:
         ("POST", "/api/mobile/ops/challenge"),
         ("POST", "/api/mobile/ops/unlock"),
         ("POST", "/api/mobile/ops/settings"),
+        ("POST", "/api/mobile/ops/kill"),
         ("POST", "/api/mobile/cards/control"),
     }
 

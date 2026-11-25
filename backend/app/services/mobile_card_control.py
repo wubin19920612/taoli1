@@ -1,5 +1,6 @@
 """Session-scoped authorization and single-field writes to live Astro cards."""
 
+import asyncio
 import base64
 import logging
 import secrets
@@ -7,6 +8,7 @@ import sqlite3
 import time
 from collections import deque
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
@@ -14,7 +16,6 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi import HTTPException
 from starlette.datastructures import State
 
-from app.core.config import Settings
 from app.db.repositories import MobileOpsRepository
 from app.models.mobile import CardControlUpdate, DeviceBinding, DeviceProof, UnlockCode
 from app.services.astro_client import AstroClientError
@@ -41,10 +42,6 @@ class Challenge:
 class UnlockWindow:
     until: float
     method: str
-
-
-def control_enabled(settings: Settings) -> bool:
-    return settings.mobile_card_control_enabled is True and settings.astro_dry_run_only is False
 
 
 def _public_key(encoded: str) -> ec.EllipticCurvePublicKey:
@@ -83,6 +80,55 @@ class MobileCardControl:
         self._challenges: dict[str, Challenge] = {}
         self._windows: dict[str, UnlockWindow] = {}
         self._attempts: dict[str, deque[float]] = {}
+        self._kill_attempts: dict[str, deque[float]] = {}
+        self._switch_lock = asyncio.Lock()
+        self._unlock_generation = 0
+
+    async def switch_status(self) -> dict:
+        try:
+            runtime, changed_at, changed_by = await self.repo.runtime_switch()
+        except Exception:
+            logger.warning("无法读取手机改卡运行时开关，按关闭处理", exc_info=True)
+            runtime, changed_at, changed_by = False, None, None
+        settings = self.state.settings
+        env = settings.mobile_card_control_enabled is True
+        dry_run = settings.astro_dry_run_only
+        return {"env_enabled": env, "dry_run": dry_run, "runtime_enabled": runtime,
+                "effective": env and dry_run is False and runtime, "changed_at": changed_at,
+                "changed_by": changed_by}
+
+    async def control_enabled(self) -> bool:
+        return (await self.switch_status())["effective"]
+
+    async def set_runtime_switch(self, enabled: bool, source: str) -> dict:
+        if source == "web":
+            title = "手机改卡已在网页重新打开" if enabled else "手机改卡已在网页停用"
+        else:
+            title = "手机改卡已紧急停用"
+        async with self._switch_lock:
+            now = time.time()
+            body = f"来源：{source}，时间：{datetime.fromtimestamp(now, UTC).isoformat(timespec='seconds')}"
+            try:
+                changed = await self.repo.change_runtime_switch(enabled, now, source, title, body)
+            except (sqlite3.Error, ValueError):
+                raise HTTPException(503, "手机改卡开关保存失败") from None
+            if changed and not enabled:
+                self._unlock_generation += 1
+                self._windows.clear()
+            status = await self.switch_status()
+        if changed:
+            try:
+                await self.state.mobile_push.send_urgent(
+                    kind="card_control", title=title, body=body, card_id="", card_name="",
+                )
+            except Exception:
+                logger.warning("手机改卡开关已更新，紧急推送失败")
+        return status
+
+    async def kill(self, session: str, browser: str):
+        self._admit_attempt(self._kill_attempts, session, 10)
+        await self.set_runtime_switch(False, f"mobile:{browser}")
+        return {"enabled": False}
 
     def _window(self, session: str) -> UnlockWindow | None:
         window = self._windows.get(session)
@@ -98,9 +144,12 @@ class MobileCardControl:
         return window.method
 
     async def status(self, session: str) -> dict:
-        enabled = control_enabled(self.state.settings)
+        switch = await self.switch_status()
+        enabled = switch["effective"]
         window = self._window(session) if enabled else None
-        return {"enabled": enabled, "unlocked_until": window.until if window else None,
+        return {"enabled": enabled, "env_enabled": switch["env_enabled"], "runtime_enabled": switch["runtime_enabled"],
+                "changed_at": switch["changed_at"], "changed_by": switch["changed_by"],
+                "unlocked_until": window.until if window else None,
                 "unlock_minutes": await self.repo.unlock_minutes(), "devices": await self.repo.devices()}
 
     async def _verify_factor(self, ip: str, *, code: UnlockCode | None = None, signature_valid: bool = False):
@@ -153,6 +202,7 @@ class MobileCardControl:
         return key is not None and challenge.expires_at > time.time() and _verify_signature(key, proof, challenge.nonce)
 
     async def unlock(self, session: str, ip: str, proof: UnlockCode | DeviceProof) -> dict:
+        generation = self._unlock_generation
         if isinstance(proof, DeviceProof):
             valid = await self._device_proof_valid(session, proof)
             await self._verify_factor(ip, signature_valid=valid)
@@ -161,21 +211,25 @@ class MobileCardControl:
             await self._verify_factor(ip, code=proof)
             method = "验证码"
         minutes = await self.repo.unlock_minutes()
-        now = time.time()
-        self._windows = {s: w for s, w in self._windows.items() if w.until > now}
-        until = now + minutes * 60
-        self._windows[session] = UnlockWindow(until, method)
+        async with self._switch_lock:
+            if generation != self._unlock_generation or not await self.control_enabled():
+                raise HTTPException(503, "手机改卡未启用")
+            now = time.time()
+            self._windows = {s: w for s, w in self._windows.items() if w.until > now}
+            until = now + minutes * 60
+            self._windows[session] = UnlockWindow(until, method)
         return {"unlocked_until": until}
 
-    def _admit_control(self, session: str):
+    def _admit_attempt(self, sessions: dict[str, deque[float]], session: str, limit: int):
         now = time.time()
         cutoff = now - 60
-        self._attempts = {s: times for s, times in self._attempts.items() if times[-1] > cutoff}
-        attempts = self._attempts.setdefault(session, deque())
+        for expired in [s for s, times in sessions.items() if times[-1] <= cutoff]:
+            del sessions[expired]
+        attempts = sessions.setdefault(session, deque())
         while attempts and attempts[0] <= cutoff:
             attempts.popleft()
-        if len(attempts) >= 20:
-            raise HTTPException(429, "每分钟最多操作二十次，请稍后再试")
+        if len(attempts) >= limit:
+            raise HTTPException(429, f"每分钟最多操作{limit}次，请稍后再试")
         attempts.append(now)
 
     def _control_method(self, session: str, change: CardControlUpdate) -> str:
@@ -202,7 +256,7 @@ class MobileCardControl:
         return title, body, True
 
     async def control(self, session: str, change: CardControlUpdate) -> dict:
-        self._admit_control(session)
+        self._admit_attempt(self._attempts, session, 20)
         self._control_method(session, change)
         client, service = self.state.astro_client, self.state.astro_alert_service
         if service is None or not hasattr(service, "pair_lock"):
@@ -214,7 +268,7 @@ class MobileCardControl:
             name = (await _latest_pair(client, change.card_id))["name"]
             async with service.pair_lock(name):
                 pair = await _latest_pair(client, change.card_id)
-                if not control_enabled(self.state.settings):
+                if not await self.control_enabled():
                     raise HTTPException(503, "手机改卡未启用")
                 method = self._control_method(session, change)
                 # Identity comparison also rejects absent and non-boolean upstream values.

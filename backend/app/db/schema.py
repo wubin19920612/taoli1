@@ -155,6 +155,11 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
             unlock_minutes INTEGER NOT NULL CHECK(unlock_minutes BETWEEN 1 AND 30)
         );
         INSERT OR IGNORE INTO mobile_ops_settings (singleton, unlock_minutes) VALUES (1, 5);
+        CREATE TABLE IF NOT EXISTS mobile_ops_switch (
+            singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+            enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
+            changed_at REAL, changed_by TEXT
+        );
         CREATE TABLE IF NOT EXISTS mobile_push_devices (
             token TEXT PRIMARY KEY NOT NULL, session_hash TEXT NOT NULL, kinds TEXT NOT NULL,
             threshold_pp REAL NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL,
@@ -165,6 +170,17 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           body TEXT NOT NULL, level TEXT NOT NULL, symbol TEXT, card_name TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_mobile_alert_events_created_at ON mobile_alert_events(created_at);
+
+        -- A transition and its audit event commit together on the shared autocommit connection.
+        CREATE VIEW IF NOT EXISTS mobile_ops_switch_change AS
+            SELECT enabled, changed_at, changed_by, NULL AS title, NULL AS body FROM mobile_ops_switch;
+        CREATE TRIGGER IF NOT EXISTS apply_mobile_ops_switch_change
+        INSTEAD OF INSERT ON mobile_ops_switch_change BEGIN
+            INSERT OR REPLACE INTO mobile_ops_switch(singleton, enabled, changed_at, changed_by)
+                VALUES (1, NEW.enabled, NEW.changed_at, NEW.changed_by);
+            INSERT INTO mobile_alert_events(created_at, kind, title, body, level)
+                VALUES (NEW.changed_at, 'card_control', NEW.title, NEW.body, 'urgent');
+        END;
 
         CREATE TABLE IF NOT EXISTS alert_events (
           id TEXT PRIMARY KEY,
