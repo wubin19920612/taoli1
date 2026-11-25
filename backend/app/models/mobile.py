@@ -1,7 +1,9 @@
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr, model_validator
+
+from app.models.pair_range_backtest import PairRangeBacktestResult
 
 
 class PushKinds(BaseModel):
@@ -29,6 +31,28 @@ CardId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,64}$", strict=True)]
 class CardPinUpdate(BaseModel):
     card_id: CardId
     pinned: bool = Field(strict=True)
+
+
+class MobileRangeBacktestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    card_id: CardId
+    start_at: AwareDatetime
+    end_at: AwareDatetime
+    notional_usd: float | None = Field(default=None, strict=True, gt=0, le=10_000_000, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_range(self):
+        duration = self.end_at - self.start_at
+        if not timedelta(minutes=1) <= duration <= timedelta(hours=72) or self.end_at > datetime.now(UTC):
+            raise ValueError("区间无效")
+        return self
+
+
+class MobileRangeBacktestResult(PairRangeBacktestResult):
+    notional_usd: float
+    direction: Literal["long1_short2"]
+    leg1_label: str
+    leg2_label: str
 
 
 class _OpsInput(BaseModel):

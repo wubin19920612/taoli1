@@ -1,4 +1,8 @@
+import asyncio
 import sqlite3
+from collections import deque
+from contextlib import contextmanager
+from time import monotonic
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -16,6 +20,8 @@ from app.models.mobile import (
     DeviceProof,
     HistoryPoint,
     MobileAlert,
+    MobileRangeBacktestRequest,
+    MobileRangeBacktestResult,
     MobileSummary,
     OpsDevice,
     PushRegistration,
@@ -23,10 +29,15 @@ from app.models.mobile import (
     UnlockCode,
     UnlockSettings,
 )
+from app.models.pair_range_backtest import PairRangeBacktestRequest
+from app.models.pair_spread import PairSpreadLegQuery
+from app.models.settings import FeeSettings
 from app.services.mobile_card_control import control_enabled
 from app.services.mobile_summary import (
     condition,
     legs_for,
+    number,
+    positive,
     ratio_mode,
     reference,
     spread_pct,
@@ -36,6 +47,7 @@ from app.services.mobile_summary import (
 from app.services.pair_spread_query import PairSpreadQueryError, PairSpreadQueryService
 
 router = APIRouter(prefix="/mobile")
+RANGE_TIMEOUT_SECONDS = 60
 
 
 class _MobileInputRoute(APIRoute):
@@ -196,10 +208,17 @@ async def mobile_summary(request: Request):
 
 @router.get("/cards/by-id/{card_id}/history", response_model=CardHistory)
 async def card_history_by_id(card_id: str, request: Request, hours: int = Query(24, ge=1, le=72)):
+    pair = await _pair_by_id(request, card_id)
+    if pair is None:
+        raise HTTPException(404, "找不到卡片")
+    return await _history_for_pair(request, pair, hours)
+
+
+async def _pair_by_id(request: Request, card_id: str) -> dict | None:
     for pair in await list_astro_pairs(request):
         if isinstance(pair, dict) and pair.get("id") == card_id:
-            return await _history_for_pair(request, pair, hours)
-    raise HTTPException(404, "找不到卡片")
+            return pair
+    return None
 
 
 @router.get("/cards/{name}/history", response_model=CardHistory)
@@ -220,13 +239,13 @@ async def card_history(
     return await _history_for_pair(request, pairs[0], hours)
 
 
-async def _history_for_pair(request: Request, pair: dict, hours: int) -> CardHistory:
+async def _resolved_card_legs(request: Request, pair: dict):
     route = legs_for(pair)
     if not route:
         raise HTTPException(422, "无法从卡片名称识别两腿标的")
     resolver = await _symbol_alias_resolver(request)
     try:
-        (a, alias_a), (b, alias_b) = [
+        return [
             _resolved_leg(
                 resolver,
                 exchange=leg.exchange,
@@ -238,6 +257,10 @@ async def _history_for_pair(request: Request, pair: dict, hours: int) -> CardHis
         ]
     except ValidationError as exc:
         raise HTTPException(422, "不支持该卡片的历史行情") from exc
+
+
+async def _history_for_pair(request: Request, pair: dict, hours: int) -> CardHistory:
+    (a, alias_a), (b, alias_b) = await _resolved_card_legs(request, pair)
     factory = request.app.state.pair_spread_query_service_factory or PairSpreadQueryService
     service = factory()
     try:
@@ -260,6 +283,90 @@ async def _history_for_pair(request: Request, pair: dict, hours: int) -> CardHis
         open_condition=condition(pair, "openPosition"),
         close_condition=condition(pair, "closePosition"),
     )
+
+
+class _RangeRoute(_MobileInputRoute):
+    validation_message = "区间无效"
+
+
+class _RangeLimits:
+    def __init__(self):
+        self.active: set[str] = set()
+        self.starts: dict[str, deque[float]] = {}
+
+    @contextmanager
+    def reserve(self, session: str):
+        if session in self.active:
+            raise HTTPException(429, "上一次估算还在进行")
+        now = monotonic()
+        cutoff = now - 60
+        self.starts = {key: times for key, times in self.starts.items() if times[-1] > cutoff}
+        starts = self.starts.setdefault(session, deque())
+        while starts and starts[0] <= cutoff:
+            starts.popleft()
+        if len(starts) >= 6:
+            raise HTTPException(429, "每分钟最多估算六次，请稍后再试")
+        starts.append(now)
+        self.active.add(session)
+        try:
+            yield
+        finally:
+            self.active.remove(session)
+
+
+def _position_notional(pair: dict) -> float:
+    # Same gross entry notional as mobile summary, including partially priced positions.
+    total = 0.0
+    for quantity, price in (("aExPosition", "avgOpenAExPrice"), ("bExPosition", "avgOpenBExPrice")):
+        total += abs(number(pair.get(quantity)) or 0) * (positive(pair.get(price)) or 0)
+    return total or 1000.0
+
+
+def _range_leg_label(venue: str, leg: PairSpreadLegQuery) -> str:
+    symbol = leg.symbol.removesuffix("USDT")
+    return f"{venue} {leg.dex}:{symbol}" if leg.dex else f"{venue} {symbol}"
+
+
+backtests = APIRouter(dependencies=[Depends(require_session)], route_class=_RangeRoute)
+
+
+@backtests.post("/range-backtest", response_model=MobileRangeBacktestResult)
+async def mobile_range_backtest(payload: MobileRangeBacktestRequest, request: Request):
+    state = request.app.state
+    limits = getattr(state, "mobile_range_limits", None)
+    if limits is None:
+        state.mobile_range_limits = limits = _RangeLimits()
+    with limits.reserve(request.state.auth_session_hash):
+        pair = await _pair_by_id(request, payload.card_id)
+        if pair is None:
+            raise HTTPException(404, "未找到卡片")
+        (leg1, _), (leg2, _) = await _resolved_card_legs(request, pair)
+        try:
+            query = PairRangeBacktestRequest(
+                leg1=leg1, leg2=leg2, direction="long1_short2", start_at=payload.start_at, end_at=payload.end_at,
+                notional_usd=payload.notional_usd if payload.notional_usd is not None else _position_notional(pair),
+            )
+        except ValidationError:
+            raise HTTPException(422, "区间无效") from None
+        fees = getattr(getattr(state, "market_collector", None), "fee_settings", None) or FeeSettings()
+        factory = state.pair_spread_query_service_factory or PairSpreadQueryService
+        service = factory()
+        try:
+            async with asyncio.timeout(RANGE_TIMEOUT_SECONDS):
+                result = await service.query_range_backtest(query, fee_settings=fees)
+        except TimeoutError:
+            raise HTTPException(504, "区间估算超时") from None
+        except PairSpreadQueryError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        finally:
+            await service.aclose()
+        return MobileRangeBacktestResult(
+            **result.model_dump(), notional_usd=query.notional_usd, direction=query.direction,
+            leg1_label=_range_leg_label(pair["buyEx"], leg1), leg2_label=_range_leg_label(pair["sellEx"], leg2),
+        )
+
+
+router.include_router(backtests)
 
 
 @router.get("/alerts", response_model=list[MobileAlert])
