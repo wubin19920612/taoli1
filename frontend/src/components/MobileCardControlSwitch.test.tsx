@@ -11,8 +11,8 @@ const off = {
 };
 
 beforeEach(() => {
-  vi.resetAllMocks();
-  vi.mocked(getMobileCardControl).mockResolvedValue(off);
+  vi.mocked(getMobileCardControl).mockReset().mockResolvedValue(off);
+  vi.mocked(setMobileCardControl).mockReset();
 });
 
 it("shows the environment, effective state and last change", async () => {
