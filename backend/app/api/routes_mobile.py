@@ -9,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
+from app.api import routes_mobile_pair
 from app.api.routes_astro import list_astro_pairs
 from app.api.routes_pair_spread import _resolved_leg, _symbol_alias_resolver
 from app.core.security import browser_label, client_ip, require_session
@@ -46,6 +47,7 @@ from app.services.mobile_summary import (
 from app.services.pair_spread_query import PairSpreadQueryError, PairSpreadQueryService
 
 router = APIRouter(prefix="/mobile")
+router.include_router(routes_mobile_pair.router)
 RANGE_TIMEOUT_SECONDS = 60
 
 

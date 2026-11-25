@@ -3,7 +3,14 @@ from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr, model_validator
 
+from app.models.market import MarketType
 from app.models.pair_range_backtest import PairRangeBacktestResult
+from app.models.pair_spread import (
+    PairSpreadCurrentSnapshot,
+    PairSpreadFundingPoint,
+    PairSpreadLegQuery,
+    PairSpreadPriceField,
+)
 
 
 class PushKinds(BaseModel):
@@ -67,6 +74,67 @@ class MobileRangeBacktestResult(PairRangeBacktestResult):
     direction: Literal["long1_short2"]
     leg1_label: str
     leg2_label: str
+
+
+class MobilePairSpreadPoint(BaseModel):
+    t: datetime
+    a: float
+    b: float
+    pct: float
+
+
+class MobilePairSpreadStats(BaseModel):
+    min: float | None
+    max: float | None
+    mean: float | None
+    last: float | None
+
+
+class MobilePairSpreadFunding(BaseModel):
+    leg1_rate_pct: float | None
+    leg2_rate_pct: float | None
+    funding_history: list[PairSpreadFundingPoint]
+
+
+class MobilePairSpreadResult(BaseModel):
+    leg1: PairSpreadLegQuery
+    leg2: PairSpreadLegQuery
+    leg2_multiplier: float
+    hours: int
+    interval_seconds: int
+    observed_at: datetime
+    complete: bool | None
+    warnings: list[str]
+    spread_pct: MobilePairSpreadStats
+    spread_abs: MobilePairSpreadStats
+    current: PairSpreadCurrentSnapshot | None
+    points: list[MobilePairSpreadPoint]
+    funding: MobilePairSpreadFunding
+    raw_point_count: int
+
+
+class MobilePairSpreadCurrentLeg(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    exchange: str
+    symbol: str
+    market_type: MarketType
+    dex: str | None
+    raw_symbol: str
+    price: float
+    price_field: PairSpreadPriceField
+    is_estimated: bool
+    timestamp: datetime
+
+
+class MobilePairSpreadCurrent(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    observed_at: datetime
+    leg1: MobilePairSpreadCurrentLeg
+    leg2: MobilePairSpreadCurrentLeg
+    spread_abs: float
+    spread_pct: float
 
 
 class _OpsInput(BaseModel):
