@@ -129,7 +129,8 @@ async def test_default_status_and_env_switch(phone, monkeypatch):
     _, client = phone
     response = await client.get(OPS + "/status")
     assert response.status_code == 200
-    assert response.json() == {"enabled": False, "unlocked_until": None, "unlock_minutes": 5, "devices": []}
+    assert response.json() == {"enabled": False, "unlocked_until": None, "unlock_minutes": 5, "devices": [],
+                               "runtime_enabled": True, "env_enabled": False, "changed_at": None, "changed_by": None}
     assert Settings().mobile_card_control_enabled is False
     monkeypatch.setattr("app.core.config.find_dotenv", lambda **kwargs: "")
     monkeypatch.setenv("MOBILE_CARD_CONTROL_ENABLED", "true")
@@ -178,7 +179,8 @@ async def test_binding_and_unlock_share_totp_replay_with_login(enabled, clock):
     device_id = next(r for r in responses if r.status_code == 200).json()["device_id"]
     status = (await client.get(OPS + "/status")).json()
     assert status == {"enabled": True, "unlocked_until": None, "unlock_minutes": 5,
-                      "devices": [{"device_id": device_id, "label": "测试手机", "created_at": clock.now}]}
+                      "devices": [{"device_id": device_id, "label": "测试手机", "created_at": clock.now}],
+                      "runtime_enabled": True, "env_enabled": True, "changed_at": None, "changed_by": None}
     assert (await unlock_code(client, clock.code())).status_code == 401
     # A different IP still cannot replay either code and has its own failure budget.
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app, client=("127.0.0.2", 1)),
