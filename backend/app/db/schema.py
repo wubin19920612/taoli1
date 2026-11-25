@@ -146,6 +146,15 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
             card_id TEXT PRIMARY KEY NOT NULL,
             pinned_at REAL NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS mobile_ops_devices (
+            device_id TEXT PRIMARY KEY, public_key TEXT NOT NULL, label TEXT NOT NULL,
+            created_at REAL NOT NULL, revoked_at REAL
+        );
+        CREATE TABLE IF NOT EXISTS mobile_ops_settings (
+            singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+            unlock_minutes INTEGER NOT NULL CHECK(unlock_minutes BETWEEN 1 AND 30)
+        );
+        INSERT OR IGNORE INTO mobile_ops_settings (singleton, unlock_minutes) VALUES (1, 5);
         CREATE TABLE IF NOT EXISTS mobile_push_devices (
             token TEXT PRIMARY KEY NOT NULL, session_hash TEXT NOT NULL, kinds TEXT NOT NULL,
             threshold_pp REAL NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL,

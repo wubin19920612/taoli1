@@ -55,6 +55,7 @@ from app.db.repositories import (
     AccountConnectionRepository,
     AlertEventRepository,
     MobileAlertRepository,
+    MobileOpsRepository,
     MobilePinsRepository,
     MobilePushRepository,
     AnnouncementRepository,
@@ -110,6 +111,7 @@ from app.services.collector import MarketCollector, default_exchange_adapters, r
 from app.services.data_filters import filter_opportunities
 from app.services.feishu import FeishuConfig, FeishuNotifier
 from app.services.fcm import FcmClient
+from app.services.mobile_card_control import MobileCardControl
 from app.services.mobile_push import MobilePushService
 from app.services.mobile_summary import summary as build_mobile_summary
 from app.services.gate_crossex_hyperliquid import GateCrossExHyperliquidCatalog
@@ -1142,6 +1144,7 @@ def create_app(
             return await build_mobile_summary(request, pairs)
 
         app.state.mobile_push = MobilePushService(app.state.mobile_push_repo, app.state.fcm, load_push_summary)
+        app.state.mobile_card_control = MobileCardControl(MobileOpsRepository(mobile_db), app.state)
         app.state.feishu_notifier.mobile_push = app.state.mobile_push
 
         async def prune_mobile_alerts():

@@ -204,6 +204,17 @@ class MobilePushService:
         message = PushMessage("test", "手机推送测试", "这是一条普通测试通知", identity="device")
         return await self._send(token, message, device)
 
+    async def send_urgent(self, *, kind, title, body, card_id, card_name):
+        if not self.fcm.enabled:
+            return
+        message = PushMessage(kind, title, body, card_id, card_name, channel="urgent")
+        devices = await self.repo.scan()
+        results = await asyncio.gather(
+            *(self._send(device["token"], message, device) for device in devices), return_exceptions=True,
+        )
+        if any(isinstance(result, Exception) for result in results):
+            logger.warning("部分设备的紧急推送发送失败")
+
     def _enqueue(self, pending):
         if self._queue.full():
             self._queue.get_nowait()

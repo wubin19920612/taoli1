@@ -446,6 +446,52 @@ class MobilePushRepository:
         return [dict(r) | {"kinds": json.loads(r["kinds"])} for r in rows if r["session_hash"] in active]
 
 
+class MobileOpsRepository:
+    def __init__(self, db: aiosqlite.Connection):
+        self.db = db
+
+    async def devices(self) -> list[dict]:
+        rows = await self.db.execute_fetchall(
+            "SELECT device_id, label, created_at FROM mobile_ops_devices "
+            "WHERE revoked_at IS NULL ORDER BY created_at, device_id"
+        )
+        return [dict(row) for row in rows]
+
+    async def add_device(self, device_id: str, public_key: str, label: str, now: float) -> bool:
+        # One statement reserves the slot even when other processes bind concurrently.
+        async with self.db.execute(
+            "INSERT INTO mobile_ops_devices (device_id, public_key, label, created_at) "
+            "SELECT ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM mobile_ops_devices WHERE revoked_at IS NULL) < 3",
+            (device_id, public_key, label, now),
+        ) as cursor:
+            added = cursor.rowcount == 1
+        await self.db.commit()
+        return added
+
+    async def active_public_key(self, device_id: str) -> str | None:
+        rows = await self.db.execute_fetchall(
+            "SELECT public_key FROM mobile_ops_devices WHERE device_id = ? AND revoked_at IS NULL", (device_id,)
+        )
+        return rows[0][0] if rows else None
+
+    async def revoke_device(self, device_id: str, now: float) -> bool:
+        async with self.db.execute(
+            "UPDATE mobile_ops_devices SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL",
+            (now, device_id),
+        ) as cursor:
+            revoked = cursor.rowcount == 1
+        await self.db.commit()
+        return revoked
+
+    async def unlock_minutes(self) -> int:
+        rows = await self.db.execute_fetchall("SELECT unlock_minutes FROM mobile_ops_settings WHERE singleton = 1")
+        return rows[0][0]
+
+    async def set_unlock_minutes(self, minutes: int) -> None:
+        await self.db.execute("UPDATE mobile_ops_settings SET unlock_minutes = ? WHERE singleton = 1", (minutes,))
+        await self.db.commit()
+
+
 class MobilePinsRepository:
     def __init__(self, db: aiosqlite.Connection):
         self.db = db

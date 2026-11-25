@@ -87,6 +87,37 @@ class AuthStore:
                 await self.db.rollback()
                 raise
 
+    async def _check_factor(self, ip, now, *, totp=None, password_ok=True, signature_valid=False):
+        """Check and update the shared factor state inside the caller's transaction."""
+        await self.db.execute("DELETE FROM auth_failures WHERE failed_at <= ?", (now - 900,))
+        await self.db.execute("DELETE FROM auth_locks WHERE until_at <= ?", (now,))
+        async with self.db.execute("SELECT 1 FROM auth_locks WHERE scope = ?", ("ip:" + ip,)) as cursor:
+            if await cursor.fetchone():
+                return "locked"
+
+        if totp is not None:
+            async with self.db.execute("SELECT last_counter FROM auth_totp_state WHERE singleton = 1") as cursor:
+                last = (await cursor.fetchone())[0]
+            secret, code = totp
+            counter = matching_counter(secret, code, now, last)
+            if counter is not None and password_ok:
+                await self.db.execute("UPDATE auth_totp_state SET last_counter = ? WHERE singleton = 1", (counter,))
+                return "verified"
+        elif signature_valid:
+            return "verified"
+
+        await self.db.execute("INSERT INTO auth_failures VALUES (?, ?)", (ip, now))
+        async with self.db.execute("SELECT COUNT(*) FROM auth_failures WHERE ip = ?", (ip,)) as cursor:
+            failures = (await cursor.fetchone())[0]
+        if failures >= 5:
+            await self.db.execute("INSERT OR REPLACE INTO auth_locks VALUES (?, ?)", ("ip:" + ip, now + 900))
+            return "new_lock"
+        return "invalid"
+
+    async def verify_mobile_factor(self, *, ip, now, totp=None, signature_valid=False):
+        async with self.transaction():
+            return await self._check_factor(ip, now, totp=totp, signature_valid=signature_valid)
+
     async def login(self, *, password_ok, secret, code, ip, browser, now, days, scope="full"):
         """Consume a code and issue its session atomically, across processes too."""
         async with self.transaction():
@@ -103,29 +134,10 @@ class AuthStore:
                     await self.db.execute("INSERT OR REPLACE INTO auth_rate_notice VALUES (1, ?)", (now,))
                 return LoginResult(rate_limited=True, notify_rate_limit=notify)
             await self.db.execute("INSERT INTO auth_login_attempts VALUES (?)", (now,))
-            await self.db.execute("DELETE FROM auth_failures WHERE failed_at <= ?", (now - 900,))
-            await self.db.execute("DELETE FROM auth_locks WHERE until_at <= ?", (now,))
             await self.db.execute("DELETE FROM auth_sessions WHERE expires_at <= ? OR revoked_at IS NOT NULL", (now,))
-            async with self.db.execute(
-                "SELECT 1 FROM auth_locks WHERE scope = ?", ("ip:" + ip,),
-            ) as cursor:
-                if await cursor.fetchone():
-                    return LoginResult()
-            async with self.db.execute("SELECT last_counter FROM auth_totp_state WHERE singleton = 1") as cursor:
-                last = (await cursor.fetchone())[0]
-            candidate = matching_counter(secret, code, now, last)
-            counter = candidate if password_ok else None
-            if counter is None:
-                await self.db.execute("INSERT INTO auth_failures VALUES (?, ?)", (ip, now))
-                async with self.db.execute(
-                    "SELECT COUNT(*) FROM auth_failures WHERE ip = ?", (ip,),
-                ) as cursor:
-                    per_ip = (await cursor.fetchone())[0]
-                locked = per_ip >= 5
-                if locked:
-                    await self.db.execute("INSERT OR REPLACE INTO auth_locks VALUES (?, ?)", ("ip:" + ip, now + 900))
-                return LoginResult(ip_locked=locked)
-            await self.db.execute("UPDATE auth_totp_state SET last_counter = ? WHERE singleton = 1", (counter,))
+            factor = await self._check_factor(ip, now, totp=(secret, code), password_ok=password_ok)
+            if factor != "verified":
+                return LoginResult(ip_locked=factor == "new_lock")
             token = secrets.token_hex(32)
             await self.db.execute(
                 "INSERT INTO auth_sessions (id_hash, created_at, expires_at, last_seen_at, ip, user_agent, scope)"

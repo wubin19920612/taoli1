@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
@@ -23,9 +23,45 @@ class PushRegistration(PushToken):
     threshold_pp: float = Field(ge=0.01, le=5, strict=True)
 
 
+CardId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,64}$", strict=True)]
+
+
 class CardPinUpdate(BaseModel):
-    card_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$", strict=True)
+    card_id: CardId
     pinned: bool = Field(strict=True)
+
+
+class _OpsInput(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+
+class UnlockCode(_OpsInput):
+    code: SecretStr = Field(max_length=64)
+
+
+class DeviceBinding(UnlockCode):
+    public_key: str = Field(max_length=4096)
+    label: str = Field(max_length=40)
+
+
+class OpsDevice(_OpsInput):
+    device_id: str = Field(max_length=64)
+
+
+class DeviceProof(OpsDevice):
+    challenge_id: str = Field(max_length=64)
+    signature: SecretStr
+
+
+class UnlockSettings(_OpsInput):
+    unlock_minutes: int = Field(ge=1, le=30)
+
+
+class CardControlUpdate(_OpsInput):
+    card_id: CardId
+    field: Literal["status", "disable_open", "disable_close"]
+    value: bool
+    expected: bool
 
 
 class MobileCard(BaseModel):

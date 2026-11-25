@@ -1,3 +1,5 @@
+import sqlite3
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
@@ -5,16 +7,23 @@ from pydantic import ValidationError
 
 from app.api.routes_astro import list_astro_pairs
 from app.api.routes_pair_spread import _resolved_leg, _symbol_alias_resolver
-from app.core.security import require_session
+from app.core.security import client_ip, require_session
 from app.models.mobile import (
+    CardControlUpdate,
     CardHistory,
     CardPinUpdate,
+    DeviceBinding,
+    DeviceProof,
     HistoryPoint,
     MobileAlert,
     MobileSummary,
+    OpsDevice,
     PushRegistration,
     PushToken,
+    UnlockCode,
+    UnlockSettings,
 )
+from app.services.mobile_card_control import control_enabled
 from app.services.mobile_summary import (
     condition,
     legs_for,
@@ -32,15 +41,18 @@ router = APIRouter(prefix="/mobile")
 class _MobileInputRoute(APIRoute):
     validation_message: str
 
+    def invalid_input(self, request, exc):
+        return HTTPException(422, self.validation_message)
+
     def get_route_handler(self):
         handle = super().get_route_handler()
 
         async def handle_request(request):
             try:
                 return await handle(request)
-            except RequestValidationError:
+            except RequestValidationError as exc:
                 # FastAPI's default 422 includes the rejected input.
-                raise HTTPException(422, self.validation_message) from None
+                raise self.invalid_input(request, exc) from None
 
         return handle_request
 
@@ -99,6 +111,82 @@ async def update_pin(payload: CardPinUpdate, request: Request) -> dict[str, dict
 
 
 router.include_router(pins)
+
+
+class _CardControlRoute(_MobileInputRoute):
+    validation_message = "手机改卡参数无效，请检查输入"
+
+    def invalid_input(self, request, exc):
+        if request.url.path == "/api/mobile/ops/unlock" and isinstance(exc.body, dict):
+            challenge_id = exc.body.get("challenge_id")
+            if isinstance(challenge_id, str) and hasattr(request.state, "auth_session_hash"):
+                request.app.state.mobile_card_control.consume_challenge(challenge_id)
+        return super().invalid_input(request, exc)
+
+    def get_route_handler(self):
+        handle = super().get_route_handler()
+
+        async def handle_request(request):
+            if request.method == "POST" and not control_enabled(request.app.state.settings):
+                # Authenticate even malformed requests before exposing the feature state.
+                await require_session(request)
+                raise HTTPException(503, "手机改卡未启用")
+            try:
+                return await handle(request)
+            except sqlite3.Error:
+                raise HTTPException(503, "手机改卡服务暂不可用") from None
+
+        return handle_request
+
+
+controls = APIRouter(dependencies=[Depends(require_session)], route_class=_CardControlRoute)
+
+
+@controls.get("/ops/status")
+async def card_control_status(request: Request):
+    return await request.app.state.mobile_card_control.status(request.state.auth_session_hash)
+
+
+@controls.post("/ops/devices")
+async def bind_ops_device(payload: DeviceBinding, request: Request):
+    return await request.app.state.mobile_card_control.bind(client_ip(request), payload)
+
+
+@controls.post("/ops/devices/revoke")
+async def revoke_ops_device(payload: OpsDevice, request: Request):
+    await request.app.state.mobile_card_control.revoke(request.state.auth_session_hash, payload.device_id)
+    return {"ok": True}
+
+
+@controls.post("/ops/challenge")
+async def issue_device_challenge(payload: OpsDevice, request: Request):
+    return await request.app.state.mobile_card_control.challenge(request.state.auth_session_hash, payload.device_id)
+
+
+@controls.post("/ops/unlock")
+async def unlock_card_control(payload: UnlockCode | DeviceProof, request: Request):
+    return await request.app.state.mobile_card_control.unlock(request.state.auth_session_hash, client_ip(request), payload)
+
+
+@controls.get("/ops/settings", response_model=UnlockSettings)
+async def get_ops_settings(request: Request):
+    return {"unlock_minutes": await request.app.state.mobile_card_control.repo.unlock_minutes()}
+
+
+@controls.post("/ops/settings", response_model=UnlockSettings)
+async def update_ops_settings(payload: UnlockSettings, request: Request):
+    service = request.app.state.mobile_card_control
+    service.require_unlock(request.state.auth_session_hash)
+    await service.repo.set_unlock_minutes(payload.unlock_minutes)
+    return payload
+
+
+@controls.post("/cards/control")
+async def control_card(payload: CardControlUpdate, request: Request):
+    return await request.app.state.mobile_card_control.control(request.state.auth_session_hash, payload)
+
+
+router.include_router(controls)
 
 
 @router.get("/summary", response_model=MobileSummary)
