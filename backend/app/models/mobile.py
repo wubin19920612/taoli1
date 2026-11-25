@@ -1,7 +1,26 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
+
+
+class PushKinds(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    near_open: bool
+    near_close: bool
+    fill: bool
+    leg_alert: bool
+    big_spread: bool
+    stale: bool
+
+
+class PushToken(BaseModel):
+    token: SecretStr = Field(min_length=1, max_length=4096)
+
+
+class PushRegistration(PushToken):
+    kinds: PushKinds
+    threshold_pp: float = Field(ge=0.01, le=5, strict=True)
 
 
 class MobileCard(BaseModel):

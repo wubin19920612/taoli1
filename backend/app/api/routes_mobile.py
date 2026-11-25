@@ -1,9 +1,19 @@
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
 from app.api.routes_astro import list_astro_pairs
 from app.api.routes_pair_spread import _resolved_leg, _symbol_alias_resolver
-from app.models.mobile import CardHistory, HistoryPoint, MobileAlert, MobileSummary
+from app.core.security import require_session
+from app.models.mobile import (
+    CardHistory,
+    HistoryPoint,
+    MobileAlert,
+    MobileSummary,
+    PushRegistration,
+    PushToken,
+)
 from app.services.mobile_summary import (
     condition,
     legs_for,
@@ -16,6 +26,47 @@ from app.services.mobile_summary import (
 from app.services.pair_spread_query import PairSpreadQueryError, PairSpreadQueryService
 
 router = APIRouter(prefix="/mobile")
+
+
+class _PushRoute(APIRoute):
+    def get_route_handler(self):
+        handle = super().get_route_handler()
+
+        async def handle_push(request):
+            try:
+                return await handle(request)
+            except RequestValidationError:
+                # FastAPI's default 422 includes the rejected input, potentially a whole token.
+                raise HTTPException(422, "推送参数无效，请检查设备令牌、通知类型和阈值") from None
+
+        return handle_push
+
+
+push = APIRouter(prefix="/push", dependencies=[Depends(require_session)], route_class=_PushRoute)
+
+
+@push.post("/register")
+async def register_push(payload: PushRegistration, request: Request):
+    await request.app.state.mobile_push_repo.register(
+        payload.token.get_secret_value(), request.state.auth_session_hash,
+        payload.kinds.model_dump(), payload.threshold_pp,
+    )
+    return {"ok": True}
+
+
+@push.delete("/register")
+async def delete_push(payload: PushToken, request: Request):
+    await request.app.state.mobile_push_repo.remove(payload.token.get_secret_value(), request.state.auth_session_hash)
+    return {"ok": True}
+
+
+@push.post("/test")
+async def test_push(payload: PushToken, request: Request):
+    result = await request.app.state.mobile_push.test(payload.token.get_secret_value(), request.state.auth_session_hash)
+    return {"sent": result.sent, "reason": result.reason}
+
+
+router.include_router(push)
 
 
 @router.get("/summary", response_model=MobileSummary)

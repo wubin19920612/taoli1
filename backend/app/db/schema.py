@@ -142,6 +142,11 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
           updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS mobile_push_devices (
+            token TEXT PRIMARY KEY NOT NULL, session_hash TEXT NOT NULL, kinds TEXT NOT NULL,
+            threshold_pp REAL NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL,
+            last_error TEXT
+        );
         CREATE TABLE IF NOT EXISTS mobile_alert_events (
           id INTEGER PRIMARY KEY, created_at REAL NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL,
           body TEXT NOT NULL, level TEXT NOT NULL, symbol TEXT, card_name TEXT

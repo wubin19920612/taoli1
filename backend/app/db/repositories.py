@@ -318,6 +318,58 @@ class AlertRuleRepository:
         await self.db.commit()
 
 
+class MobilePushRepository:
+    def __init__(self, db: aiosqlite.Connection, auth_db=None):
+        self.db = db
+        self.auth_db = auth_db or db
+
+    async def register(self, token, session_hash, kinds, threshold_pp):
+        now = datetime.now(UTC).timestamp()
+        await self.db.execute("""
+            INSERT INTO mobile_push_devices (token, session_hash, kinds, threshold_pp, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(token) DO UPDATE SET
+            session_hash=excluded.session_hash, kinds=excluded.kinds, threshold_pp=excluded.threshold_pp,
+            updated_at=excluded.updated_at, last_error=NULL
+        """, (token, session_hash, json.dumps(kinds), threshold_pp, now, now))
+        await self.db.commit()
+
+    async def remove(self, token, session_hash):
+        await self.db.execute("DELETE FROM mobile_push_devices WHERE token=? AND session_hash=?",
+                              (token, session_hash))
+        await self.db.commit()
+
+    async def record_result(self, device, reason, invalid):
+        # A slow FCM response can arrive after the phone registers a new session or preferences.
+        match = (device["token"], device["session_hash"], device["updated_at"])
+        where = " WHERE token=? AND session_hash=? AND updated_at=?"
+        if invalid:
+            await self.db.execute("DELETE FROM mobile_push_devices" + where, match)
+        else:
+            await self.db.execute("UPDATE mobile_push_devices SET last_error=?" + where, (reason, *match))
+        await self.db.commit()
+
+    async def get(self, token, session_hash):
+        async with self.db.execute("SELECT * FROM mobile_push_devices WHERE token=? AND session_hash=?",
+                                   (token, session_hash)) as cursor:
+            return await cursor.fetchone()
+
+    async def scan(self):
+        rows = await self.db.execute_fetchall("SELECT * FROM mobile_push_devices")
+        if not rows:
+            return []
+        sessions = await self.auth_db.execute_fetchall(
+            "SELECT id_hash FROM auth_sessions WHERE revoked_at IS NULL AND expires_at>?",
+            (datetime.now(UTC).timestamp(),),
+        )
+        active = {row[0] for row in sessions}
+        expired = [(r["token"], r["session_hash"], r["updated_at"]) for r in rows if r["session_hash"] not in active]
+        if expired:
+            await self.db.executemany("DELETE FROM mobile_push_devices WHERE token=? AND session_hash=? AND updated_at=?",
+                                      expired)
+            await self.db.commit()
+        return [dict(r) | {"kinds": json.loads(r["kinds"])} for r in rows if r["session_hash"] in active]
+
+
 class MobileAlertRepository:
     def __init__(self, db: aiosqlite.Connection):
         self.db = db

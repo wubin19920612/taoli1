@@ -1,6 +1,6 @@
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -66,6 +66,7 @@ class Settings:
     collector_max_due_adapters_per_cycle: int = 6
     collector_risk_settings_timeout_seconds: float = 2.0
     feishu_webhook_url: str = ""
+    fcm_service_account_json_b64: str = field(default="", repr=False)
     feishu_secret: str = ""
     feishu_app_id: str = ""
     feishu_app_secret: str = ""
@@ -339,6 +340,7 @@ def get_settings() -> Settings:
         collector_max_due_adapters_per_cycle=int(os.getenv("COLLECTOR_MAX_DUE_ADAPTERS_PER_CYCLE", "6")),
         collector_risk_settings_timeout_seconds=float(os.getenv("COLLECTOR_RISK_SETTINGS_TIMEOUT_SECONDS", "2")),
         feishu_webhook_url=os.getenv("FEISHU_WEBHOOK_URL", ""),
+        fcm_service_account_json_b64=os.getenv("FCM_SERVICE_ACCOUNT_JSON_B64", "").strip(),
         feishu_secret=os.getenv("FEISHU_SECRET", ""),
         feishu_app_id=os.getenv("FEISHU_APP_ID", "").strip(),
         feishu_app_secret=os.getenv("FEISHU_APP_SECRET", "").strip(),

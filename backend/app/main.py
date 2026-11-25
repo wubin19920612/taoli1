@@ -13,7 +13,7 @@ from uuid import NAMESPACE_URL, uuid5
 from zoneinfo import ZoneInfo
 
 import aiosqlite
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.runtime.gc_pause import GcPauseMonitor
@@ -55,6 +55,7 @@ from app.db.repositories import (
     AccountConnectionRepository,
     AlertEventRepository,
     MobileAlertRepository,
+    MobilePushRepository,
     AnnouncementRepository,
     IndexComponentRepository,
     AlertRuleRepository,
@@ -101,12 +102,15 @@ from app.services.announcements import (
     run_announcement_loop,
 )
 from app.services.astro_alerts import AstroAlertService
-from app.services.astro_client import AstroSdkClient, AstroSdkConfig
+from app.services.astro_client import AstroClientError, AstroSdkClient, AstroSdkConfig
 from app.services.astro_planner import AstroPairPlanner, AstroPlannerConfig
 from app.services.astro_preadd import AstroPreaddService
 from app.services.collector import MarketCollector, default_exchange_adapters, run_collector_loop
 from app.services.data_filters import filter_opportunities
 from app.services.feishu import FeishuConfig, FeishuNotifier
+from app.services.fcm import FcmClient
+from app.services.mobile_push import MobilePushService
+from app.services.mobile_summary import summary as build_mobile_summary
 from app.services.gate_crossex_hyperliquid import GateCrossExHyperliquidCatalog
 from app.services.gate_twap import GateTwapClient, GateTwapJobManager
 from app.services.history import OpportunityHistoryRecorder
@@ -1115,6 +1119,28 @@ def create_app(
             mobile_db = await aiosqlite.connect(db_path, isolation_level=None, timeout=0.9)
             mobile_db.row_factory = aiosqlite.Row
         app.state.mobile_alert_repo = MobileAlertRepository(mobile_db)
+        app.state.mobile_push_repo = MobilePushRepository(
+            mobile_db, app.state.auth_store.db if db_path == ":memory:" else None,
+        )
+        app.state.fcm = FcmClient(app_settings.fcm_service_account_json_b64)
+
+        async def load_push_summary():
+            request = Request({"type": "http", "app": app})
+            client = app.state.astro_client
+            try:
+                pairs = await client.list_pairs_cached()
+            except AstroClientError:
+                # Preserve the last positions on an Astro outage. Summary computes
+                # staleness using the original publication time and collector quotes.
+                pairs = client._pairs_cache
+                if pairs is None:
+                    missing = await build_mobile_summary(request, [])
+                    missing.stale = True
+                    return missing
+            return await build_mobile_summary(request, pairs)
+
+        app.state.mobile_push = MobilePushService(app.state.mobile_push_repo, app.state.fcm, load_push_summary)
+        app.state.feishu_notifier.mobile_push = app.state.mobile_push
 
         async def prune_mobile_alerts():
             try:
@@ -1217,6 +1243,7 @@ def create_app(
             )
         if start_background_workers:
             _start_background_task(supervisor, daily_alert_retention, name="mobile-alert-retention")
+            _start_background_task(supervisor, lambda: app.state.mobile_push.run(stop_event), name="mobile-push")
             _start_background_task(
                 supervisor,
                 lambda: app.state.pair_spread_funding_recorder.run(stop_event),
@@ -1464,6 +1491,7 @@ def create_app(
                     "instrument_market_cap_service",
                     "instrument_statistics_service",
                     "feishu_notifier",
+                    "fcm",
                 )
                 if identity_db is not db:
                     await identity_db.close()

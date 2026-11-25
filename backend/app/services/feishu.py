@@ -86,6 +86,9 @@ class FeishuNotifier:
                 kind=kind, title=title, body=body, level=level,
                 symbol=_event_text(symbol, secrets) if symbol else None,
             ), timeout=1)
+            push = getattr(self, "mobile_push", None)
+            if kind == "big_spread" and push is not None:
+                push.queue_big_spread(title, body, _event_text(symbol, secrets) if symbol else "")
         except Exception:  # noqa: BLE001 - journal failures must never affect delivery.
             logger.warning("Failed to record mobile alert event")
 
