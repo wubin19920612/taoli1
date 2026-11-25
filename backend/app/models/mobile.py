@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from app.models.market import MarketType
 from app.models.pair_range_backtest import PairRangeBacktestResult
@@ -13,6 +13,25 @@ from app.models.pair_spread import (
 )
 
 
+EQN_NEWS_CHANNELS = {
+    "main": "方程式新闻", "tradfi": "方程式财经", "major": "加密重大行情",
+    "tfmoves": "美股重大行情", "hl": "Hyperliquid", "earn": "理财提醒",
+    "cz": "CZ&何一", "elon": "马斯克重要推文", "pricechange": "价格异动", "oi": "OI价格异动",
+}
+
+
+class EqnNewsSettings(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    channels: list[str]
+
+    @field_validator("channels")
+    @classmethod
+    def validate_channels(cls, channels: list[str]) -> list[str]:
+        if any(channel not in EQN_NEWS_CHANNELS for channel in channels):
+            raise ValueError("未知的方程式新闻频道")
+        return list(dict.fromkeys(channels))
+
+
 class PushKinds(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
     near_open: bool
@@ -22,6 +41,7 @@ class PushKinds(BaseModel):
     big_spread: bool
     stale: bool
     announcement: bool = False
+    eqn_news: bool = True
     price: bool = False
     funding: bool = False
     auth: bool = False

@@ -111,6 +111,7 @@ from app.services.astro_preadd import AstroPreaddService
 from app.services.collector import MarketCollector, default_exchange_adapters, run_collector_loop
 from app.services.data_filters import filter_opportunities
 from app.services.feishu import FeishuConfig, FeishuNotifier
+from app.services.eqn_news import EqnNewsMonitor
 from app.services.fcm import FcmClient
 from app.services.mobile_card_control import MobileCardControl
 from app.services.mobile_push import MobilePushService
@@ -1249,6 +1250,8 @@ def create_app(
             )
         if start_background_workers:
             _start_background_task(supervisor, daily_alert_retention, name="mobile-alert-retention")
+            eqn_news = EqnNewsMonitor(app.state.settings_repo, app.state.feishu_notifier)
+            _start_background_task(supervisor, lambda: eqn_news.run(stop_event), name="eqn-news")
             _start_background_task(supervisor, lambda: app.state.mobile_push.run(stop_event), name="mobile-push")
             _start_background_task(
                 supervisor,

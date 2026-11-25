@@ -320,6 +320,38 @@ async def test_full_feishu_push_queue_drops_oldest_message(caplog):
     assert "丢弃最旧的飞书提醒" in caplog.text
 
 
+async def test_eqn_news_device_defaults_and_matching_headlines():
+    from app.models.mobile import PushKinds
+
+    assert PushKinds(**KINDS).eqn_news is True
+    s = Scanner([device("legacy"), device("on", eqn_news=True), device("off", eqn_news=False)])
+    for body in ("first", "second"):
+        s.service.queue_feishu("eqn_news", "相同标题", body, urgent=False)
+    await s.scan(0)
+    assert [(token, msg.body, msg.channel) for token, msg in s.sent] == [
+        (token, body, "normal") for body in ("first", "second") for token in ("legacy", "on")
+    ]
+
+
+async def test_feishu_partial_message_prunes_removed_devices_and_caps_hashes(monkeypatch, caplog):
+    monkeypatch.setattr(mobile_push, "FEISHU_SCAN_LIMIT", 1)
+    monkeypatch.setattr(mobile_push, "HANDLED_TOKEN_LIMIT", 2)
+    devices = [device(str(i)) for i in range(4)]
+    s = Scanner(devices)
+    s.service.queue_feishu("eqn_news", "新闻", "正文", urgent=False)
+    await s.scan(0)
+    pending, = s.service._feishu_messages.values()
+    assert pending.handled_tokens == {devices[0]["token_hash"]}
+    s.service.repo.scan.return_value = devices[1:]
+    await s.scan(10)
+    assert pending.handled_tokens == {devices[1]["token_hash"]}
+    await s.scan(20)
+    assert pending.handled_tokens == {device["token_hash"] for device in devices[1:3]}
+    assert not s.service._feishu_messages
+    assert "设备上限" in caplog.text
+    assert [token for token, _ in s.sent] == ["0", "1", "2"]
+
+
 @pytest.mark.parametrize("replaceable", [False, True])
 async def test_full_send_queue_feishu_preserves_card_spread_stale_and_urgent_pushes(
     monkeypatch, replaceable,
@@ -561,7 +593,7 @@ async def test_session_api_validation_upsert_delete_and_revocation(push_api):
         ).status_code == 200
         (row,) = await service.repo.scan()
         assert row["threshold_pp"] == threshold
-        assert row["kinds"] == KINDS | dict.fromkeys(
+        assert row["kinds"] == KINDS | {"eqn_news": True} | dict.fromkeys(
             ("announcement", "price", "funding", "auth", "trade_status", "index_component",
              "premium", "spread", "general"),
             False,

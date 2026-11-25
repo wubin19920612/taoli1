@@ -36,6 +36,7 @@ from app.models.index_component import (
     index_watch_symbol,
 )
 from app.models.market import MarketType
+from app.models.mobile import EqnNewsSettings
 from app.models.opportunity import Opportunity, OpportunityType
 from app.services.shadow_ledger import STRATEGY_VERSION
 from app.models.astro_preadd import AstroPreaddSettings
@@ -1433,6 +1434,32 @@ class AnnouncementRepository:
 
 
 class SettingsRepository:
+    async def get_eqn_news_cursors(self) -> dict[str, int | None]:
+        async with self.db.execute("SELECT payload FROM app_settings WHERE key='eqn_news'") as cursor:
+            row = await cursor.fetchone()
+        return json.loads(row["payload"]) if row else {}
+
+    async def replace_eqn_news_cursors(
+        self, previous: dict[str, int | None], updated: dict[str, int | None],
+    ) -> bool:
+        # The API and poller can use separate processes sharing this database.
+        # Only commit progress for the subscription snapshot that produced it.
+        cursor = await self.db.execute(
+            """INSERT INTO app_settings (key, payload) VALUES ('eqn_news', ?)
+               ON CONFLICT(key) DO UPDATE SET payload=excluded.payload
+               WHERE app_settings.payload=?""",
+            (json.dumps(updated), json.dumps(previous)),
+        )
+        await self.db.commit()
+        return cursor.rowcount == 1
+
+    async def set_eqn_news_settings(self, settings: EqnNewsSettings) -> None:
+        while True:
+            previous = await self.get_eqn_news_cursors()
+            updated = {key: previous.get(key) for key in settings.channels}
+            if await self.replace_eqn_news_cursors(previous, updated):
+                return
+
     async def get_arb_mvp_default_max_position_usd(self) -> float:
         cursor = await self.db.execute(
             "SELECT payload FROM app_settings WHERE key = ?", ("arb_mvp_default_max_position_usd",)

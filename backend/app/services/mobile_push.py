@@ -5,6 +5,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from time import monotonic
+from uuid import uuid4
 from weakref import WeakValueDictionary
 
 from app.models.mobile import MobileCard
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 SCAN_INTERVAL = 10
 QUEUE_LIMIT = 200
 FEISHU_SCAN_LIMIT = 50
+HANDLED_TOKEN_LIMIT = 500
 SEND_CONCURRENCY = 4
 
 
@@ -216,8 +218,11 @@ class MobilePushService:
     def queue_feishu(self, kind: str, title: str, body: str, urgent: bool) -> None:
         if not self.fcm.enabled:
             return
+        # The news poller deduplicates by article number. Distinct articles
+        # can share the same (truncated) headline within the device cooldown.
+        identity = uuid4().hex if kind == "eqn_news" else title
         message = PushMessage(
-            kind, title, body[:720], channel="urgent" if urgent else "normal", identity=title,
+            kind, title, body[:720], channel="urgent" if urgent else "normal", identity=identity,
         )
         pending = self._feishu_messages.get(message.tag)
         if pending is not None:
@@ -237,19 +242,24 @@ class MobilePushService:
         self._feishu_messages[message.tag] = FeishuPush(message)
 
     def _scan_feishu(self, devices, now):
+        active_tokens = {device["token_hash"] for device in devices}
         remaining = FEISHU_SCAN_LIMIT
         while self._feishu_messages and remaining:
             tag = next(iter(self._feishu_messages))
             pending = self._feishu_messages[tag]
             message = pending.message
+            pending.handled_tokens.intersection_update(active_tokens)
             for device in devices:
                 token_hash = device["token_hash"]
                 if (
                     token_hash in pending.handled_tokens
-                    or not device["kinds"].get(message.kind, False)
+                    or not device["kinds"].get(message.kind, message.kind == "eqn_news")
                     or (token_hash, tag) in self.cooldowns
                 ):
                     continue
+                if len(pending.handled_tokens) >= HANDLED_TOKEN_LIMIT:
+                    logger.warning("手机推送单条飞书提醒已达设备上限，丢弃剩余投递")
+                    break
                 if not remaining:
                     return
                 self._notify(device, message, now, from_feishu=True)

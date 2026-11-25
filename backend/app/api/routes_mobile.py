@@ -14,11 +14,13 @@ from app.api.routes_astro import list_astro_pairs
 from app.api.routes_pair_spread import _resolved_leg, _symbol_alias_resolver
 from app.core.security import browser_label, client_ip, require_session
 from app.models.mobile import (
+    EQN_NEWS_CHANNELS,
     CardControlUpdate,
     CardHistory,
     CardPinUpdate,
     DeviceBinding,
     DeviceProof,
+    EqnNewsSettings,
     HistoryPoint,
     MobileAlert,
     MobileRangeBacktestRequest,
@@ -124,6 +126,26 @@ async def update_pin(payload: CardPinUpdate, request: Request) -> dict[str, dict
 
 
 router.include_router(pins)
+
+eqn_news = APIRouter(prefix="/eqn-news", dependencies=[Depends(require_session)])
+
+
+@eqn_news.get("/settings")
+async def get_eqn_news_settings(request: Request):
+    cursors = await request.app.state.settings_repo.get_eqn_news_cursors()
+    return {
+        "channels": list(cursors),
+        "available": [{"key": key, "name_zh": name} for key, name in EQN_NEWS_CHANNELS.items()],
+    }
+
+
+@eqn_news.post("/settings")
+async def set_eqn_news_settings(payload: EqnNewsSettings, request: Request):
+    await request.app.state.settings_repo.set_eqn_news_settings(payload)
+    return payload
+
+
+router.include_router(eqn_news)
 
 
 class _CardControlRoute(_MobileInputRoute):

@@ -77,6 +77,8 @@ class FeishuNotifier:
             secrets = (self.config.webhook_url, self.config.secret, self.config.app_secret)
             body = _event_text(text, secrets)[:2000]
             title = next((line.strip() for line in body.splitlines() if line.strip()), "提醒")[:160]
+            if kind is None and title.startswith("【方程式·"):
+                kind = "eqn_news"
             if kind is None and title.startswith("【大价差】"):
                 kind = "big_spread"
             if kind is None:
@@ -107,6 +109,9 @@ class FeishuNotifier:
         if self._client is None:
             self._client = httpx.AsyncClient(timeout=10)
         return self._client
+
+    async def record_mobile_text(self, text: str) -> None:
+        await self._record(text, kind=None, symbol=None, level="normal")
 
     async def aclose(self) -> None:
         if self._record_tasks:
