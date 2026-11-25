@@ -234,3 +234,16 @@ async def test_card_lookup_exception_preserves_other_quotes():
     bad, good = result.cards
     assert bad.name == "BTC" and bad.qty_a == 1 and bad.metric_error == "卡片数据格式异常"
     assert good.name == "ETH" and good.open_spread_now is not None and good.metric_error == ""
+
+
+def test_infinity_close_sentinel_is_not_malformed():
+    from app.services.mobile_summary import malformed
+    assert malformed("Infinity") is False
+    assert malformed(float("inf")) is False
+    assert malformed("-Infinity") is False
+    assert malformed("0.5") is False
+    assert malformed(None) is False
+    assert malformed("") is False
+    assert malformed("abc") is True
+    assert malformed("NaN") is True
+    assert malformed(True) is True

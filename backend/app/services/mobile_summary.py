@@ -47,6 +47,17 @@ def number(value):
     return parsed if isfinite(parsed) else None
 
 
+def malformed(value):
+    # Astro uses "Infinity" as a "never close" sentinel; only unparsable values or NaN are malformed.
+    if value in (None, "") or number(value) is not None:
+        return False
+    try:
+        return not (isinstance(value, (str, float, int)) and not isinstance(value, bool)
+                    and float(value) in (float("inf"), float("-inf")))
+    except (ValueError, OverflowError):
+        return True
+
+
 def positive(value):
     parsed = number(value)
     return parsed if parsed is not None and parsed > 0 else None
@@ -315,7 +326,7 @@ async def summary(request, pairs):
             legs = () if malformed_text else legs_for(pair)
             card = build_card(pair, legs, lookup, now, settings.stale_after_seconds)
             malformed_number = legs and any(
-                pair.get(key) not in (None, "") and number(pair[key]) is None
+                malformed(pair.get(key))
                 for key in ("openPosition", "closePosition", "regressionValue",
                             "aExPosition", "bExPosition", "avgOpenAExPrice", "avgOpenBExPrice",
                             "avgCloseAExPrice", "avgCloseBExPrice", "profit", "realizedProfit")
