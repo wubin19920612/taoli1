@@ -23,8 +23,14 @@ class PushRegistration(PushToken):
     threshold_pp: float = Field(ge=0.01, le=5, strict=True)
 
 
+class CardPinUpdate(BaseModel):
+    card_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$", strict=True)
+    pinned: bool = Field(strict=True)
+
+
 class MobileCard(BaseModel):
     id: str | None = None
+    pinned_at: float | None = None
     name: str
     type: str
     buy_ex: str

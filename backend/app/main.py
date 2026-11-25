@@ -55,6 +55,7 @@ from app.db.repositories import (
     AccountConnectionRepository,
     AlertEventRepository,
     MobileAlertRepository,
+    MobilePinsRepository,
     MobilePushRepository,
     AnnouncementRepository,
     IndexComponentRepository,
@@ -1119,6 +1120,7 @@ def create_app(
             mobile_db = await aiosqlite.connect(db_path, isolation_level=None, timeout=0.9)
             mobile_db.row_factory = aiosqlite.Row
         app.state.mobile_alert_repo = MobileAlertRepository(mobile_db)
+        app.state.mobile_pins_repo = MobilePinsRepository(mobile_db)
         app.state.mobile_push_repo = MobilePushRepository(
             mobile_db, app.state.auth_store.db if db_path == ":memory:" else None,
         )

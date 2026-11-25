@@ -74,6 +74,7 @@ def _mobile_route(request: Request) -> bool:
         return path.startswith("/api/mobile/") or path == "/api/health" or path.startswith("/api/health/")
     return (request.method, path) in {
         ("POST", "/api/auth/logout"),
+        ("POST", "/api/mobile/pins"),
         ("POST", "/api/mobile/push/register"),
         ("DELETE", "/api/mobile/push/register"),
         ("POST", "/api/mobile/push/test"),

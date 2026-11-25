@@ -8,6 +8,7 @@ from app.api.routes_pair_spread import _resolved_leg, _symbol_alias_resolver
 from app.core.security import require_session
 from app.models.mobile import (
     CardHistory,
+    CardPinUpdate,
     HistoryPoint,
     MobileAlert,
     MobileSummary,
@@ -28,18 +29,28 @@ from app.services.pair_spread_query import PairSpreadQueryError, PairSpreadQuery
 router = APIRouter(prefix="/mobile")
 
 
-class _PushRoute(APIRoute):
+class _MobileInputRoute(APIRoute):
+    validation_message: str
+
     def get_route_handler(self):
         handle = super().get_route_handler()
 
-        async def handle_push(request):
+        async def handle_request(request):
             try:
                 return await handle(request)
             except RequestValidationError:
-                # FastAPI's default 422 includes the rejected input, potentially a whole token.
-                raise HTTPException(422, "推送参数无效，请检查设备令牌、通知类型和阈值") from None
+                # FastAPI's default 422 includes the rejected input.
+                raise HTTPException(422, self.validation_message) from None
 
-        return handle_push
+        return handle_request
+
+
+class _PushRoute(_MobileInputRoute):
+    validation_message = "推送参数无效，请检查设备令牌、通知类型和阈值"
+
+
+class _PinRoute(_MobileInputRoute):
+    validation_message = "置顶参数无效，请检查卡片编号和置顶状态"
 
 
 push = APIRouter(prefix="/push", dependencies=[Depends(require_session)], route_class=_PushRoute)
@@ -67,6 +78,27 @@ async def test_push(payload: PushToken, request: Request):
 
 
 router.include_router(push)
+
+pins = APIRouter(prefix="/pins", dependencies=[Depends(require_session)], route_class=_PinRoute)
+
+
+@pins.get("")
+async def list_pins(request: Request) -> dict[str, dict[str, float]]:
+    return {"pins": await request.app.state.mobile_pins_repo.list()}
+
+
+@pins.post("")
+async def update_pin(payload: CardPinUpdate, request: Request) -> dict[str, dict[str, float]]:
+    repo = request.app.state.mobile_pins_repo
+    if payload.pinned:
+        if not await repo.pin(payload.card_id):
+            raise HTTPException(409, "置顶数量已达上限")
+    else:
+        await repo.unpin(payload.card_id)
+    return {"pins": await repo.list()}
+
+
+router.include_router(pins)
 
 
 @router.get("/summary", response_model=MobileSummary)

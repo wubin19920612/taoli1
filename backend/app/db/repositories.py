@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 import unicodedata
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -443,6 +444,35 @@ class MobilePushRepository:
             await self.db.executemany("DELETE FROM mobile_push_devices" + self._CURRENT_DEVICE, expired)
             await self.db.commit()
         return [dict(r) | {"kinds": json.loads(r["kinds"])} for r in rows if r["session_hash"] in active]
+
+
+class MobilePinsRepository:
+    def __init__(self, db: aiosqlite.Connection):
+        self.db = db
+
+    async def list(self) -> dict[str, float]:
+        rows = await self.db.execute_fetchall("SELECT card_id, pinned_at FROM mobile_card_pins")
+        return dict(rows)
+
+    async def pin(self, card_id: str) -> bool:
+        # Keep the capacity check and upsert atomic across concurrent writers.
+        async with self.db.execute(
+            """
+            INSERT INTO mobile_card_pins (card_id, pinned_at)
+            SELECT :card_id, :now
+            WHERE EXISTS (SELECT 1 FROM mobile_card_pins WHERE card_id = :card_id)
+               OR (SELECT COUNT(*) FROM mobile_card_pins) < 200
+            ON CONFLICT(card_id) DO UPDATE SET pinned_at = excluded.pinned_at
+            """,
+            {"card_id": card_id, "now": time.time()},
+        ) as cursor:
+            changed = cursor.rowcount == 1
+        await self.db.commit()
+        return changed
+
+    async def unpin(self, card_id: str) -> None:
+        await self.db.execute("DELETE FROM mobile_card_pins WHERE card_id = ?", (card_id,))
+        await self.db.commit()
 
 
 class MobileAlertRepository:

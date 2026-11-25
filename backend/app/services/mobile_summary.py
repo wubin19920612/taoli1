@@ -1,5 +1,6 @@
 """Request-local projection of the Astro floating panel and its instrument snapshots."""
 
+import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -21,6 +22,8 @@ from app.models.market import MarketSnapshot, MarketType
 from app.models.mobile import MobileCard, MobileSummary
 from app.models.pair_spread import normalize_pair_spread_symbol
 from app.services.symbol_aliases import SymbolAliasResolver
+
+logger = logging.getLogger(__name__)
 
 EXCHANGE_LABELS = {
     "aster": "Aster",
@@ -332,6 +335,11 @@ async def summary(request, pairs):
     age = max(0.0, monotonic() - cached_at) if cached_at is not None else None
     settings = await _risk_settings(request)
     lookup = market_lookup(request, settings)
+    try:
+        pins = await request.app.state.mobile_pins_repo.list()
+    except Exception:
+        logger.warning("Failed to read mobile card pins", exc_info=True)
+        pins = {}
     cards = []
     for pair in pairs:
         try:
@@ -354,6 +362,7 @@ async def summary(request, pairs):
             card = build_card(pair if isinstance(pair, dict) else {}, (), lookup, now,
                               settings.stale_after_seconds)
             card.metric_error = "卡片数据格式异常"
+        card.pinned_at = pins.get(card.id)
         cards.append(card)
     cards.sort(key=_card_order)
     stale = (
