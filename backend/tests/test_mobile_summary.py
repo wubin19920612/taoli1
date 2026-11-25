@@ -85,6 +85,8 @@ async def test_ratio_matches_floating_panel(alias_multiplier):
     result = await summary(request_for(rows), [RATIO])
     (card,) = result.cards
     assert result.stale is False
+    assert card.id is None
+    assert card.open_auto and card.close_auto
     assert card.open_spread_now == pytest.approx(-1)
     assert card.close_spread_now == pytest.approx(1)
     assert card.open_condition == pytest.approx(2.98)
@@ -124,6 +126,59 @@ async def test_ff_order_gaps_stale_and_incomplete_positions():
     assert farthest.gap_to_open < closest.gap_to_open
     assert missing.gap_to_open is None
     assert not (await summary(request_for(rows), [FF, dict(FF, name="MISSING")])).stale
+
+
+@pytest.mark.parametrize("open_value, close_value, conditions, auto", [
+    ("10", "-10", (1000, -1000), (False, False)),
+    ("1", "-1", (100, -100), (False, False)),
+    ("0", "Infinity", (0, None), (True, False)),
+    (None, None, (None, None), (False, False)),
+])
+async def test_ff_auto_flags_and_gaps(open_value, close_value, conditions, auto):
+    rows = [market("binance", 99, 100, base="OPENAI"), market("gate", 101, 102, base="OPENAI")]
+    pair = dict(FF, openPosition=open_value, closePosition=close_value)
+    (card,) = (await summary(request_for(rows), [pair])).cards
+    assert card.metric_error == ""
+    assert (card.open_condition, card.close_condition) == conditions
+    assert (card.open_auto, card.close_auto) == auto
+    assert (card.gap_to_open is not None, card.gap_to_close is not None) == auto
+
+
+@pytest.mark.parametrize("qty_a, qty_b, avg_a, avg_b, expected_notionals, imbalance", [
+    (0.059, 0, 100, None, (5.9, None), True),
+    (-2, 1.58, 50, 50, (100, 79), True),
+    (1.6, 2, 50, 50, (80, 100), False),
+    (2, 1, None, 50, (None, 50), False),
+    (0, 0, 50, 50, (0, 0), False),
+])
+async def test_leg_notionals_and_imbalance(qty_a, qty_b, avg_a, avg_b, expected_notionals, imbalance):
+    pair = dict(FF, aExPosition=qty_a, bExPosition=qty_b,
+                avgOpenAExPrice=avg_a, avgOpenBExPrice=avg_b)
+    (card,) = (await summary(request_for([]), [pair])).cards
+    assert (card.leg_a_notional, card.leg_b_notional) == pytest.approx(expected_notionals)
+    assert card.leg_imbalance is imbalance
+
+
+async def test_cards_group_by_imbalance_holding_and_paused_state_before_gap():
+    rows = [market("binance", 99, 100, base="OPENAI"), market("gate", 101, 102, base="OPENAI")]
+    balanced = dict(FF, aExPosition=1, bExPosition=1, avgOpenAExPrice=100, avgOpenBExPrice=100)
+    pairs = [
+        dict(FF, id="paused-missing", status=False, name="MISSING"),
+        dict(FF, id="paused-low", status=False, openPosition=".02"),
+        dict(balanced, id="holding-running"),
+        dict(FF, id="active-low", openPosition=".03"),
+        dict(FF, id="active-missing", openPosition="10"),
+        dict(FF, id="paused-high", status=False, openPosition="0"),
+        dict(FF, id="single-leg", aExPosition=0.059),
+        dict(FF, id="active-high", openPosition=".01", disableOpen=True),
+        dict(balanced, id="holding-paused", status=False),
+    ]
+    result = await summary(request_for(rows), pairs)
+    assert [card.id for card in result.cards] == [
+        "single-leg", "holding-paused", "holding-running",
+        "active-high", "active-low", "active-missing",
+        "paused-high", "paused-low", "paused-missing",
+    ]
 
 
 async def test_exact_hl_dex_and_fee_even_when_raw_tickers_match():

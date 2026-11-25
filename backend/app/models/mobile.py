@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 
 class MobileCard(BaseModel):
+    id: str | None = None
     name: str
     type: str
     buy_ex: str
@@ -24,12 +25,17 @@ class MobileCard(BaseModel):
     close_spread_now: float | None = None
     open_condition: float | None
     close_condition: float | None
+    open_auto: bool
+    close_auto: bool
     gap_to_open: float | None = None
     gap_to_close: float | None = None
     qty_a: float
     qty_b: float
     avg_open_a: float | None
     avg_open_b: float | None
+    leg_a_notional: float | None
+    leg_b_notional: float | None
+    leg_imbalance: bool
     notional_usdt: float
     unrealized_usdt: float | None = None
     astro_profit: float | None

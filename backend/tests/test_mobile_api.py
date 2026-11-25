@@ -141,10 +141,12 @@ async def test_old_db_preserves_rule_events_and_sessions(tmp_path):
         await db.close()
 
 
-async def test_history_uses_exact_route_and_labels_candle_estimates(mobile_app):
+@pytest.mark.parametrize("prefix, identifier", [("", "ANTH-ANTHROPIC"), ("by-id/", "Card-A")])
+async def test_history_uses_exact_route_and_labels_candle_estimates(mobile_app, prefix, identifier):
     app, client = mobile_app
     app.state.astro_client.list_pairs_cached.return_value = [
         {
+            "id": "Card-A",
             "name": "ANTH-ANTHROPIC",
             "type": "FR",
             "buyEx": "hl",
@@ -161,7 +163,7 @@ async def test_history_uses_exact_route_and_labels_candle_estimates(mobile_app):
     )
     app.state.pair_spread_query_service_factory = lambda: service
     client.headers["X-Api-Token"] = "a" * 64
-    path = "/api/mobile/cards/ANTH-ANTHROPIC/history"
+    path = f"/api/mobile/cards/{prefix}{identifier}/history"
     result = await client.get(path)
     assert result.status_code == 200, result.text
     data = result.json()
@@ -178,7 +180,36 @@ async def test_history_uses_exact_route_and_labels_candle_estimates(mobile_app):
     service.aclose.assert_awaited_once()
     for hours, status in ((0, 422), (72, 200), (73, 422)):
         assert (await client.get(path, params={"hours": hours})).status_code == status
-    assert (await client.get("/api/mobile/cards/missing/history")).status_code == 404
+    assert (await client.get(f"/api/mobile/cards/{prefix}missing/history")).status_code == 404
+
+
+async def test_mobile_readonly_history_by_id_resolves_duplicate_names(mobile_app):
+    app, client = mobile_app
+    pair = {"name": "BTC", "buyEx": "gate", "sellEx": "binance", "openPosition": ".01"}
+    app.state.astro_client.list_pairs_cached.return_value = [
+        dict(pair, id="Card-A"), dict(pair, id="Card-B", sellEx="bitget", openPosition=".02")
+    ]
+    service = SimpleNamespace(
+        query=AsyncMock(return_value=SimpleNamespace(points=[])), aclose=AsyncMock()
+    )
+    app.state.pair_spread_query_service_factory = lambda: service
+    login = await client.post("/api/auth/login", json={
+        "password": "fixture",
+        "code": totp_at(TEST_TOTP_SECRET, int(time.time() // 30)),
+        "scope": "mobile_readonly",
+    })
+    assert login.status_code == 200
+
+    cards = (await client.get("/api/mobile/summary")).json()["cards"]
+    assert [card["id"] for card in cards] == ["Card-A", "Card-B"]
+    assert (await client.get("/api/mobile/cards/BTC/history")).status_code == 409
+    assert (await client.get("/api/mobile/cards/by-id/card-b/history")).status_code == 404
+    service.query.assert_not_awaited()
+
+    result = await client.get("/api/mobile/cards/by-id/Card-B/history", params={"hours": 12})
+    assert result.status_code == 200 and result.json()["open_condition"] == 2
+    assert service.query.await_args.args[1].exchange == "bitget"
+    assert service.query.await_args.kwargs["hours"] == 12
 
 
 async def test_alert_journal_order_redaction_and_retention(mobile_app):

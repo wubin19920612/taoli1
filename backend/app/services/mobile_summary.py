@@ -215,7 +215,16 @@ def build_card(pair, legs, lookup, now, stale_after):
     qty_a, qty_b = (abs(number(pair.get(k)) or 0) for k in ("aExPosition", "bExPosition"))
     avg_a, avg_b = (positive(pair.get(k)) for k in ("avgOpenAExPrice", "avgOpenBExPrice"))
     holding = bool(qty_a or qty_b)
-    notional = qty_a * (avg_a or 0) + qty_b * (avg_b or 0)
+    leg_a_notional = qty_a * avg_a if avg_a is not None else None
+    leg_b_notional = qty_b * avg_b if avg_b is not None else None
+    notional = (leg_a_notional or 0) + (leg_b_notional or 0)
+    leg_imbalance = holding and (
+        not qty_a or not qty_b or (
+            leg_a_notional is not None
+            and leg_b_notional is not None
+            and abs(leg_a_notional - leg_b_notional) > 0.2 * max(leg_a_notional, leg_b_notional)
+        )
+    )
     open_now = close_now = profit = None
     if a and b:
         buy_open, sell_open = executable_price(a, "ask"), executable_price(b, "bid")
@@ -254,11 +263,14 @@ def build_card(pair, legs, lookup, now, stale_after):
     open_condition, close_condition = (
         condition(pair, k) for k in ("openPosition", "closePosition")
     )
+    open_auto = open_condition is not None and abs(open_condition) < 100
+    close_auto = close_condition is not None and abs(close_condition) < 100
     funding_a, funding_b = (row.funding_rate_pct if row else None for row in (a, b))
     # A spot leg has no funding payment. A missing futures rate is unknown.
     cost_a = 0 if a and a.market_type == MarketType.SPOT else funding_a
     income_b = 0 if b and b.market_type == MarketType.SPOT else funding_b
     return MobileCard(
+        id=text_field(pair, "id", None),
         name=text_field(pair, "name"),
         type=text_field(pair, "type", "FF"),
         buy_ex=text_field(pair, "buyEx"),
@@ -278,12 +290,17 @@ def build_card(pair, legs, lookup, now, stale_after):
         close_spread_now=close_now,
         open_condition=open_condition,
         close_condition=close_condition,
-        gap_to_open=difference(open_now, open_condition),
-        gap_to_close=difference(close_condition, close_now),
+        open_auto=open_auto,
+        close_auto=close_auto,
+        gap_to_open=difference(open_now, open_condition) if open_auto else None,
+        gap_to_close=difference(close_condition, close_now) if close_auto else None,
         qty_a=qty_a,
         qty_b=qty_b,
         avg_open_a=avg_a,
         avg_open_b=avg_b,
+        leg_a_notional=leg_a_notional,
+        leg_b_notional=leg_b_notional,
+        leg_imbalance=leg_imbalance,
         notional_usdt=notional,
         unrealized_usdt=profit,
         astro_profit=number(pair.get("profit")),
@@ -304,8 +321,8 @@ def build_card(pair, legs, lookup, now, stale_after):
 
 def _card_order(card):
     if card.holding:
-        return (0, card.state == "running", 0)
-    return (1, card.gap_to_open is None, -(card.gap_to_open or 0))
+        return (0 if card.leg_imbalance else 1, card.state == "running", 0)
+    return (3 if card.state == "paused" else 2, card.gap_to_open is None, -(card.gap_to_open or 0))
 
 
 async def summary(request, pairs):

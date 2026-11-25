@@ -23,6 +23,14 @@ async def mobile_summary(request: Request):
     return await summary(request, await list_astro_pairs(request))
 
 
+@router.get("/cards/by-id/{card_id}/history", response_model=CardHistory)
+async def card_history_by_id(card_id: str, request: Request, hours: int = Query(24, ge=1, le=72)):
+    for pair in await list_astro_pairs(request):
+        if isinstance(pair, dict) and pair.get("id") == card_id:
+            return await _history_for_pair(request, pair, hours)
+    raise HTTPException(404, "找不到卡片")
+
+
 @router.get("/cards/{name}/history", response_model=CardHistory)
 async def card_history(
     name: str, request: Request, hours: int = Query(24, ge=1, le=72),
@@ -38,7 +46,10 @@ async def card_history(
     if len(pairs) != 1:
         types = sorted({text_field(pair, "type", "FF") for pair in pairs})
         raise HTTPException(409, detail={"message": "卡片名称重复，无法确定两腿", "types": types})
-    pair = pairs[0]
+    return await _history_for_pair(request, pairs[0], hours)
+
+
+async def _history_for_pair(request: Request, pair: dict, hours: int) -> CardHistory:
     route = legs_for(pair)
     if not route:
         raise HTTPException(422, "无法从卡片名称识别两腿标的")
