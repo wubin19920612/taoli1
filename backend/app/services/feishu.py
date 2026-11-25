@@ -91,10 +91,18 @@ class FeishuNotifier:
                     ("指数成分", "index_component"), ("溢价", "premium"),
                     ("资金费", "funding"),
                 ) if word in title), "general")
-            await asyncio.wait_for(self.event_repo.record(
-                kind=kind, title=title, body=body, level=level,
-                symbol=_event_text(symbol, secrets) if symbol else None,
-            ), timeout=1)
+            if self.event_repo is not None:
+                try:
+                    await asyncio.wait_for(self.event_repo.record(
+                        kind=kind, title=title, body=body, level=level,
+                        symbol=_event_text(symbol, secrets) if symbol else None,
+                    ), timeout=1)
+                except Exception:
+                    logger.warning("Failed to record mobile alert event")
+                    if kind != "eqn_news":
+                        return
+            elif kind != "eqn_news":
+                return
             push = getattr(self, "mobile_push", None)
             if push is not None:
                 if kind == "big_spread":
@@ -143,7 +151,7 @@ class FeishuNotifier:
         kind = "big_spread" if getattr(rule, "id", None) == BIG_SPREAD_RULE_ID else "spread"
         self._schedule_record(payload["content"]["text"], kind=kind, symbol=opportunity.symbol)
 
-    async def send_text(self, text: str) -> None:
+    async def send_text(self, text: str, *, record_mobile: bool = True) -> None:
         if not self.config.webhook_url:
             raise RuntimeError("Feishu webhook is not configured")
         payload: dict = {
@@ -158,7 +166,8 @@ class FeishuNotifier:
             payload["sign"] = self._sign(timestamp)
         response = await self.client.post(self.config.webhook_url, json=payload)
         self._checked_webhook_payload(response, "send text")
-        self._schedule_record(text)
+        if record_mobile:
+            self._schedule_record(text)
 
     async def send_phone_urgent_text(self, text: str) -> None:
         user_ids = self.config.phone_user_ids or []

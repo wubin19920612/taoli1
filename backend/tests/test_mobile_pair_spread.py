@@ -278,10 +278,10 @@ async def test_mobile_pair_spread_timeout_returns_before_cancellation_or_close(p
     cancelling, release_query = asyncio.Event(), asyncio.Event()
     closing, release_close = asyncio.Event(), asyncio.Event()
 
-    async def wait_for_deadline(tasks, *, timeout):
+    async def wait_for_deadline(tasks, *, timeout, return_when):
         assert timeout == 60
         await asyncio.wait_for(entered.wait(), timeout=5)
-        return await asyncio.wait(tasks, timeout=0)
+        return await asyncio.wait(tasks, timeout=0, return_when=return_when)
 
     async def slow(*args, **kwargs):
         entered.set()
@@ -324,6 +324,55 @@ async def test_mobile_pair_spread_timeout_returns_before_cancellation_or_close(p
         await asyncio.gather(*app.state.mobile_pair_spread_limits._upstream_tasks, return_exceptions=True)
     assert "test close failed" in caplog.text
     assert not limits._upstream_tasks
+
+
+async def test_mobile_pair_spread_disconnect_allows_immediate_retry_during_cleanup(phone):
+    app, client, service, _ = phone
+    entered, cancelling, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    both_closed = asyncio.Event()
+    original = service.query.side_effect
+
+    async def slow(*args, **kwargs):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelling.set()
+            await release.wait()
+
+    async def close():
+        if service.aclose.await_count == 2:
+            both_closed.set()
+
+    service.query.side_effect = slow
+    service.aclose.side_effect = close
+    path = f"{MOBILE}/query"
+    request = client.build_request("GET", path, params=PARAMS)
+    incoming = asyncio.Queue()
+    incoming.put_nowait({"type": "http.request", "body": b"", "more_body": False})
+    scope = {
+        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+        "method": "GET", "scheme": "https", "path": path, "raw_path": path.encode(),
+        "query_string": request.url.query,
+        "headers": [(key.lower(), value) for key, value in request.headers.raw],
+        "client": ("127.0.0.1", 1234), "server": ("test", 443),
+    }
+    handler = asyncio.create_task(app(scope, incoming.get, AsyncMock()))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        incoming.put_nowait({"type": "http.disconnect"})
+        await asyncio.wait_for(cancelling.wait(), 2)
+        service.query.side_effect = original
+        response = await asyncio.wait_for(client.get(path, params=PARAMS), 2)
+        assert response.status_code == 200, response.text
+        await asyncio.wait_for(handler, 2)
+    finally:
+        release.set()
+        handler.cancel()
+        await asyncio.gather(handler, return_exceptions=True)
+        await asyncio.gather(*app.state.mobile_pair_spread_limits._upstream_tasks, return_exceptions=True)
+    await asyncio.wait_for(both_closed.wait(), 2)
+    assert service.aclose.await_count == 2
 
 
 async def test_mobile_pair_spread_pending_cleanup_has_a_capacity_limit(phone, monkeypatch):

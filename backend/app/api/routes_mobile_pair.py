@@ -124,6 +124,12 @@ async def _close_service(service: PairSpreadQueryService) -> None:
             _log_upstream(f"清理交易所连接失败: {type(exc).__name__}: {exc}")
 
 
+async def _wait_for_disconnect(request: Request) -> None:
+    # Both endpoints are GETs with no request body consumed by the handler.
+    while (await request.receive())["type"] != "http.disconnect":
+        pass
+
+
 class _PairSpreadLimits:
     def __init__(self):
         self._active_queries: set[str] = set()
@@ -131,7 +137,7 @@ class _PairSpreadLimits:
         self._cleanup_at = 0.0
         self._upstream_tasks: set[asyncio.Task] = set()
 
-    def start(self, session: str, operation: str) -> None:
+    def start(self, session: str, operation: str) -> float:
         now = monotonic()
         cutoff = now - MIN_START_INTERVAL_SECONDS
         if now >= self._cleanup_at:
@@ -141,15 +147,16 @@ class _PairSpreadLimits:
         if self._starts.get(key, cutoff) > cutoff:
             raise HTTPException(429, "请求过于频繁，请至少间隔 3 秒")
         self._starts[key] = now
+        return now
 
     @contextmanager
     def query(self, session: str):
         if session in self._active_queries:
             raise HTTPException(429, "上一个查询还在进行")
-        self.start(session, "query")
+        started = self.start(session, "query")
         self._active_queries.add(session)
         try:
-            yield
+            yield started
         finally:
             self._active_queries.remove(session)
 
@@ -165,6 +172,8 @@ class _PairSpreadLimits:
     async def run_upstream(
         self,
         request: Request,
+        name: str,
+        started: float,
         operation: Callable[[PairSpreadQueryService], Coroutine[Any, Any, _Result]],
     ) -> _Result:
         # Count running and cancelled operations until their cleanup finishes.
@@ -175,15 +184,29 @@ class _PairSpreadLimits:
         task = asyncio.create_task(operation(service))
         self._upstream_tasks.add(task)
         task.add_done_callback(partial(self._finish_upstream, service))
+        key = (request.state.auth_session_hash, name)
+        disconnected = asyncio.create_task(_wait_for_disconnect(request))
         try:
-            done, _ = await wait({task}, timeout=QUERY_TIMEOUT_SECONDS)
+            done, _ = await wait({task, disconnected}, timeout=QUERY_TIMEOUT_SECONDS,
+                                 return_when=asyncio.FIRST_COMPLETED)
+            if disconnected in done:
+                disconnected.result()
+                if self._starts.get(key) == started:
+                    self._starts.pop(key)
+                raise HTTPException(499, "客户端已断开连接")
+            if task not in done:
+                raise HTTPException(504, "查询超时，可缩短时长或加大周期")
+            return task.result()
         except asyncio.CancelledError:
-            task.cancel()
+            if self._starts.get(key) == started:
+                self._starts.pop(key)
             raise
-        if not done:
-            task.cancel()
-            raise HTTPException(504, "查询超时，可缩短时长或加大周期")
-        return task.result()
+        finally:
+            if not task.done():
+                task.cancel()
+            if not disconnected.done():
+                disconnected.cancel()
+                await asyncio.gather(disconnected, return_exceptions=True)
 
 
 def _limits(request: Request) -> _PairSpreadLimits:
@@ -347,8 +370,8 @@ async def query_pair_spread(
         return _mobile_result(display_result, funding_history)
 
     limits = _limits(request)
-    with limits.query(request.state.auth_session_hash):
-        return await limits.run_upstream(request, fetch)
+    with limits.query(request.state.auth_session_hash) as started:
+        return await limits.run_upstream(request, "query", started, fetch)
 
 
 @router.get("/current")
@@ -365,7 +388,7 @@ async def current_pair_spread(
     leg2_multiplier: float = Query(default=1.0, gt=0, allow_inf_nan=False),
 ) -> MobilePairSpreadCurrent:
     limits = _limits(request)
-    limits.start(request.state.auth_session_hash, "current")
+    started = limits.start(request.state.auth_session_hash, "current")
     resolver = await web._symbol_alias_resolver(request)
     try:
         leg1, alias1 = web._resolved_leg(
@@ -408,4 +431,4 @@ async def current_pair_spread(
         )
         return MobilePairSpreadCurrent.model_validate(snapshot)
 
-    return await limits.run_upstream(request, fetch)
+    return await limits.run_upstream(request, "current", started, fetch)
