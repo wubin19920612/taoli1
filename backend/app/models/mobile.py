@@ -7,7 +7,6 @@ from app.models.market import MarketType
 from app.models.pair_range_backtest import PairRangeBacktestResult
 from app.models.pair_spread import (
     PairSpreadCurrentSnapshot,
-    PairSpreadFundingPoint,
     PairSpreadLegQuery,
     PairSpreadPriceField,
 )
@@ -110,10 +109,16 @@ class MobilePairSpreadStats(BaseModel):
     last: float | None
 
 
+class MobilePairSpreadFundingPoint(BaseModel):
+    funding_time: datetime
+    leg: Literal["leg1", "leg2"]
+    funding_rate_pct: float
+
+
 class MobilePairSpreadFunding(BaseModel):
     leg1_rate_pct: float | None
     leg2_rate_pct: float | None
-    funding_history: list[PairSpreadFundingPoint]
+    funding_history: list[MobilePairSpreadFundingPoint]
 
 
 class MobilePairSpreadResult(BaseModel):

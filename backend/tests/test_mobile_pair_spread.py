@@ -17,7 +17,12 @@ from app.models.pair_spread import (
     PairSpreadPoint,
     PairSpreadQueryResult,
 )
-from app.services.pair_spread_query import PairSpreadQueryError, PairSpreadQueryService, _stats
+from app.services.pair_spread_query import (
+    REALTIME_CACHE_MISS_WARNING,
+    PairSpreadQueryError,
+    PairSpreadQueryService,
+    _stats,
+)
 
 MOBILE = "/api/mobile/pair-spread"
 WEB = "/api/pair-spread"
@@ -62,7 +67,7 @@ async def phone(mobile_app, monkeypatch):
         return PairSpreadQueryResult(
             leg1=leg1, leg2=leg2, hours=hours, interval_minutes=interval_minutes,
             interval_seconds=interval_seconds, leg2_multiplier=leg2_multiplier, observed_at=now or AT,
-            complete=False, warnings=["覆盖不足"], point_count=len(points), points=points,
+            complete=False, warnings=[REALTIME_CACHE_MISS_WARNING], point_count=len(points), points=points,
             spread_abs=_stats([point.spread_abs for point in points]),
             spread_pct=_stats([point.spread_pct for point in points]),
             current=current, funding_history=[PairSpreadFundingPoint(
@@ -155,7 +160,9 @@ async def test_mobile_pair_spread_downsampling_and_full_stats_match_website(phon
     for field in ("leg1", "leg2", "leg2_multiplier", "current", "complete", "warnings", "observed_at"):
         assert data[field] == web[field]
     assert data["funding"] == {
-        "leg1_rate_pct": 0, "leg2_rate_pct": -0.02, "funding_history": web["funding_history"],
+        "leg1_rate_pct": 0,
+        "leg2_rate_pct": -0.02,
+        "funding_history": [{"funding_time": "2026-01-01T00:00:00Z", "leg": "leg2", "funding_rate_pct": -0.012}],
     }
 
     clock.now += 3
@@ -166,6 +173,66 @@ async def test_mobile_pair_spread_downsampling_and_full_stats_match_website(phon
         "leg1_rate_pct": None, "leg2_rate_pct": None, "funding_history": [],
     }
     assert service.query.await_args.kwargs["include_current"] is False
+
+
+@pytest.mark.parametrize("count", [8, 1603])
+def test_mobile_pair_spread_downsampling_keeps_extrema_at_duplicate_times(count):
+    def point(index, spread):
+        return PairSpreadPoint(
+            bucket_at=AT + timedelta(minutes=index),
+            leg1_close=100,
+            leg2_close=100 + spread,
+            spread_abs=spread,
+            spread_pct=spread,
+        )
+
+    first, last = point(0, -80), point(count - 1, 90)
+    bucket_extreme = point(count // 2, 60)
+    points = [point(i, 1) for i in range(count)] + [
+        first, point(count // 2, -50), bucket_extreme, last,
+    ]
+    sampled = routes_mobile_pair._downsample(points)
+    timestamps = [p.bucket_at for p in sampled]
+    assert timestamps == sorted(set(timestamps))
+    assert len(sampled) <= 800
+    if count < 800:
+        assert len(sampled) == count
+    assert sampled[0] == min(sampled, key=lambda p: p.spread_pct) == first
+    assert sampled[-1] == max(sampled, key=lambda p: p.spread_pct) == last
+    assert bucket_extreme in sampled
+
+
+async def test_mobile_pair_spread_funding_history_is_latest_200_and_distinguishes_dex_legs(phone):
+    _, client, service, _ = phone
+    original = service.query.side_effect
+
+    async def query(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        leg1, leg2 = args
+        result.funding_history = []
+        for i in reversed(range(220)):
+            leg = leg2 if i % 2 else leg1
+            result.funding_history.append(PairSpreadFundingPoint(
+                exchange=leg.exchange, symbol=leg.symbol, dex=leg.dex,
+                funding_time=AT + timedelta(hours=i), funding_rate_pct=-i / 1000,
+            ))
+        return result
+
+    service.query.side_effect = query
+    params = dict(
+        PARAMS,
+        leg1_exchange="hyperliquid", leg1_symbol="xyz:TEST", leg1_dex="xyz", leg2_symbol="io:TEST",
+    )
+    response = await client.get(f"{MOBILE}/query", params=params)
+    assert response.status_code == 200, response.text
+    history = response.json()["funding"]["funding_history"]
+    assert len(history) == 200
+    for i, point in enumerate(history, start=20):
+        assert point == {
+            "funding_time": (AT + timedelta(hours=i)).isoformat().replace("+00:00", "Z"),
+            "leg": "leg2" if i % 2 else "leg1",
+            "funding_rate_pct": -i / 1000,
+        }
 
 
 async def test_mobile_pair_spread_query_in_flight_and_start_limits(phone):
@@ -204,44 +271,134 @@ async def test_mobile_pair_spread_query_in_flight_and_start_limits(phone):
         assert (await client.get(f"{MOBILE}/{endpoint}", params=PARAMS)).status_code == 200
 
 
-async def test_mobile_pair_spread_timeout_upstream_error_and_release(phone, monkeypatch):
-    _, client, service, clock = phone
-    deadline = asyncio.timeout(None)
+async def test_mobile_pair_spread_timeout_returns_before_cancellation_or_close(phone, monkeypatch, caplog):
+    app, client, service, clock = phone
     original = service.query.side_effect
-    cancelled = asyncio.Event()
+    entered = asyncio.Event()
+    cancelling, release_query = asyncio.Event(), asyncio.Event()
+    closing, release_close = asyncio.Event(), asyncio.Event()
 
-    def controlled_timeout(seconds):
-        assert seconds == 60
-        return deadline
+    async def wait_for_deadline(tasks, *, timeout):
+        assert timeout == 60
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        return await asyncio.wait(tasks, timeout=0)
 
     async def slow(*args, **kwargs):
-        deadline.reschedule(asyncio.get_running_loop().time())
+        entered.set()
         try:
             await asyncio.Event().wait()
         finally:
-            cancelled.set()
+            cancelling.set()
+            await release_query.wait()
+
+    async def close():
+        closing.set()
+        await release_close.wait()
+        raise RuntimeError("test close failed")
 
     service.query.side_effect = slow
+    service.aclose.side_effect = close
     path = f"{MOBILE}/query"
-    with monkeypatch.context() as patch:
-        patch.setattr(routes_mobile_pair, "timeout", controlled_timeout)
-        response = await client.get(path, params=PARAMS)
-    assert response.status_code == 504 and "查询超时" in response.json()["detail"]
-    assert cancelled.is_set()
-    service.aclose.assert_awaited_once()
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(routes_mobile_pair, "wait", wait_for_deadline)
+            response = await asyncio.wait_for(client.get(path, params=PARAMS), timeout=5)
+        assert (response.status_code, response.json()) == (
+            504, {"detail": "查询超时，可缩短时长或加大周期"},
+        )
+        limits = app.state.mobile_pair_spread_limits
+        assert not limits._active_queries
+        await asyncio.wait_for(cancelling.wait(), timeout=5)
+        assert not closing.is_set()
+        release_query.set()
+        await asyncio.wait_for(closing.wait(), timeout=5)
 
-    clock.now += 3
-    service.query.side_effect = PairSpreadQueryError("没有拿到可对齐的历史K线")
-    response = await client.get(path, params=PARAMS)
-    assert (response.status_code, response.json()) == (502, {"detail": "没有拿到可对齐的历史K线"})
+        clock.now += 3
+        service.query.side_effect = original
+        service.aclose.side_effect = None
+        response = await asyncio.wait_for(client.get(path, params=PARAMS), timeout=5)
+        assert response.status_code == 200
+    finally:
+        release_query.set()
+        release_close.set()
+        await asyncio.gather(*app.state.mobile_pair_spread_limits._upstream_tasks, return_exceptions=True)
+    assert "test close failed" in caplog.text
+    assert not limits._upstream_tasks
 
+
+async def test_mobile_pair_spread_pending_cleanup_has_a_capacity_limit(phone, monkeypatch):
+    app, client, service, clock = phone
+    closing, release = asyncio.Event(), asyncio.Event()
+
+    async def close():
+        closing.set()
+        await release.wait()
+
+    monkeypatch.setattr(routes_mobile_pair, "MAX_UPSTREAM_TASKS", 1)
+    service.aclose.side_effect = close
+    try:
+        first = await asyncio.wait_for(client.get(f"{MOBILE}/query", params=PARAMS), timeout=5)
+        assert first.status_code == 200
+        await asyncio.wait_for(closing.wait(), timeout=5)
+        response = await client.get(f"{MOBILE}/current", params=PARAMS)
+        assert (response.status_code, response.json()) == (503, {"detail": "交易所查询繁忙，请稍后重试"})
+        service._fetch_current_with_warning.assert_not_awaited()
+        assert len(app.state.mobile_pair_spread_limits._upstream_tasks) == 1
+    finally:
+        release.set()
+        await asyncio.gather(*app.state.mobile_pair_spread_limits._upstream_tasks)
     clock.now += 3
-    service.query.side_effect = original
-    assert (await client.get(path, params=PARAMS)).status_code == 200
-    service._fetch_current_with_warning.side_effect = lambda leg, warnings: None
+    assert (await client.get(f"{MOBILE}/current", params=PARAMS)).status_code == 200
+
+
+async def test_mobile_pair_spread_upstream_errors_and_warnings_are_sanitized(phone, caplog):
+    _, client, service, clock = phone
+    original = service.query.side_effect
+    failure = (
+        "ReadTimeout: upstream diagnostic /private/ticker?api_key=url-key "
+        "'Authorization': 'Bearer header-secret'"
+    )
+    service.query.side_effect = PairSpreadQueryError(failure)
+    response = await client.get(f"{MOBILE}/query", params=PARAMS)
+    assert (response.status_code, response.json()) == (
+        502, {"detail": "交易所数据获取失败（OKX、Hyperliquid）"},
+    )
+
+    async def current(leg, warnings):
+        if leg.exchange == "okx":
+            return CURRENT1
+        warnings.append(f"当前价格/资金失败: {failure}")
+        return None
+
+    service._fetch_current_with_warning.side_effect = current
     response = await client.get(f"{MOBILE}/current", params=PARAMS)
-    assert response.status_code == 502 and "没有拿到" in response.json()["detail"]
-    assert service.aclose.await_count == 4
+    assert (response.status_code, response.json()) == (502, {"detail": "交易所数据获取失败（Hyperliquid）"})
+
+    async def partial_result(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        result.warnings += [
+            f"hyperliquid:io:合约:ANTHUSDT 历史资金费率失败: {failure}",
+            "查询窗口超过7天，历史周期已从1分钟自动调整为至少1小时（实际使用1小时）。",
+            f"未知提示: {failure}",
+        ]
+        return result
+
+    service.query.side_effect = partial_result
+    clock.now += 3
+    response = await client.get(f"{MOBILE}/query", params=PARAMS)
+    assert response.status_code == 200
+    assert response.json()["warnings"] == [
+        REALTIME_CACHE_MISS_WARNING,
+        "部分交易所的历史资金费率获取失败。",
+        "查询窗口较长，已自动调整历史周期。",
+        "部分交易所数据暂不可用。",
+    ]
+    assert any(
+        record.levelname == "WARNING" and "ReadTimeout: upstream diagnostic" in record.message
+        for record in caplog.records
+    )
+    assert "url-key" not in caplog.text
+    assert "header-secret" not in caplog.text
 
 
 @pytest.mark.parametrize("updates", [
