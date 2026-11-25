@@ -5,11 +5,34 @@ import logging
 import re
 from dataclasses import dataclass
 from time import monotonic
+from weakref import WeakValueDictionary
 
 from app.models.mobile import MobileCard
+from app.services.data_filters import normalize_symbol
 from app.services.fcm import PushMessage, SendResult
 
 logger = logging.getLogger(__name__)
+SCAN_INTERVAL = 10
+QUEUE_LIMIT = 200
+SEND_CONCURRENCY = 4
+
+
+@dataclass
+class StaleAlarm:
+    sent: bool = False
+    recovered_device: dict | None = None
+
+
+@dataclass
+class BigSpreadPush:
+    message: PushMessage
+
+
+@dataclass(frozen=True)
+class PendingPush:
+    device: dict
+    notification: PushMessage | BigSpreadPush
+    stale_alarm: StaleAlarm | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,20 +139,57 @@ class MobilePushService:
         self.test_after = {}
         self.stale_since = None
         self.stale_announced = False
-        self.stale_recipients = set()
-        self.big_spreads = {}
+        self.stale_recipients = {}
+        self.big_spreads: dict[str, BigSpreadPush] = {}
+        self._pending_spreads: WeakValueDictionary[str, BigSpreadPush] = WeakValueDictionary()
+        self._queue = asyncio.Queue[PendingPush](maxsize=QUEUE_LIMIT)
+        self._send_slots = asyncio.Semaphore(SEND_CONCURRENCY)
 
     def queue_big_spread(self, title, body, symbol):
-        if self.fcm.enabled and self.previous is not None:
-            # The journal has the opportunity's symbol and rendered legs, but no
-            # Astro card ID. Preserve distinct venues/DEXes even for the same symbol.
-            route = re.search(r"^(.+) 买 \S+ → (.+) 卖 \S+$", body, re.MULTILINE)
-            identity = (symbol or title, route.groups() if route else ())
-            self.big_spreads.setdefault(identity, PushMessage("big_spread", title, body[:720]))
+        if not self.fcm.enabled or self.previous is None:
+            return
+        route = re.search(r"^(.+) 买 \S+ → (.+) 卖 \S+$", body, re.MULTILINE)
+        title_symbol = re.match(r"^【大价差】\s*(\S+)", title)
+        if title_symbol:
+            identity = normalize_symbol(title_symbol[1])
+        else:
+            title_parts = title.split(maxsplit=1)
+            identity = normalize_symbol(symbol.strip() or (title_parts[0] if title_parts else ""))
+            if symbol:
+                identity = identity.removesuffix("USDT") or identity
+        if route:
+            # The rendered legs include Hyperliquid DEX and raw market names.
+            legs = [" ".join(leg.split()) for leg in route.groups()]
+            identity = f"{identity}:{legs[0]}→{legs[1]}"
 
-    async def _send(self, device, message):
-        result = await self.fcm.send(device["token"], message)
-        if not result.sent or device["last_error"]:
+        # Feishu's phone record has no symbol and keeps only the headline,
+        # route and card line from the full big-spread notification.
+        lines = body.splitlines()
+        urgent = not symbol and title_symbol and route and len(lines) == 3 and (
+            lines[-1].startswith("卡片：")
+        )
+        message = PushMessage(
+            "big_spread", title, body[:720], channel="urgent" if urgent else "normal",
+            identity=identity,
+        )
+        pending = self._pending_spreads.get(message.tag)
+        if pending is not None:
+            # All queued recipients share the same record until they start sending.
+            if urgent:
+                pending.message = message
+            return
+        if len(self.big_spreads) == QUEUE_LIMIT:
+            del self.big_spreads[next(iter(self.big_spreads))]
+            logger.warning("手机推送队列已满，丢弃最旧的大价差提醒")
+        pending = BigSpreadPush(message)
+        self.big_spreads[message.tag] = pending
+        self._pending_spreads[message.tag] = pending
+
+    async def _send(self, token, notification, device=None):
+        async with self._send_slots:
+            message = notification.message if isinstance(notification, BigSpreadPush) else notification
+            result = await self.fcm.send(token, message)
+        if device is not None and (not result.sent or device["last_error"]):
             await self.repo.record_result(
                 device, None if result.sent else result.reason, result.invalid
             )
@@ -141,19 +201,49 @@ class MobilePushService:
             return SendResult(False, "每个设备每分钟最多测试一次")
         self.test_after[token] = now + 60
         device = await self.repo.get(token, session_hash)
-        message = PushMessage("test", "手机推送测试", "这是一条普通测试通知")
-        if device is None:
-            return await self.fcm.send(token, message)
-        return await self._send(device, message)
+        message = PushMessage("test", "手机推送测试", "这是一条普通测试通知", identity="device")
+        return await self._send(token, message, device)
 
-    async def _notify(self, device, message, now, identity=None):
-        key = (device["token"], message.kind, identity or message.card_id)
-        if device.get("retired") or key in self.cooldowns:
-            return False
-        self.cooldowns[key] = now + 600
-        result = await self._send(device, message)
-        device["retired"] = result.invalid
-        return result.sent
+    def _enqueue(self, pending):
+        if self._queue.full():
+            self._queue.get_nowait()
+            self._queue.task_done()
+            logger.warning("手机推送队列已满，丢弃最旧的待发送通知")
+        self._queue.put_nowait(pending)
+
+    def _notify(self, device, notification, now, stale_alarm=None):
+        message = notification.message if isinstance(notification, BigSpreadPush) else notification
+        key = (device["token_hash"], message.tag)
+        if key not in self.cooldowns:
+            self.cooldowns[key] = now + 600
+            self._enqueue(PendingPush(device, notification, stale_alarm))
+            return True
+        return False
+
+    def _queue_recovery(self, device):
+        message = PushMessage("stale", "行情数据已恢复", "手机概览数据已更新", identity="summary")
+        self._enqueue(PendingPush(device, message))
+
+    async def _send_queued(self):
+        while True:
+            pending = await self._queue.get()
+            try:
+                device = pending.device
+                # A pending notification can outlive a registration or preference change.
+                current = await self.repo.get(device["token"], device["session_hash"])
+                if current is None or current["updated_at"] != device["updated_at"]:
+                    continue
+                result = await self._send(device["token"], pending.notification, current)
+                if pending.stale_alarm is not None and result.sent:
+                    pending.stale_alarm.sent = True
+                    if pending.stale_alarm.recovered_device is not None:
+                        self._queue_recovery(pending.stale_alarm.recovered_device)
+            except Exception:  # noqa: BLE001 - never log device details or raw provider errors.
+                logger.warning("手机推送发送任务失败")
+            finally:
+                self._queue.task_done()
+                # Drop the sender's references before blocking on the empty queue.
+                pending = None
 
     async def scan(self):
         now = self.clock()
@@ -163,6 +253,7 @@ class MobilePushService:
         if not devices or not self.fcm.enabled:
             self.previous = None
             self.big_spreads.clear()
+            self._pending_spreads.clear()
             self.stale_since = None
             self.stale_announced = False
             self.stale_recipients.clear()
@@ -181,7 +272,7 @@ class MobilePushService:
         if not summary.stale:
             self.stale_since = None
         self.stale_announced = (self.stale_announced or stale_edge) and summary.stale
-        spreads, self.big_spreads = self.big_spreads, {}
+        spreads, self.big_spreads = self.big_spreads.values(), {}
         for device in devices:
             kinds = device["kinds"]
             for key, card in cards.items():
@@ -189,41 +280,48 @@ class MobilePushService:
                     for msg in _events(
                         card, before[key], self.previous[key], device["threshold_pp"], kinds
                     ):
-                        await self._notify(device, msg, now)
+                        self._notify(device, msg, now)
             if kinds["big_spread"]:
-                for identity, msg in spreads.items():
-                    await self._notify(device, msg, now, identity=identity)
-            recipient = (device["token"], device["session_hash"])
+                for spread in spreads:
+                    self._notify(device, spread, now)
+            recipient = (device["token_hash"], device["session_hash"])
             if kinds["stale"] and stale_edge:
                 msg = PushMessage(
-                    "stale", "行情数据断流", "手机概览数据已连续过期至少 60 秒", channel="urgent"
+                    "stale", "行情数据断流", "手机概览数据已连续过期至少 60 秒",
+                    channel="urgent", identity="summary",
                 )
-                if await self._notify(device, msg, now):
-                    self.stale_recipients.add(recipient)
-            if (
-                kinds["stale"]
-                and recovered
-                and recipient in self.stale_recipients
-                and not device.get("retired")
-            ):
+                alarm = StaleAlarm()
+                if self._notify(device, msg, now, stale_alarm=alarm):
+                    self.stale_recipients[recipient] = alarm
+            if kinds["stale"] and recovered and recipient in self.stale_recipients:
                 # Pair the alarm with its recovery even within the alarm cooldown.
-                await self._send(
-                    device, PushMessage("stale", "行情数据已恢复", "手机概览数据已更新")
-                )
+                alarm = self.stale_recipients[recipient]
+                if alarm.sent:
+                    self._queue_recovery(device)
+                else:
+                    alarm.recovered_device = device
         if recovered:
             self.stale_recipients.clear()
 
     async def run(self, stop_event):
-        while not stop_event.is_set():
-            start = self.clock()
-            try:
-                await self.scan()
-            except Exception:  # noqa: BLE001 - isolate scan errors and keep sensitive inputs out of logs.
-                logger.warning("手机推送扫描失败")
-            elapsed = self.clock() - start
-            if elapsed > 1:
-                logger.warning("手机推送扫描耗时 %.2f 秒", elapsed)
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=max(0, 10 - elapsed))
-            except TimeoutError:
-                pass
+        senders = [asyncio.create_task(self._send_queued()) for _ in range(SEND_CONCURRENCY)]
+        try:
+            while not stop_event.is_set():
+                start = self.clock()
+                try:
+                    await self.scan()
+                except Exception:  # noqa: BLE001 - isolate scan errors without logging device details.
+                    logger.warning("手机推送扫描失败")
+                elapsed = self.clock() - start
+                if elapsed > 1:
+                    logger.warning("手机推送扫描耗时 %.2f 秒", elapsed)
+                try:
+                    await asyncio.wait_for(
+                        stop_event.wait(), timeout=max(0, SCAN_INTERVAL - elapsed)
+                    )
+                except TimeoutError:
+                    pass
+        finally:
+            for sender in senders:
+                sender.cancel()
+            await asyncio.gather(*senders, return_exceptions=True)

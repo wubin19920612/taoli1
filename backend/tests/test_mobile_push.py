@@ -1,5 +1,6 @@
 import asyncio
 import time
+from hashlib import sha256
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -10,6 +11,7 @@ from auth_helpers import TEST_TOTP_SECRET
 from app.core.config import Settings
 from app.core.totp import totp_at
 from app.main import create_app
+from app.services import mobile_push
 from app.services.astro_client import AstroClientError
 from app.services.fcm import SendResult
 from app.services.feishu import FeishuConfig, FeishuNotifier
@@ -48,6 +50,7 @@ def card(**changes):
 def device(token="phone", threshold=0.1, **kinds):
     return {
         "token": token,
+        "token_hash": sha256(token.encode()).hexdigest(),
         "session_hash": "session",
         "kinds": KINDS | kinds,
         "threshold_pp": threshold,
@@ -60,7 +63,12 @@ class Scanner:
     def __init__(self, devices):
         self.sent = []
         self.summary = SimpleNamespace(stale=False, cards=[])
-        repo = SimpleNamespace(scan=AsyncMock(return_value=devices))
+        registered = {(d["token"], d["session_hash"]): d for d in devices}
+        repo = SimpleNamespace(
+            scan=AsyncMock(return_value=devices),
+            get=AsyncMock(side_effect=lambda *key: registered.get(key)),
+            record_result=AsyncMock(),
+        )
         fcm = SimpleNamespace(enabled=True, send=self.send)
         self.service = MobilePushService(
             repo, fcm, AsyncMock(return_value=self.summary), lambda: self.now
@@ -70,11 +78,18 @@ class Scanner:
         self.sent.append((token, message))
         return SendResult(True, "已发送")
 
-    async def scan(self, now, current=None, stale=False):
+    async def scan(self, now, current=None, stale=False, *, drain=True):
         self.now = now
         self.summary.cards = [current or card()]
         self.summary.stale = stale
         await self.service.scan()
+        if drain and not self.service._queue.empty():
+            sender = asyncio.create_task(self.service._send_queued())
+            try:
+                await asyncio.wait_for(self.service._queue.join(), timeout=1)
+            finally:
+                sender.cancel()
+                await asyncio.gather(sender, return_exceptions=True)
 
 
 @pytest.mark.parametrize("kind", ["near_open", "near_close"])
@@ -218,6 +233,135 @@ async def test_big_spread_same_symbol_distinct_dex_and_fill_leg_identity():
     assert len(s.sent) == 3
     assert s.sent[0][1].body.startswith("hl xyz xyz:ANT 1 /")
     assert [m.body.splitlines()[1].split("（")[0] for _, m in s.sent[1:]] == ["HL io", "HL xyz"]
+    assert len({m.tag for _, m in s.sent[1:]}) == 2
+
+
+@pytest.mark.parametrize("urgent_first,scan_between", [(False, False), (True, False), (False, True)])
+async def test_feishu_normal_and_phone_records_share_urgent_push_and_cooldown(
+    urgent_first, scan_between
+):
+    s = Scanner([device()])
+    await s.scan(0)
+    notifier = FeishuNotifier(FeishuConfig(webhook_url=""))
+    notifier.event_repo = SimpleNamespace(record=AsyncMock())
+    notifier.mobile_push = s.service
+
+    async def record(symbol, urgent, price):
+        title = f"【大价差】{symbol}  开 3.42% / 平 2.00%"
+        route = f"Gate 买 {price} → Bitget 卖 14"
+        card_line = "卡片：未创建（自动建卡未启用）"
+        lines = [title, route]
+        if not urgent:
+            lines += ["资金费：买 - · 卖 -", "24h 成交额：1 / 2 U"]
+        await notifier._record(
+            "\n".join([*lines, card_line]),
+            kind=None if urgent else "big_spread",
+            symbol=None if urgent else f"{symbol}-usdt",
+            level="urgent" if urgent else "normal",
+        )
+
+    await record("OPENAI", urgent_first, 10)
+    if scan_between:
+        await s.scan(5, drain=False)
+    await record("OPENAI", not urgent_first, 11)
+    await record("ANTH", False, 10)
+    await s.scan(10)
+    queued_at = 5 if scan_between else 10
+    await record("OPENAI", True, 12)
+    await s.scan(queued_at + 599)
+    assert [(m.kind, m.channel) for _, m in s.sent] == [
+        ("big_spread", "urgent"), ("big_spread", "normal")
+    ]
+    tags = [m.payload("phone")["message"]["android"]["notification"]["tag"] for _, m in s.sent]
+    assert tags == ["big_spread:OPENAI:Gate→Bitget", "big_spread:ANTH:Gate→Bitget"]
+    await record("OPENAI", False, 13)
+    await s.scan(queued_at + 600)
+    assert [m.tag for _, m in s.sent].count(tags[0]) == 2
+
+
+async def test_background_scans_continue_during_slow_fcm_with_four_senders(monkeypatch):
+    monkeypatch.setattr(mobile_push, "SCAN_INTERVAL", 0.05)
+    s = Scanner([device(f"phone-{i}") for i in range(8)])
+    service = s.service
+    service.clock = time.monotonic
+    stop = asyncio.Event()
+    scanned = asyncio.Event()
+    four_in_flight = asyncio.Event()
+    starts = []
+    active = 0
+    peak = 0
+
+    async def load_summary():
+        starts.append(time.monotonic())
+        if len(starts) >= 4:
+            scanned.set()
+        return SimpleNamespace(
+            stale=False, cards=[card(qty_a=int(len(starts) >= 2), holding=len(starts) >= 2)]
+        )
+
+    async def send(token, message):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        if active == 4:
+            four_in_flight.set()
+        try:
+            await asyncio.sleep(5)
+            return SendResult(True, "已发送")
+        finally:
+            active -= 1
+
+    service.load_summary = load_summary
+    service.fcm.send = send
+    runner = asyncio.create_task(service.run(stop))
+    try:
+        await asyncio.wait_for(four_in_flight.wait(), timeout=1)
+        await asyncio.wait_for(scanned.wait(), timeout=1)
+        assert active == peak == 4
+        assert starts[3] - starts[0] < 1
+        assert service._queue.qsize() == 4
+    finally:
+        stop.set()
+        await asyncio.wait_for(runner, timeout=1)
+    assert active == 0
+
+
+async def test_full_push_queue_drops_oldest_messages(caplog):
+    s = Scanner([device(f"phone-{i}") for i in range(205)])
+    await s.scan(0)
+    await s.scan(10, card(qty_a=1, holding=True), drain=False)
+    assert s.service._queue.qsize() == 200 and "丢弃最旧的待发送通知" in caplog.text
+    await s.scan(20, card(qty_a=1, holding=True))
+    assert [token for token, _ in s.sent] == [f"phone-{i}" for i in range(5, 205)]
+
+
+@pytest.mark.parametrize("delivered", [False, True])
+async def test_stale_recovery_can_be_detected_before_alarm_send_finishes(delivered):
+    s = Scanner([device()])
+    service = s.service
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def send(token, message):
+        if message.channel == "urgent":
+            started.set()
+            await release.wait()
+            if not delivered:
+                return SendResult(False, "推送服务暂不可用")
+        return await s.send(token, message)
+
+    service.fcm.send = send
+    await s.scan(0, stale=True)
+    await s.scan(60, stale=True, drain=False)
+    sender = asyncio.create_task(service._send_queued())
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1)
+        await s.scan(70, drain=False)
+        release.set()
+        await asyncio.wait_for(service._queue.join(), timeout=1)
+    finally:
+        sender.cancel()
+        await asyncio.gather(sender, return_exceptions=True)
+    assert [msg.channel for _, msg in s.sent] == (["urgent", "normal"] if delivered else [])
 
 
 async def test_scan_failure_and_slow_round_are_isolated(caplog):

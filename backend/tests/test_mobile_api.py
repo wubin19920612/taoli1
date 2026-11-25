@@ -1,7 +1,10 @@
 import asyncio
+import json
+import logging
 import sqlite3
 import time
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -38,6 +41,75 @@ async def mobile_app(tmp_path):
             transport=httpx.ASGITransport(app=app), base_url="https://test"
         ) as client:
             yield app, client
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_push_registration_hashes_tokens_and_excludes_them_from_debug_logs(
+    mobile_app, caplog, legacy
+):
+    app, client = mobile_app
+    response = await client.post(
+        "/api/auth/login",
+        json={
+            "password": "fixture",
+            "code": totp_at(TEST_TOTP_SECRET, int(time.time() // 30)),
+            "scope": "mobile_readonly",
+        },
+    )
+    assert response.status_code == 200
+    owner = session_hash(client.cookies.get("taoli1_session"))
+    repo = app.state.mobile_push_repo
+    db = repo.db
+    token = "push-registration-full-secret-value-123456"
+    legacy_token = "legacy-push-full-secret-value-654321"
+    kinds = dict.fromkeys(
+        ("near_open", "near_close", "fill", "leg_alert", "big_spread", "stale"), True
+    )
+    if legacy:
+        await db.execute(
+            "INSERT INTO mobile_push_devices VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (legacy_token, owner, json.dumps(kinds), 0.25, 123, 456, "旧错误"),
+        )
+    else:
+        await db.execute("DROP TABLE mobile_push_devices")
+    await db.commit()
+    statements = []
+    await db.set_trace_callback(statements.append)
+
+    with caplog.at_level(logging.DEBUG):
+        path = "/api/mobile/push/register"
+        assert (
+            await client.post(path, json={"token": token, "threshold_pp": 0.1, "kinds": kinds})
+        ).status_code == 200
+        columns = await db.execute_fetchall("PRAGMA table_info(mobile_push_devices)")
+        assert [row[1] for row in columns if row[5]] == ["token_hash"]
+        row = await repo.get(token, owner)
+        assert row["token"] == token and row["token_hash"] == sha256(token.encode()).hexdigest()
+        await repo.record_result(row, "推送暂不可用", False)
+        assert (await repo.get(token, owner))["last_error"] == "推送暂不可用"
+        if legacy:
+            old = await repo.get(legacy_token, owner)
+            assert dict(old) == {
+                "token_hash": sha256(legacy_token.encode()).hexdigest(),
+                "token": legacy_token,
+                "session_hash": owner,
+                "kinds": json.dumps(kinds),
+                "threshold_pp": 0.25,
+                "created_at": 123,
+                "updated_at": 456,
+                "last_error": "旧错误",
+            }
+            await repo.record_result(old, None, True)
+            assert await repo.get(legacy_token, owner) is None
+        assert (await client.request("DELETE", path, json={"token": token})).status_code == 200
+        assert await repo.get(token, owner) is None
+
+    assert any(record.name == "aiosqlite" and record.levelno == logging.DEBUG
+               for record in caplog.records)
+    assert any("mobile_push_devices" in statement for statement in statements)
+    for secret in (token, legacy_token):
+        assert secret not in caplog.text
+        assert all(secret not in statement for statement in statements)
 
 
 async def test_scope_whitelist_full_session_token_and_replay(mobile_app):

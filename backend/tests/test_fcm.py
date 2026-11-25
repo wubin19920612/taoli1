@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import threading
 import time
 from urllib.parse import parse_qs
 
@@ -157,3 +158,98 @@ async def test_disabled_and_invalid_account_do_not_send(caplog):
             assert not result.sent and fcm._client is None
     assert caplog.text.count("FCM 未配置") == 1
     assert "private-" not in caplog.text
+
+
+async def test_concurrent_auth_failures_share_retry_and_block_new_requests(account, monkeypatch):
+    grants, sends, signers = [], [], []
+    now = 100
+    message = PushMessage("test", "测试", "测试")
+
+    async def respond(request):
+        await asyncio.sleep(0)
+        if str(request.url) == TOKEN_URL:
+            grants.append(request)
+            return httpx.Response(200, json={"access_token": "private-access", "expires_in": 3600})
+        sends.append(request)
+        return httpx.Response(401)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        fcm = FcmClient(account[1], client, clock=lambda: now)
+        sign = fcm._assertion
+
+        def assertion():
+            signers.append(threading.get_ident())
+            return sign()
+
+        monkeypatch.setattr(fcm, "_assertion", assertion)
+        results = await asyncio.gather(*(fcm.send(str(i), message) for i in range(10)))
+        assert not any(result.sent or result.invalid for result in results)
+        assert 1 <= len(grants) <= 2 and len(sends) <= 2
+        assert len(grants) == len(signers) and threading.get_ident() not in signers
+        before = len(grants), len(sends)
+        now += 59
+        await fcm.send("phone", message)
+        assert (len(grants), len(sends)) == before
+        now += 1
+        await fcm.send("phone", message)
+        assert (len(grants), len(sends)) == (before[0] + 1, before[1] + 1)
+
+
+async def test_forbidden_backoff_is_capped_and_success_resets_it(account):
+    now, status, grants, sends = 100, 403, 0, 0
+    message = PushMessage("test", "测试", "测试")
+
+    def respond(request):
+        nonlocal grants, sends
+        if str(request.url) == TOKEN_URL:
+            grants += 1
+            return httpx.Response(200, json={"access_token": "cached", "expires_in": 36000})
+        assert request.headers["Authorization"] == "Bearer cached"
+        sends += 1
+        return httpx.Response(status)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        fcm = FcmClient(account[1], client, clock=lambda: now)
+        for count, delay in enumerate((60, 120, 240, 480, 900, 900), 1):
+            assert not (await fcm.send("phone", message)).sent
+            assert sends == count
+            now += delay - 1
+            await fcm.send("phone", message)
+            assert sends == count
+            now += 1
+        status = 200
+        assert (await fcm.send("phone", message)).sent
+        status = 403
+        assert not (await fcm.send("phone", message)).sent
+        assert sends == 8
+        status = 200
+        now += 60
+        assert (await fcm.send("phone", message)).sent
+        assert grants == 1 and sends == 9
+
+
+async def test_exchange_failure_backs_off_and_other_send_errors_keep_token(account, caplog):
+    now, grants, sends = 100, 0, 0
+    message = PushMessage("test", "测试", "测试")
+
+    def respond(request):
+        nonlocal grants, sends
+        if str(request.url) == TOKEN_URL:
+            grants += 1
+            if grants == 1:
+                return httpx.Response(400, text="private-oauth-error")
+            return httpx.Response(200, json={"access_token": "cached", "expires_in": 3600})
+        sends += 1
+        return httpx.Response(503 if sends == 1 else 200, json={})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        fcm = FcmClient(account[1], client, clock=lambda: now)
+        assert not (await fcm.send("phone", message)).sent
+        now += 59
+        assert not (await fcm.send("phone", message)).sent
+        assert (grants, sends) == (1, 0)
+        now += 1
+        assert not (await fcm.send("phone", message)).sent
+        assert (await fcm.send("phone", message)).sent
+        assert (grants, sends) == (2, 2)
+    assert "private-oauth-error" not in caplog.text

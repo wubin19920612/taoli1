@@ -29,6 +29,11 @@ class PushMessage:
     card_id: str = ""
     card_name: str = ""
     channel: str = "normal"
+    identity: str = ""
+
+    @property
+    def tag(self):
+        return f"{self.kind}:{self.card_id or self.identity}"
 
     def payload(self, token):
         return {
@@ -40,7 +45,7 @@ class PushMessage:
                     "priority": "high",
                     "notification": {
                         "channel_id": self.channel,
-                        "tag": f"{self.kind}:{self.card_id}",
+                        "tag": self.tag,
                     },
                 },
             }
@@ -78,11 +83,15 @@ def _invalid_device(response):
 
 
 class FcmClient:
-    def __init__(self, encoded_account, client=None):
+    def __init__(self, encoded_account, client=None, *, clock=time.monotonic):
         self._client = client
+        self._clock = clock
         self._key = None
         self._access = ""
-        self._refresh_at = self._oauth_backoff = 0.0
+        self._refresh_at = self._blocked_until = 0.0
+        self._backoff = 0
+        self._verified = False
+        self._generation = 0
         self._lock = asyncio.Lock()
         if not encoded_account:
             logger.info("FCM 未配置，手机推送已关闭")
@@ -126,30 +135,88 @@ class FcmClient:
         signature = self._key.sign(unsigned.encode(), padding.PKCS1v15(), hashes.SHA256())
         return f"{unsigned}.{_base64url(signature)}"
 
-    async def _access_token(self):
-        async with self._lock:
-            now = time.monotonic()
-            if self._access and now < self._refresh_at:
-                return self._access
-            if now < self._oauth_backoff:
-                return None
-            self._oauth_backoff = now + 30
-            response = await self._client.post(
-                TOKEN_URL,
-                data={
-                    "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-                    "assertion": self._assertion(),
-                },
-                timeout=10,
-            )
-            response.raise_for_status()
-            data = response.json()
-            access, ttl = data["access_token"], int(data["expires_in"])
-            if not isinstance(access, str) or not access or ttl <= 0:
-                raise ValueError
-            self._access, self._refresh_at = access, now + ttl - 300
-            self._oauth_backoff = 0
-            return access
+    async def _exchange_token(self):
+        now = self._clock()
+        assertion = await asyncio.to_thread(self._assertion)
+        response = await self._client.post(
+            TOKEN_URL,
+            data={
+                "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                "assertion": assertion,
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        access, ttl = data["access_token"], int(data["expires_in"])
+        if not isinstance(access, str) or not access or ttl <= 0:
+            raise ValueError
+        self._access, self._refresh_at = access, now + ttl - 300
+        self._verified = False
+        self._generation += 1
+
+    def _block_auth(self):
+        self._backoff = min(900, max(60, self._backoff * 2))
+        self._blocked_until = self._clock() + self._backoff
+        self._verified = False
+        self._generation += 1
+
+    def _observe_response(self, response, generation):
+        if generation != self._generation:
+            return
+        if response.status_code in (401, 403):
+            if response.status_code == 401:
+                self._access = ""
+            self._block_auth()
+        else:
+            self._verified = True
+            if response.is_success:
+                self._blocked_until = self._backoff = 0
+
+    async def _post(self, access, token, message):
+        return await self._client.post(
+            f"https://fcm.googleapis.com/v1/projects/{self._project}/messages:send",
+            headers={"Authorization": f"Bearer {access}"},
+            json=message.payload(token),
+            timeout=10,
+        )
+
+    def _ready(self):
+        return self._verified and self._clock() < self._refresh_at
+
+    async def _probe(self, token, message):
+        # One sender verifies a new token or probes after backoff. The initial
+        # 401 can refresh once before opening the circuit for the whole client.
+        retry = not self._backoff
+        while True:
+            if not self._access or self._clock() >= self._refresh_at:
+                try:
+                    await self._exchange_token()
+                except Exception:  # noqa: BLE001 - provider errors can contain credentials.
+                    self._block_auth()
+                    logger.warning("FCM 换证失败")
+                    return None
+            response = await self._post(self._access, token, message)
+            if response.status_code == 401 and retry:
+                self._access = ""
+                retry = False
+                continue
+            self._observe_response(response, self._generation)
+            return response
+
+    async def _request(self, token, message):
+        if self._clock() < self._blocked_until:
+            return None
+        if not self._ready():
+            async with self._lock:
+                if self._clock() < self._blocked_until:
+                    return None
+                if not self._ready():
+                    return await self._probe(token, message)
+        generation = self._generation
+        response = await self._post(self._access, token, message)
+        self._observe_response(response, generation)
+        return response
 
     async def send(self, token: str, message: PushMessage) -> SendResult:
         if not self.enabled:
@@ -157,27 +224,16 @@ class FcmClient:
         if self._client is None:
             self._client = httpx.AsyncClient(timeout=10)
         try:
-            url = f"https://fcm.googleapis.com/v1/projects/{self._project}/messages:send"
-            for attempt in range(2):
-                access = await self._access_token()
-                if not access:
-                    return SendResult(False, "推送授权暂不可用")
-                response = await self._client.post(
-                    url,
-                    headers={"Authorization": f"Bearer {access}"},
-                    json=message.payload(token),
-                    timeout=10,
-                )
-                if response.is_success:
-                    return SendResult(True, "已发送")
-                if response.status_code == 401 and attempt == 0:
-                    if self._access == access:
-                        self._access = ""
-                    continue
-                logger.warning("FCM 发送失败，HTTP %d", response.status_code)
-                if _invalid_device(response):
-                    return SendResult(False, "设备令牌已失效", invalid=True)
-                break
+            response = await self._request(token, message)
+            if response is None or response.status_code in (401, 403):
+                if response is not None:
+                    logger.warning("FCM 认证失败，HTTP %d", response.status_code)
+                return SendResult(False, "推送授权暂不可用")
+            if response.is_success:
+                return SendResult(True, "已发送")
+            logger.warning("FCM 发送失败，HTTP %d", response.status_code)
+            if _invalid_device(response):
+                return SendResult(False, "设备令牌已失效", invalid=True)
         except Exception:  # noqa: BLE001 - never surface raw provider errors or credentials.
             logger.warning("FCM 授权或发送失败")
         return SendResult(False, "推送服务暂不可用")

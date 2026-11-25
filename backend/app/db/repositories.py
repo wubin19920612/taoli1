@@ -5,6 +5,7 @@ import json
 import re
 import unicodedata
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from urllib.parse import urlsplit
 
 import aiosqlite
@@ -319,41 +320,113 @@ class AlertRuleRepository:
 
 
 class MobilePushRepository:
+    _CREATE_TABLE = """
+        CREATE TABLE IF NOT EXISTS mobile_push_devices (
+            token_hash TEXT PRIMARY KEY NOT NULL, token TEXT NOT NULL,
+            session_hash TEXT NOT NULL, kinds TEXT NOT NULL, threshold_pp REAL NOT NULL,
+            created_at REAL NOT NULL, updated_at REAL NOT NULL, last_error TEXT
+        )
+    """
+    _CURRENT_DEVICE = " WHERE token_hash=? AND session_hash=? AND updated_at=?"
+
     def __init__(self, db: aiosqlite.Connection, auth_db=None):
         self.db = db
         self.auth_db = auth_db or db
+        self._ready = False
+        self._lock = asyncio.Lock()
+        self._pending_tokens: dict[str, str] = {}
+
+    @staticmethod
+    def _token_hash(token: str) -> str:
+        return sha256(token.encode()).hexdigest()
+
+    async def _ensure_schema(self):
+        if self._ready:
+            return
+        async with self._lock:
+            if self._ready:
+                return
+            await self.db.create_function("mobile_push_token", 1, self._pending_tokens.get)
+            await self.db.execute("SAVEPOINT mobile_push_schema")
+            try:
+                await self.db.execute(self._CREATE_TABLE)
+                columns = await self.db.execute_fetchall("PRAGMA table_info(mobile_push_devices)")
+                if "token_hash" not in {column[1] for column in columns}:
+                    await self.db.create_function("mobile_push_sha256", 1, self._token_hash)
+                    await self.db.execute(
+                        "ALTER TABLE mobile_push_devices RENAME TO mobile_push_devices_legacy"
+                    )
+                    await self.db.execute(self._CREATE_TABLE)
+                    await self.db.execute("""
+                        INSERT INTO mobile_push_devices (
+                            token_hash, token, session_hash, kinds, threshold_pp,
+                            created_at, updated_at, last_error
+                        )
+                        SELECT mobile_push_sha256(token), token, session_hash, kinds,
+                               threshold_pp, created_at, updated_at, last_error
+                        FROM mobile_push_devices_legacy
+                    """)
+                    await self.db.execute("DROP TABLE mobile_push_devices_legacy")
+            except BaseException:
+                await self.db.execute("ROLLBACK TO mobile_push_schema")
+                raise
+            finally:
+                await self.db.execute("RELEASE mobile_push_schema")
+            self._ready = True
 
     async def register(self, token, session_hash, kinds, threshold_pp):
-        now = datetime.now(UTC).timestamp()
-        await self.db.execute("""
-            INSERT INTO mobile_push_devices (token, session_hash, kinds, threshold_pp, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(token) DO UPDATE SET
-            session_hash=excluded.session_hash, kinds=excluded.kinds, threshold_pp=excluded.threshold_pp,
-            updated_at=excluded.updated_at, last_error=NULL
-        """, (token, session_hash, json.dumps(kinds), threshold_pp, now, now))
-        await self.db.commit()
+        await self._ensure_schema()
+        token_hash = self._token_hash(token)
+        async with self._lock:
+            now = datetime.now(UTC).timestamp()
+            # Bind only the hash. SQLite obtains the device token inside the
+            # statement, so driver debug logs and SQL traces omit the secret.
+            self._pending_tokens[token_hash] = token
+            try:
+                await self.db.execute("""
+                    INSERT INTO mobile_push_devices (
+                        token_hash, token, session_hash, kinds, threshold_pp, created_at, updated_at
+                    )
+                    VALUES (?, mobile_push_token(?), ?, ?, ?, ?, ?)
+                    ON CONFLICT(token_hash) DO UPDATE SET
+                        session_hash=excluded.session_hash, kinds=excluded.kinds,
+                        threshold_pp=excluded.threshold_pp, updated_at=excluded.updated_at,
+                        last_error=NULL
+                """, (token_hash, token_hash, session_hash, json.dumps(kinds), threshold_pp, now, now))
+                await self.db.commit()
+            finally:
+                self._pending_tokens.pop(token_hash, None)
 
     async def remove(self, token, session_hash):
-        await self.db.execute("DELETE FROM mobile_push_devices WHERE token=? AND session_hash=?",
-                              (token, session_hash))
+        await self._ensure_schema()
+        await self.db.execute(
+            "DELETE FROM mobile_push_devices WHERE token_hash=? AND session_hash=?",
+            (self._token_hash(token), session_hash),
+        )
         await self.db.commit()
 
     async def record_result(self, device, reason, invalid):
+        await self._ensure_schema()
         # A slow FCM response can arrive after the phone registers a new session or preferences.
-        match = (device["token"], device["session_hash"], device["updated_at"])
-        where = " WHERE token=? AND session_hash=? AND updated_at=?"
+        match = (device["token_hash"], device["session_hash"], device["updated_at"])
         if invalid:
-            await self.db.execute("DELETE FROM mobile_push_devices" + where, match)
+            await self.db.execute("DELETE FROM mobile_push_devices" + self._CURRENT_DEVICE, match)
         else:
-            await self.db.execute("UPDATE mobile_push_devices SET last_error=?" + where, (reason, *match))
+            await self.db.execute(
+                "UPDATE mobile_push_devices SET last_error=?" + self._CURRENT_DEVICE, (reason, *match)
+            )
         await self.db.commit()
 
     async def get(self, token, session_hash):
-        async with self.db.execute("SELECT * FROM mobile_push_devices WHERE token=? AND session_hash=?",
-                                   (token, session_hash)) as cursor:
+        await self._ensure_schema()
+        async with self.db.execute(
+            "SELECT * FROM mobile_push_devices WHERE token_hash=? AND session_hash=?",
+            (self._token_hash(token), session_hash),
+        ) as cursor:
             return await cursor.fetchone()
 
     async def scan(self):
+        await self._ensure_schema()
         rows = await self.db.execute_fetchall("SELECT * FROM mobile_push_devices")
         if not rows:
             return []
@@ -362,10 +435,12 @@ class MobilePushRepository:
             (datetime.now(UTC).timestamp(),),
         )
         active = {row[0] for row in sessions}
-        expired = [(r["token"], r["session_hash"], r["updated_at"]) for r in rows if r["session_hash"] not in active]
+        expired = [
+            (row["token_hash"], row["session_hash"], row["updated_at"])
+            for row in rows if row["session_hash"] not in active
+        ]
         if expired:
-            await self.db.executemany("DELETE FROM mobile_push_devices WHERE token=? AND session_hash=? AND updated_at=?",
-                                      expired)
+            await self.db.executemany("DELETE FROM mobile_push_devices" + self._CURRENT_DEVICE, expired)
             await self.db.commit()
         return [dict(r) | {"kinds": json.loads(r["kinds"])} for r in rows if r["session_hash"] in active]
 
