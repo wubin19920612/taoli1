@@ -253,7 +253,7 @@ async def test_feishu_push_preferences_channels_and_category_title_cooldown():
     assert len(s.sent) == 4 and s.sent[-1][1].body == "new alert"
 
 
-async def test_feishu_push_drops_messages_with_no_devices_or_fcm_disabled():
+async def test_feishu_push_drops_messages_with_no_devices_at_scan_or_fcm_disabled():
     s = Scanner([device(announcement=True)])
     await s.scan(0)
     s.service.fcm.enabled = False
@@ -266,22 +266,85 @@ async def test_feishu_push_drops_messages_with_no_devices_or_fcm_disabled():
     devices = s.service.repo.scan.return_value
     s.service.repo.scan.return_value = []
     await s.scan(20)
-    s.service.queue_feishu("announcement", "[OKX] 上币公告", "no recipients at enqueue", urgent=False)
     s.service.repo.scan.return_value = devices
     await s.scan(30)
     assert not s.sent
 
 
+@pytest.mark.parametrize("scanned_without_devices", [False, True])
+async def test_feishu_push_uses_devices_and_preferences_at_next_scan(scanned_without_devices):
+    phone = device(announcement=False)
+    s = Scanner([phone])
+    s.service.repo.scan.return_value = []
+    if scanned_without_devices:
+        await s.scan(0)
+
+    s.service.queue_feishu("announcement", "[OKX] 上币公告", "new listing", urgent=False)
+    phone["kinds"]["announcement"] = True
+    s.service.repo.scan.return_value = [phone]
+    await s.scan(10)
+
+    assert [(token, msg.body) for token, msg in s.sent] == [("phone", "new listing")]
+
+
+async def test_feishu_scan_limits_device_deliveries_and_resumes_partial_message():
+    s = Scanner([device(f"phone-{i}", general=True) for i in range(3)])
+    await s.scan(0)
+    messages = [f"提醒 {i}" for i in range(18)]
+    for title in messages:
+        s.service.queue_feishu("general", title, "内容", urgent=False)
+
+    await s.scan(10)
+    assert len(s.sent) == 50
+    assert len(s.service._feishu_messages) == 2
+
+    await s.scan(620)
+    actual = [(token, msg.title) for token, msg in s.sent]
+    expected = [(f"phone-{i}", title) for title in messages for i in range(3)]
+    assert sorted(actual) == sorted(expected)
+    assert not s.service._feishu_messages
+
+
 async def test_full_feishu_push_queue_drops_oldest_message(caplog):
     s = Scanner([device(general=True)])
     await s.scan(0)
-    for i in range(mobile_push.QUEUE_LIMIT + 1):
+    s.service.queue_feishu("general", "加急提醒", "内容", urgent=True)
+    for i in range(mobile_push.QUEUE_LIMIT):
         s.service.queue_feishu("general", f"提醒 {i}", "内容", urgent=False)
-    await s.scan(10)
-    assert [msg.title for _, msg in s.sent] == [
-        f"提醒 {i}" for i in range(1, mobile_push.QUEUE_LIMIT + 1)
+    assert len(s.service._feishu_messages) == mobile_push.QUEUE_LIMIT
+    for now in range(10, 50, 10):
+        await s.scan(now)
+    assert [msg.title for _, msg in s.sent] == ["加急提醒"] + [
+        f"提醒 {i}" for i in range(1, mobile_push.QUEUE_LIMIT)
     ]
     assert "丢弃最旧的飞书提醒" in caplog.text
+
+
+@pytest.mark.parametrize("replaceable", [False, True])
+async def test_full_send_queue_feishu_preserves_card_spread_stale_and_urgent_pushes(
+    monkeypatch, replaceable,
+):
+    monkeypatch.setattr(mobile_push, "QUEUE_LIMIT", 7 if replaceable else 5)
+    s = Scanner([device(general=True)])
+    await s.scan(0, stale=True)
+    s.service.queue_big_spread("【大价差】BTC", "价差内容", "BTCUSDT")
+    current = card(qty_a=1, holding=True, leg_imbalance=True)
+    await s.scan(60, current, stale=True, drain=False)
+
+    s.service.queue_feishu("general", "飞书加急", "内容", urgent=True)
+    if replaceable:
+        s.service.queue_feishu("general", "最旧普通飞书", "内容", urgent=False)
+        s.service.queue_feishu("general", "较新普通飞书", "内容", urgent=False)
+    await s.scan(70, current, stale=True, drain=False)
+    assert s.service._queue.full()
+
+    s.service.queue_feishu("general", "新飞书", "内容", urgent=False)
+    await s.scan(80, current, stale=True)
+
+    assert [msg.kind for _, msg in s.sent[:4]] == ["fill", "leg_alert", "big_spread", "stale"]
+    expected_titles = ["飞书加急", "较新普通飞书", "新飞书"] if replaceable else ["飞书加急"]
+    assert [msg.title for _, msg in s.sent[4:]] == expected_titles
+    assert s.sent[4][1].channel == "urgent"
 
 
 async def test_big_spread_same_symbol_distinct_dex_and_fill_leg_identity():

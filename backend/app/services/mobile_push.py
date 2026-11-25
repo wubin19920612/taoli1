@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import monotonic
 from weakref import WeakValueDictionary
 
@@ -14,6 +14,7 @@ from app.services.fcm import PushMessage, SendResult
 logger = logging.getLogger(__name__)
 SCAN_INTERVAL = 10
 QUEUE_LIMIT = 200
+FEISHU_SCAN_LIMIT = 50
 SEND_CONCURRENCY = 4
 
 
@@ -28,11 +29,37 @@ class BigSpreadPush:
     message: PushMessage
 
 
+@dataclass
+class FeishuPush:
+    message: PushMessage
+    handled_tokens: set[str] = field(default_factory=set)
+
+
 @dataclass(frozen=True)
 class PendingPush:
     device: dict
     notification: PushMessage | BigSpreadPush
     stale_alarm: StaleAlarm | None = None
+    from_feishu: bool = False
+
+
+def _can_drop_feishu(notification: PushMessage | BigSpreadPush) -> bool:
+    return (
+        isinstance(notification, PushMessage)
+        and notification.channel != "urgent"
+        and notification.kind not in {"big_spread", "leg_alert", "stale"}
+    )
+
+
+class PushQueue(asyncio.Queue[PendingPush]):
+    def replace_oldest_feishu(self, pending: PendingPush) -> bool:
+        for index, queued in enumerate(self._queue):
+            if queued.from_feishu and _can_drop_feishu(queued.notification):
+                # Exchanging one queued item keeps the unfinished task count unchanged.
+                del self._queue[index]
+                self._queue.append(pending)
+                return True
+        return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,9 +169,8 @@ class MobilePushService:
         self.stale_recipients = {}
         self.big_spreads: dict[str, BigSpreadPush] = {}
         self._pending_spreads: WeakValueDictionary[str, BigSpreadPush] = WeakValueDictionary()
-        self._has_push_devices = False
-        self._feishu_messages: dict[str, PushMessage] = {}
-        self._queue = asyncio.Queue[PendingPush](maxsize=QUEUE_LIMIT)
+        self._feishu_messages: dict[str, FeishuPush] = {}
+        self._queue = PushQueue(maxsize=QUEUE_LIMIT)
         self._send_slots = asyncio.Semaphore(SEND_CONCURRENCY)
 
     def queue_big_spread(self, title, body, symbol):
@@ -188,19 +214,48 @@ class MobilePushService:
         self._pending_spreads[message.tag] = pending
 
     def queue_feishu(self, kind: str, title: str, body: str, urgent: bool) -> None:
-        if not self.fcm.enabled or not self._has_push_devices:
+        if not self.fcm.enabled:
             return
         message = PushMessage(
             kind, title, body[:720], channel="urgent" if urgent else "normal", identity=title,
         )
-        if message.tag in self._feishu_messages:
+        pending = self._feishu_messages.get(message.tag)
+        if pending is not None:
             if urgent:
-                self._feishu_messages[message.tag] = message
+                pending.message = message
             return
         if len(self._feishu_messages) == QUEUE_LIMIT:
-            del self._feishu_messages[next(iter(self._feishu_messages))]
+            oldest = next(
+                (tag for tag, push in self._feishu_messages.items() if _can_drop_feishu(push.message)),
+                None,
+            )
+            if oldest is None:
+                logger.warning("手机推送队列已满，丢弃新飞书提醒")
+                return
+            del self._feishu_messages[oldest]
             logger.warning("手机推送队列已满，丢弃最旧的飞书提醒")
-        self._feishu_messages[message.tag] = message
+        self._feishu_messages[message.tag] = FeishuPush(message)
+
+    def _scan_feishu(self, devices, now):
+        remaining = FEISHU_SCAN_LIMIT
+        while self._feishu_messages and remaining:
+            tag = next(iter(self._feishu_messages))
+            pending = self._feishu_messages[tag]
+            message = pending.message
+            for device in devices:
+                token_hash = device["token_hash"]
+                if (
+                    token_hash in pending.handled_tokens
+                    or not device["kinds"].get(message.kind, False)
+                    or (token_hash, tag) in self.cooldowns
+                ):
+                    continue
+                if not remaining:
+                    return
+                self._notify(device, message, now, from_feishu=True)
+                pending.handled_tokens.add(token_hash)
+                remaining -= 1
+            del self._feishu_messages[tag]
 
     async def _send(self, token, notification, device=None):
         async with self._send_slots:
@@ -232,19 +287,27 @@ class MobilePushService:
         if any(isinstance(result, Exception) for result in results):
             logger.warning("部分设备的紧急推送发送失败")
 
-    def _enqueue(self, pending):
+    def _enqueue(self, pending: PendingPush) -> bool:
         if self._queue.full():
+            if pending.from_feishu:
+                if self._queue.replace_oldest_feishu(pending):
+                    logger.warning("手机推送发送队列已满，丢弃最旧的飞书提醒")
+                    return True
+                logger.warning("手机推送发送队列已满，丢弃新飞书提醒")
+                return False
             self._queue.get_nowait()
             self._queue.task_done()
             logger.warning("手机推送队列已满，丢弃最旧的待发送通知")
         self._queue.put_nowait(pending)
+        return True
 
-    def _notify(self, device, notification, now, stale_alarm=None):
+    def _notify(self, device, notification, now, stale_alarm=None, *, from_feishu=False):
         message = notification.message if isinstance(notification, BigSpreadPush) else notification
         key = (device["token_hash"], message.tag)
-        if key not in self.cooldowns:
+        if key not in self.cooldowns and self._enqueue(
+            PendingPush(device, notification, stale_alarm, from_feishu=from_feishu)
+        ):
             self.cooldowns[key] = now + 600
-            self._enqueue(PendingPush(device, notification, stale_alarm))
             return True
         return False
 
@@ -278,7 +341,6 @@ class MobilePushService:
         self.test_after = {k: t for k, t in self.test_after.items() if t > now}
         self.cooldowns = {k: t for k, t in self.cooldowns.items() if t > now}
         devices = await self.repo.scan()
-        self._has_push_devices = bool(devices)
         if not devices or not self.fcm.enabled:
             self.previous = None
             self.big_spreads.clear()
@@ -289,11 +351,7 @@ class MobilePushService:
             self.stale_recipients.clear()
             return
 
-        feishu_messages, self._feishu_messages = self._feishu_messages.values(), {}
-        for device in devices:
-            for message in feishu_messages:
-                if device["kinds"].get(message.kind, False):
-                    self._notify(device, message, now)
+        self._scan_feishu(devices, now)
 
         summary = await self.load_summary()
         cards = {card.id: card for card in summary.cards if card.id}

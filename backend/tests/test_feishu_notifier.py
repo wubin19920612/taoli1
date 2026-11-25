@@ -8,7 +8,8 @@ from app.models.alert import AlertRule, AlertSeverity
 from app.models.market import MarketType
 from app.models.opportunity import Opportunity, OpportunityType
 from app.models.settings import AlertMessageTemplateSettings
-from app.services.alert_messages import build_alert_message
+from app.services.alert_messages import build_alert_message, build_big_spread_message
+from app.services.big_spread_alert import BIG_SPREAD_RULE_ID
 from app.services.feishu import FeishuConfig, FeishuNotifier
 
 
@@ -375,6 +376,9 @@ class FakeFeishuWebhookClient:
         ("⚠️ [BINANCE] BTCUSDT 指数成分变更", "index_component"),
         ("【溢价】BTCUSDT · 3所", "premium"),
         ("[Astro 预建] 已创建暂停卡片", "general"),
+        ("【价格提醒】BTCUSDT 出现大价差", "price"),
+        ("大价差提醒", "general"),
+        ("市场监控 【大价差】BTC", "general"),
     ],
 )
 async def test_send_text_records_category_and_queues_redacted_copy(title, kind):
@@ -415,6 +419,26 @@ async def test_send_alert_queues_spread_and_isolates_push_error(caplog):
     )
     assert "Failed to record mobile alert event" in caplog.text
     assert "private" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_send_alert_big_spread_rule_classifies_title_without_prefix():
+    client = FakeFeishuWebhookClient({"code": 0})
+    notifier = FeishuNotifier(FeishuConfig(webhook_url="https://test.invalid/hook"), client)
+    notifier.event_repo = SimpleNamespace(record=AsyncMock())
+    notifier.mobile_push = SimpleNamespace(queue_big_spread=Mock(), queue_feishu=Mock())
+    title = "BTC 开平价差提醒"
+
+    await notifier.send_alert(
+        AlertRule(id=BIG_SPREAD_RULE_ID, name="FF spread"), make_opportunity(), prebuilt_text=title,
+    )
+    await notifier.aclose()
+
+    notifier.event_repo.record.assert_awaited_once_with(
+        kind="big_spread", title=title, body=title, symbol="BTCUSDT", level="normal",
+    )
+    notifier.mobile_push.queue_big_spread.assert_called_once_with(title, title, "BTCUSDT")
+    notifier.mobile_push.queue_feishu.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -505,6 +529,32 @@ async def test_send_phone_urgent_alert_posts_message_then_phone_urgent() -> None
         {"user_id_list": ["ou_user_1", "ou_user_2"]},
         {"Authorization": "Bearer tenant-token"},
     )
+
+
+@pytest.mark.asyncio
+async def test_feishu_phone_urgent_big_spread_uses_rendered_headline():
+    notifier = FeishuNotifier(
+        FeishuConfig(
+            webhook_url="", app_id="cli_xxx", app_secret="secret", alert_chat_id="oc_chat",
+            phone_user_ids=["ou_user_1"], phone_enabled=True,
+        ),
+        client=FakeFeishuOpenClient(),
+    )
+    notifier.event_repo = SimpleNamespace(record=AsyncMock())
+    notifier.mobile_push = SimpleNamespace(queue_big_spread=Mock(), queue_feishu=Mock())
+    rule = AlertRule(id=BIG_SPREAD_RULE_ID, name="FF spread")
+    lines = build_big_spread_message(rule, make_opportunity()).splitlines()
+    title = lines[0]
+    message = "\n".join([f"  {title}", lines[1], lines[-1]])
+
+    await notifier.send_phone_urgent_text(message)
+    await notifier.aclose()
+
+    notifier.event_repo.record.assert_awaited_once_with(
+        kind="big_spread", title=title, body=message, symbol=None, level="urgent",
+    )
+    notifier.mobile_push.queue_big_spread.assert_called_once_with(title, message, "")
+    notifier.mobile_push.queue_feishu.assert_not_called()
 
 
 @pytest.mark.asyncio

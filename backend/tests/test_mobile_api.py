@@ -303,8 +303,9 @@ async def test_alert_journal_order_redaction_and_retention(mobile_app):
         return httpx.Response(200, json={"code": 0}, request=httpx.Request("POST", url))
 
     notifier._client = SimpleNamespace(post=post, aclose=AsyncMock())
+    title = "【大价差】BTC 开 3.42% / 平 2.00%"
     body = (
-        "大价差提醒\nfixture-hidden token=sensitive Authorization: Basic private-encoded\n"
+        f"{title}\nfixture-hidden token=sensitive Authorization: Basic private-encoded\n"
         + "测" * 2100
     )
     await notifier.send_text(body)
@@ -320,7 +321,7 @@ async def test_alert_journal_order_redaction_and_retention(mobile_app):
     assert urgent["level"] == "urgent" and urgent["kind"] == "general"
     assert spread["symbol"] == "ETH" and spread["kind"] == "spread"
     assert normal["level"] == "normal" and normal["kind"] == "big_spread"
-    assert len(normal["body"]) == 2000 and normal["title"] == "大价差提醒"
+    assert len(normal["body"]) == 2000 and normal["title"] == title
     assert all(
         secret not in normal["body"]
         for secret in ("fixture-hidden", "sensitive", "private-encoded")

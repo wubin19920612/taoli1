@@ -77,10 +77,11 @@ class FeishuNotifier:
             secrets = (self.config.webhook_url, self.config.secret, self.config.app_secret)
             body = _event_text(text, secrets)[:2000]
             title = next((line.strip() for line in body.splitlines() if line.strip()), "提醒")[:160]
+            if kind is None and title.startswith("【大价差】"):
+                kind = "big_spread"
             if kind is None:
                 kind = next((key for word, key in (
                     ("[Phone price alert]", "price"),
-                    ("大价差", "big_spread"),
                     ("公告", "announcement"), ("快到时间提醒", "announcement"),
                     ("登录", "auth"), ("价格提醒", "price"),
                     ("Hyperliquid 增仓恢复", "trade_status"), ("交易可用性", "trade_status"),
