@@ -438,12 +438,23 @@ async def test_unlock_expires_while_waiting_for_card_lock(enabled, clock):
 
 
 @pytest.mark.parametrize("operation", ["list_pairs", "update_pair"])
-async def test_upstream_errors_keep_status_and_message(enabled, operation):
+async def test_upstream_errors_keep_status_and_log_private_message(enabled, operation, caplog):
     app, client = enabled
-    getattr(app.state.astro_client, operation).side_effect = AstroClientError("上游服务暂不可用", 504)
+    message = "来自上游的私有响应正文"
+    getattr(app.state.astro_client, operation).side_effect = AstroClientError(message, 504)
     response = await client.post(CONTROL, json=FREE)
-    assert response.status_code == 504 and response.json() == {"detail": "上游服务暂不可用"}
+    assert response.status_code == 504 and response.json() == {"detail": "Astro 拒绝修改（HTTP 504）"}
+    assert any(r.levelno == logging.WARNING and message in r.getMessage() for r in caplog.records)
     assert (await client.get("/api/mobile/alerts")).json() == []
+
+
+@pytest.mark.parametrize("path,method", [("/status", "devices"), ("/settings", "unlock_minutes")])
+async def test_closed_ops_database_returns_503(enabled, monkeypatch, path, method):
+    app, client = enabled
+    monkeypatch.setattr(app.state.mobile_card_control.repo, method, AsyncMock(side_effect=ValueError("Connection closed")))
+    response = await client.get(OPS + path)
+    assert response.status_code == 503
+    assert response.json() == {"detail": "手机改卡服务暂不可用"}
 
 
 async def test_pushes_immediately_to_all_devices_even_if_one_send_fails(enabled):

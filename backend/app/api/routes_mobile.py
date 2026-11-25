@@ -133,7 +133,7 @@ class _CardControlRoute(_MobileInputRoute):
                 raise HTTPException(503, "手机改卡未启用")
             try:
                 return await handle(request)
-            except sqlite3.Error:
+            except (sqlite3.Error, ValueError):
                 raise HTTPException(503, "手机改卡服务暂不可用") from None
 
         return handle_request

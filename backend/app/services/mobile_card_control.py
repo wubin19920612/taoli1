@@ -225,7 +225,8 @@ class MobileCardControl:
                 await client.update_pair(dict(pair, **{field: change.value}))
                 title, body, recorded = await self._record_change(name, change, label, method)
         except AstroClientError as exc:
-            raise HTTPException(exc.status_code, exc.message) from exc
+            logger.warning("Astro 拒绝修改（HTTP %s）: %s", exc.status_code, exc.message)
+            raise HTTPException(exc.status_code, f"Astro 拒绝修改（HTTP {exc.status_code}）") from None
 
         # FCM may take seconds. Release the shared Astro write lock before sending.
         try:
