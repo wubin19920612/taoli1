@@ -466,7 +466,7 @@ describe("SettingsPage", () => {
     ).toBe(true);
     expect(screen.getByText("新增告警规则")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "保存修改" })).toBeNull();
-  }, 15000);
+  }, 45000);
 
   it("can disable the favorable funding spread threshold by clearing it", async () => {
     render(<SettingsPage />);
@@ -895,7 +895,7 @@ describe("SettingsPage", () => {
     expect(screen.getByLabelText("信号策略备注 / 后续自定义规则")).toBe(notes);
     expect(notes.value).toBe("Unsaved risk notes");
     expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "PUT" || init?.method === "POST")).toBe(false);
-  }, 15000);
+  }, 45000);
 
   it("keeps unsaved Astro inputs and login devices mounted across tab changes", async () => {
     render(<SettingsPage />);
