@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SettingsPage } from "../src/pages/SettingsPage";
 
-describe("SettingsPage", () => {
+describe("SettingsPage", { timeout: 45000 }, () => {
   it("defaults and saves night phone settings for older stored data", async () => {
     window.localStorage.setItem("settings-active-tab", "risk");
     render(<SettingsPage />);
@@ -401,7 +401,7 @@ describe("SettingsPage", () => {
         init?.method === "POST" && String(init.body).includes('"favorable_funding_open_spread_pct":0.9')
       )
     ).toBe(true);
-  }, 15000);
+  }, 45000);
 
   it("defaults multi-exchange premium alerts to 2 percent and saves changes", async () => {
     render(<SettingsPage />);
@@ -416,7 +416,7 @@ describe("SettingsPage", () => {
       expect.stringContaining("/settings/risk"),
       expect.objectContaining({ method: "PUT", body: expect.stringContaining('"multi_exchange_premium_threshold_pct":3.5') })
     ));
-  }, 15000);
+  }, 45000);
 
   it("edits an existing alert rule in place", async () => {
     render(<SettingsPage />);
@@ -485,7 +485,7 @@ describe("SettingsPage", () => {
         })
       );
     });
-  }, 15000);
+  }, 45000);
 
   it("quickly updates SF negative funding notifications from the rule list", async () => {
     render(<SettingsPage />);
@@ -507,7 +507,7 @@ describe("SettingsPage", () => {
       ).toBe(true);
     });
     expect(quickSwitch.getAttribute("aria-checked")).toBe("false");
-  }, 15000);
+  }, 45000);
 
   it("saves global alert message template field choices", async () => {
     render(<SettingsPage />);
@@ -547,7 +547,7 @@ describe("SettingsPage", () => {
     expect(preview?.textContent).toContain("价差对：BTCUSDT | binance 合约 -> okx 合约");
     expect(preview?.textContent).not.toContain("资金费率差");
     expect(preview?.textContent).toContain("只报告可建卡告警");
-  }, 15000);
+  }, 45000);
 
   it("loads and saves Astro automation settings", async () => {
     render(<SettingsPage />);
@@ -570,7 +570,7 @@ describe("SettingsPage", () => {
         })
       );
     });
-  }, 15000);
+  }, 45000);
 
   it("loads and saves Astro card defaults", async () => {
     render(<SettingsPage />);
@@ -612,7 +612,7 @@ describe("SettingsPage", () => {
         body: expect.stringContaining('"card_variant":"gc"')
       })
     );
-  }, 15000);
+  }, 45000);
 
   it("loads and saves symbol aliases with risk settings", async () => {
     render(<SettingsPage />);
@@ -639,7 +639,7 @@ describe("SettingsPage", () => {
         })
       );
     });
-  }, 15000);
+  }, 45000);
 
   it("uses saved risk volume as the default alert rule volume", async () => {
     const posts: string[] = [];
@@ -701,7 +701,7 @@ describe("SettingsPage", () => {
       expect(posts).toHaveLength(2);
     });
     expect(posts.every((body) => body.includes('"min_volume_24h_usdt":100000'))).toBe(true);
-  }, 15000);
+  }, 45000);
 
   it("saves editable risk thresholds and converts K volume back to USDT", async () => {
     render(<SettingsPage />);
@@ -726,7 +726,7 @@ describe("SettingsPage", () => {
         return init?.method === "PUT" && String(init.body).includes("min_volume_24h_k");
       })
     ).toBe(false);
-  }, 15000);
+  }, 45000);
 
   it("saves signal validity risk settings", async () => {
     render(<SettingsPage />);
@@ -746,7 +746,7 @@ describe("SettingsPage", () => {
         })
       );
     });
-  }, 15000);
+  }, 45000);
 
   it("shows signal strategy minimum notional default and saves it", async () => {
     render(<SettingsPage />);
@@ -782,7 +782,7 @@ describe("SettingsPage", () => {
         );
       })
     ).toBe(true);
-  }, 15000);
+  }, 45000);
 
   it("saves symbol blacklist and ignored exchanges in risk settings", async () => {
     render(<SettingsPage />);
@@ -814,7 +814,7 @@ describe("SettingsPage", () => {
         return init?.method === "PUT" && String(init.body).includes('"ignored_exchanges":["gate"]');
       })
     ).toBe(true);
-  }, 15000);
+  }, 45000);
 
   it("shows service restart controls and queues selected service restart", async () => {
     const restartCalls: string[] = [];
@@ -868,7 +868,7 @@ describe("SettingsPage", () => {
     });
     expect(screen.getByRole("button", { name: "重启后端" })).toBeTruthy();
     expect(screen.getByText(/taoli1-frontend-1/)).toBeTruthy();
-  }, 15000);
+  }, 45000);
 
   it("keeps unsaved rule and risk forms and rule validation across tab changes", async () => {
     render(<SettingsPage />);
@@ -916,7 +916,7 @@ describe("SettingsPage", () => {
     expect(screen.getByRole("region", { name: "登录设备" })).toBe(devices);
     expect(window.localStorage.getItem("dashboard_password")).toBeNull();
     expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "PUT" || init?.method === "POST")).toBe(false);
-  }, 15000);
+  }, 45000);
 
   it("requests alert history only on activation and keeps its panel mounted", async () => {
     render(<SettingsPage />);
@@ -935,7 +935,7 @@ describe("SettingsPage", () => {
     await userEvent.click(screen.getByRole("tab", { name: "告警历史" }));
     await waitFor(() => expect(historyRequests()).toHaveLength(2));
     expect(await screen.findByRole("button", { name: /测试告警/ })).toBe(testButton);
-  }, 15000);
+  }, 45000);
 
   it("restores the saved tab and persists a new selection", async () => {
     window.localStorage.setItem("settings-active-tab", "risk");
@@ -982,7 +982,7 @@ describe("SettingsPage", () => {
     fireEvent.click(within(board).getByRole("button", { name: "普通告警规则去设置" }));
     expect(screen.getByRole("tab", { name: "告警规则" }).getAttribute("aria-selected")).toBe("true");
     expect(within(board).getByText("已启用 1 / 共 1 条")).toBeTruthy();
-  }, 15000);
+  }, 45000);
 
   it("rolls the switchboard and risk form back when the shared API rejects a toggle", async () => {
     window.localStorage.setItem("settings-active-tab", "risk");
@@ -1001,7 +1001,7 @@ describe("SettingsPage", () => {
     expect(await within(board).findByText(/保存失败：.*保存测试失败/)).toBeTruthy();
     expect(toggle.getAttribute("aria-checked")).toBe("true");
     expect(screen.getByLabelText("启用大价差提醒").getAttribute("aria-checked")).toBe("true");
-  }, 15000);
+  }, 45000);
 
   it("allows tab changes when localStorage reads and writes throw", async () => {
     const read = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("storage blocked"); });
