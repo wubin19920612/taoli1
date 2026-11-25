@@ -223,6 +223,67 @@ async def test_feishu_hook_requires_success_and_only_queues_until_background_sca
     ]
 
 
+async def test_feishu_push_preferences_channels_and_category_title_cooldown():
+    s = Scanner([device(price=True, funding=True), device("off", price=False), device("legacy")])
+    await s.scan(0)
+    notifier = FeishuNotifier(FeishuConfig(webhook_url=""))
+    notifier.event_repo = SimpleNamespace(record=AsyncMock())
+    notifier.mobile_push = s.service
+    title = "[Phone price alert] BTC"
+    body = title + "\n" + "价" * 800
+
+    await notifier._record(body, kind=None, symbol=None, level="urgent")
+    s.service.queue_feishu("price", title, "duplicate", urgent=False)
+    s.service.queue_feishu("funding", title, "funding", urgent=False)
+    s.service.queue_feishu("price", "[Phone price alert] ETH", "other", urgent=False)
+    assert not s.sent
+    await s.scan(10)
+
+    assert [(token, msg.kind, msg.title, msg.channel) for token, msg in s.sent] == [
+        ("phone", "price", title, "urgent"),
+        ("phone", "funding", title, "normal"),
+        ("phone", "price", "[Phone price alert] ETH", "normal"),
+    ]
+    assert s.sent[0][1].body == body[:720]
+    s.service.queue_feishu("price", title, "duplicate", urgent=False)
+    await s.scan(609)
+    assert len(s.sent) == 3
+    s.service.queue_feishu("price", title, "new alert", urgent=False)
+    await s.scan(610)
+    assert len(s.sent) == 4 and s.sent[-1][1].body == "new alert"
+
+
+async def test_feishu_push_drops_messages_with_no_devices_or_fcm_disabled():
+    s = Scanner([device(announcement=True)])
+    await s.scan(0)
+    s.service.fcm.enabled = False
+    s.service.queue_feishu("announcement", "[OKX] 上币公告", "disabled", urgent=False)
+    s.service.fcm.enabled = True
+    await s.scan(10)
+    assert not s.sent
+
+    s.service.queue_feishu("announcement", "[OKX] 上币公告", "no recipients at scan", urgent=False)
+    devices = s.service.repo.scan.return_value
+    s.service.repo.scan.return_value = []
+    await s.scan(20)
+    s.service.queue_feishu("announcement", "[OKX] 上币公告", "no recipients at enqueue", urgent=False)
+    s.service.repo.scan.return_value = devices
+    await s.scan(30)
+    assert not s.sent
+
+
+async def test_full_feishu_push_queue_drops_oldest_message(caplog):
+    s = Scanner([device(general=True)])
+    await s.scan(0)
+    for i in range(mobile_push.QUEUE_LIMIT + 1):
+        s.service.queue_feishu("general", f"提醒 {i}", "内容", urgent=False)
+    await s.scan(10)
+    assert [msg.title for _, msg in s.sent] == [
+        f"提醒 {i}" for i in range(1, mobile_push.QUEUE_LIMIT + 1)
+    ]
+    assert "丢弃最旧的飞书提醒" in caplog.text
+
+
 async def test_big_spread_same_symbol_distinct_dex_and_fill_leg_identity():
     s = Scanner([device()])
     await s.scan(0)
@@ -426,6 +487,8 @@ async def test_session_api_validation_upsert_delete_and_revocation(push_api):
         {"threshold_pp": 5.01},
         {"kinds": {"fill": True}},
         {"kinds": KINDS | {"fill": 2}},
+        {"kinds": KINDS | {"price": "true"}},
+        {"kinds": KINDS | {"unknown": False}},
     ):
         response = await client.post(REGISTER, json=REGISTRATION | changes)
         assert response.status_code == 422 and "secret" not in response.text
@@ -435,13 +498,21 @@ async def test_session_api_validation_upsert_delete_and_revocation(push_api):
         ).status_code == 200
         (row,) = await service.repo.scan()
         assert row["threshold_pp"] == threshold
+        assert row["kinds"] == KINDS | dict.fromkeys(
+            ("announcement", "price", "funding", "auth", "trade_status", "index_component",
+             "premium", "spread", "general"),
+            False,
+        )
     assert (await client.post(TEST, json={"token": "phone"})).json() == {
         "sent": False,
         "reason": "手机推送未启用",
     }
     assert (await client.request("DELETE", REGISTER, json={"token": "phone"})).status_code == 200
     assert not await service.repo.scan()
-    await client.post(REGISTER, json=REGISTRATION)
+    registration = REGISTRATION | {"kinds": KINDS | {"price": True}}
+    assert (await client.post(REGISTER, json=registration)).status_code == 200
+    (row,) = await service.repo.scan()
+    assert row["kinds"]["price"] is True and row["kinds"]["announcement"] is False
     assert (await client.post("/api/auth/logout")).status_code == 200
     await service.scan()
     assert await service.repo.get("phone", row["session_hash"]) is None

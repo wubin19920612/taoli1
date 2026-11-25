@@ -142,6 +142,8 @@ class MobilePushService:
         self.stale_recipients = {}
         self.big_spreads: dict[str, BigSpreadPush] = {}
         self._pending_spreads: WeakValueDictionary[str, BigSpreadPush] = WeakValueDictionary()
+        self._has_push_devices = False
+        self._feishu_messages: dict[str, PushMessage] = {}
         self._queue = asyncio.Queue[PendingPush](maxsize=QUEUE_LIMIT)
         self._send_slots = asyncio.Semaphore(SEND_CONCURRENCY)
 
@@ -184,6 +186,21 @@ class MobilePushService:
         pending = BigSpreadPush(message)
         self.big_spreads[message.tag] = pending
         self._pending_spreads[message.tag] = pending
+
+    def queue_feishu(self, kind: str, title: str, body: str, urgent: bool) -> None:
+        if not self.fcm.enabled or not self._has_push_devices:
+            return
+        message = PushMessage(
+            kind, title, body[:720], channel="urgent" if urgent else "normal", identity=title,
+        )
+        if message.tag in self._feishu_messages:
+            if urgent:
+                self._feishu_messages[message.tag] = message
+            return
+        if len(self._feishu_messages) == QUEUE_LIMIT:
+            del self._feishu_messages[next(iter(self._feishu_messages))]
+            logger.warning("手机推送队列已满，丢弃最旧的飞书提醒")
+        self._feishu_messages[message.tag] = message
 
     async def _send(self, token, notification, device=None):
         async with self._send_slots:
@@ -261,14 +278,22 @@ class MobilePushService:
         self.test_after = {k: t for k, t in self.test_after.items() if t > now}
         self.cooldowns = {k: t for k, t in self.cooldowns.items() if t > now}
         devices = await self.repo.scan()
+        self._has_push_devices = bool(devices)
         if not devices or not self.fcm.enabled:
             self.previous = None
             self.big_spreads.clear()
             self._pending_spreads.clear()
+            self._feishu_messages.clear()
             self.stale_since = None
             self.stale_announced = False
             self.stale_recipients.clear()
             return
+
+        feishu_messages, self._feishu_messages = self._feishu_messages.values(), {}
+        for device in devices:
+            for message in feishu_messages:
+                if device["kinds"].get(message.kind, False):
+                    self._notify(device, message, now)
 
         summary = await self.load_summary()
         cards = {card.id: card for card in summary.cards if card.id}

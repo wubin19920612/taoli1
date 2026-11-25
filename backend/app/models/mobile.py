@@ -14,6 +14,15 @@ class PushKinds(BaseModel):
     leg_alert: bool
     big_spread: bool
     stale: bool
+    announcement: bool = False
+    price: bool = False
+    funding: bool = False
+    auth: bool = False
+    trade_status: bool = False
+    index_component: bool = False
+    premium: bool = False
+    spread: bool = False
+    general: bool = False
 
 
 class MobileCardControlSwitchUpdate(BaseModel):

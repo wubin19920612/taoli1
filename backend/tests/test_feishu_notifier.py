@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -361,6 +362,63 @@ class FakeFeishuWebhookClient:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "title,kind",
+    [
+        ("[BINANCE] 上币公告", "announcement"),
+        ("[OKX] 上币快到时间提醒", "announcement"),
+        ("[Phone price alert] BTC 资金费率提醒", "price"),
+        ("【价格提醒】BTCUSDT", "price"),
+        ("【资金费率提醒】BTCUSDT", "funding"),
+        ("taoli1 登录成功", "auth"),
+        ("[交易可用性恢复] gate / futures / BTC_USDT", "trade_status"),
+        ("[Hyperliquid 增仓恢复] xyz:ANT (xyz)", "trade_status"),
+        ("⚠️ [BINANCE] BTCUSDT 指数成分变更", "index_component"),
+        ("【溢价】BTCUSDT · 3所", "premium"),
+        ("[Astro 预建] 已创建暂停卡片", "general"),
+    ],
+)
+async def test_send_text_records_category_and_queues_redacted_copy(title, kind):
+    client = FakeFeishuWebhookClient({"code": 0})
+    notifier = FeishuNotifier(FeishuConfig(webhook_url="https://test.invalid/hook"), client)
+    notifier.event_repo = SimpleNamespace(record=AsyncMock())
+    notifier.mobile_push = SimpleNamespace(queue_feishu=Mock())
+    message = f"{title}\n链接: https://test.invalid/signed"
+    redacted = f"{title}\n链接: [链接]"
+
+    await notifier.send_text(message)
+    await notifier.aclose()
+
+    assert client.requests[0][1]["content"]["text"] == message
+    notifier.event_repo.record.assert_awaited_once_with(
+        kind=kind, title=title, body=redacted, symbol=None, level="normal",
+    )
+    notifier.mobile_push.queue_feishu.assert_called_once_with(kind, title, redacted, urgent=False)
+
+
+@pytest.mark.asyncio
+async def test_send_alert_queues_spread_and_isolates_push_error(caplog):
+    client = FakeFeishuWebhookClient({"code": 0})
+    notifier = FeishuNotifier(FeishuConfig(webhook_url="https://test.invalid/hook"), client)
+    notifier.event_repo = SimpleNamespace(record=AsyncMock())
+    notifier.mobile_push = SimpleNamespace(queue_feishu=Mock(side_effect=RuntimeError("private")))
+
+    await notifier.send_alert(AlertRule(name="FF spread"), make_opportunity())
+    await notifier.aclose()
+
+    message = client.requests[0][1]["content"]["text"]
+    title = message.splitlines()[0]
+    notifier.event_repo.record.assert_awaited_once_with(
+        kind="spread", title=title, body=message, symbol="BTCUSDT", level="normal",
+    )
+    notifier.mobile_push.queue_feishu.assert_called_once_with(
+        "spread", title, message, urgent=False,
+    )
+    assert "Failed to record mobile alert event" in caplog.text
+    assert "private" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "payload",
     [
         {"code": 0, "msg": "success"},
@@ -415,8 +473,15 @@ async def test_send_phone_urgent_alert_posts_message_then_phone_urgent() -> None
         ),
         client=client,
     )
+    notifier.event_repo = SimpleNamespace(record=AsyncMock())
+    notifier.mobile_push = SimpleNamespace(queue_feishu=Mock())
 
-    await notifier.send_phone_urgent_text("BTCUSDT reached 110000")
+    message = "BTCUSDT reached 110000"
+    await notifier.send_phone_urgent_text(message)
+    await notifier.aclose()
+    notifier.mobile_push.queue_feishu.assert_called_once_with(
+        "general", message, message, urgent=True,
+    )
 
     assert client.requests[0] == (
         "POST",

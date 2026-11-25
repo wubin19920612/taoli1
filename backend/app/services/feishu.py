@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 
 def _event_text(text: str, secrets: tuple[str, ...]) -> str:
-    # A notification can contain signed URLs, credential headers or echoed
-    # configuration. Only the persisted copy is redacted.
+    # Redact signed URLs, credential headers and echoed configuration from
+    # the copy used for the mobile alert journal and push.
     text = re.sub(r"https?://[^\s<>]+", "[链接]", text, flags=re.IGNORECASE)
     text = re.sub(r"-----BEGIN [\w ]*PRIVATE KEY-----.*?(?:-----END [\w ]*PRIVATE KEY-----|$)",
                   "[已隐藏]", text, flags=re.DOTALL)
@@ -79,16 +79,25 @@ class FeishuNotifier:
             title = next((line.strip() for line in body.splitlines() if line.strip()), "提醒")[:160]
             if kind is None:
                 kind = next((key for word, key in (
-                    ("大价差", "big_spread"), ("公告", "announcement"), ("登录", "auth"),
-                    ("价格提醒", "price"), ("资金费", "funding"),
+                    ("[Phone price alert]", "price"),
+                    ("大价差", "big_spread"),
+                    ("公告", "announcement"), ("快到时间提醒", "announcement"),
+                    ("登录", "auth"), ("价格提醒", "price"),
+                    ("Hyperliquid 增仓恢复", "trade_status"), ("交易可用性", "trade_status"),
+                    ("交易状态", "trade_status"), ("可交易性", "trade_status"),
+                    ("指数成分", "index_component"), ("溢价", "premium"),
+                    ("资金费", "funding"),
                 ) if word in title), "general")
             await asyncio.wait_for(self.event_repo.record(
                 kind=kind, title=title, body=body, level=level,
                 symbol=_event_text(symbol, secrets) if symbol else None,
             ), timeout=1)
             push = getattr(self, "mobile_push", None)
-            if kind == "big_spread" and push is not None:
-                push.queue_big_spread(title, body, _event_text(symbol, secrets) if symbol else "")
+            if push is not None:
+                if kind == "big_spread":
+                    push.queue_big_spread(title, body, _event_text(symbol, secrets) if symbol else "")
+                else:
+                    push.queue_feishu(kind, title, body, urgent=level == "urgent")
         except Exception:  # noqa: BLE001 - journal failures must never affect delivery.
             logger.warning("Failed to record mobile alert event")
 
