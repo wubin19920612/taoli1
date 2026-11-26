@@ -3,6 +3,12 @@ from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
+from app.models.funding_arbitrage import (
+    AdlRiskLevel,
+    FundingArbitrageDecision,
+    FundingOpportunityType,
+    FundingSource,
+)
 from app.models.market import MarketType
 from app.models.opportunity import OpportunityType
 from app.models.pair_range_backtest import PairRangeBacktestResult
@@ -233,6 +239,80 @@ class MobileOpportunityList(BaseModel):
     observed_at: datetime
     total: int
     items: list[MobileOpportunityItem]
+
+
+class MobileFundingSettings(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    enabled: bool
+    max_candidates: int
+    min_entry_edge_pct: float
+    min_funding_edge_pct: float
+    min_volume_24h_usdt: float
+    min_minutes_to_settlement: int
+    max_minutes_to_settlement: int
+    notional_per_symbol_usdt: float
+    leverage: int
+
+
+class MobileFundingCandidate(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    id: str
+    symbol: str
+    type: Literal["SF", "FF"]
+    long_exchange: str
+    long_market_type: str
+    long_raw_symbol: str | None
+    short_exchange: str
+    short_market_type: str
+    short_raw_symbol: str | None
+    funding_source: FundingSource
+    long_current_funding_pct: float | None
+    short_current_funding_pct: float | None
+    long_next_funding_pct: float | None
+    short_next_funding_pct: float | None
+    current_funding_edge_pct: float | None
+    next_funding_edge_pct: float | None
+    long_funding_interval_hours: float | None
+    short_funding_interval_hours: float | None
+    funding_comparison_interval_hours: float | None
+    next_settlement_time: datetime | None
+    minutes_to_settlement: float | None
+    entry_basis_pct: float
+    exit_basis_pct: float
+    basis_width_pct: float
+    expected_cycle_pnl_pct: float
+    estimated_open_cost_pct: float
+    estimated_close_cost_pct: float
+    adl_risk_score: float
+    adl_risk_level: AdlRiskLevel
+    decision: FundingArbitrageDecision
+    decision_reasons: list[str]
+    risk_labels: list[str]
+    primary_opportunity_type: FundingOpportunityType
+    opportunity_types: list[FundingOpportunityType]
+    opportunity_reasons: list[str]
+    volume_24h_usdt: float | None
+    depth_usdt: float | None
+    uses_hyperliquid: bool
+
+
+class MobileFundingPreview(BaseModel):
+    observed_at: datetime
+    settings: MobileFundingSettings
+    total_pairs_evaluated: int
+    displayed_candidates: int
+    blocked_missing_funding: int
+    blocked_liquidity: int
+    blocked_adl_risk: int
+    blocked_expected_pnl: int
+    enter_count: int
+    hold_count: int
+    exit_count: int
+    blocked_count: int
+    filtered_total: int
+    candidates: list[MobileFundingCandidate]
 
 
 class MobileInstrumentAssetGroup(BaseModel):
