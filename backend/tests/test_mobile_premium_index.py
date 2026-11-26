@@ -18,6 +18,7 @@ from app.models.premium_index import (
 )
 from app.services.pair_spread_query import PairSpreadQueryError
 from app.services.premium_index_query import PremiumIndexQueryError, _stats
+from app.services.symbol_aliases import SymbolAliasResolver
 
 MOBILE = "/api/mobile/premium-index"
 WEB = "/api/premium-index"
@@ -90,7 +91,7 @@ async def test_mobile_premium_index_readonly_access_and_web_scope(phone):
 
     response = await client.get(f"{MOBILE}/current", params=PARAMS)
     assert response.status_code == 200, response.text
-    assert response.json() == CURRENT
+    assert response.json() == dict(CURRENT, dex="io")
     service.query.assert_not_awaited()
     market = service.current.await_args.args[0]
     assert (market.exchange, market.dex, market.symbol) == ("hyperliquid", "io", "ANTHUSDT")
@@ -138,6 +139,17 @@ async def test_mobile_premium_index_sampling_uses_full_service_stats(phone):
     assert any(p["mark"] is None and p["index"] is None for p in points)
 
 
+@pytest.mark.parametrize("endpoint", ["query", "current"])
+async def test_mobile_premium_index_uses_alias_dex_when_omitted(phone, endpoint):
+    _, client, service, _, _ = phone
+    response = await client.get(f"{MOBILE}/{endpoint}", params={"exchange": "hyperliquid", "symbol": "ANTH"})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["dex"] == "io"
+    market = getattr(service, endpoint).await_args.args[0]
+    assert (market.exchange, market.dex, market.symbol) == ("hyperliquid", "io", "ANTHUSDT")
+
+
 async def test_mobile_premium_index_applies_web_alias_price_multiplier(phone):
     _, client, _, _, _ = phone
     params = {"exchange": "okx", "symbol": "ANTHROPIC"}
@@ -145,7 +157,9 @@ async def test_mobile_premium_index_applies_web_alias_price_multiplier(phone):
     current = await client.get(f"{MOBILE}/current", params=params)
     assert query.status_code == current.status_code == 200
     expected = dict(CURRENT, mark_price=1010, index_price=1000)
-    assert query.json()["current"] == current.json() == expected
+    assert query.json()["dex"] is None
+    assert query.json()["current"] == expected
+    assert current.json() == dict(expected, dex=None)
     point = query.json()["points"][0]
     assert (point["pct"], point["mark"], point["index"]) == (0, 1010, 1000)
 
@@ -320,5 +334,31 @@ async def test_mobile_premium_index_validation_matches_web(phone, endpoint, upda
     mobile = await client.get(f"{MOBILE}/{endpoint}", params=params)
     assert mobile.status_code == web.status_code == 422
     assert mobile.json() == web.json()
+    service.query.assert_not_awaited()
+    service.current.assert_not_awaited()
+
+
+@pytest.mark.parametrize("endpoint", ["query", "current"])
+async def test_mobile_premium_index_rejects_multiple_dex_prefixes(phone, endpoint):
+    _, client, service, _, _ = phone
+    params = {"exchange": "hyperliquid", "symbol": "io:xyz:ANTH"}
+    response = await client.get(f"{MOBILE}/{endpoint}", params=params)
+
+    assert (response.status_code, response.json()) == (422, {"detail": "Hyperliquid 标的只允许一个 DEX 前缀"})
+    service.query.assert_not_awaited()
+    service.current.assert_not_awaited()
+
+
+@pytest.mark.parametrize("endpoint", ["query", "current"])
+async def test_mobile_premium_index_sanitizes_alias_value_error(phone, monkeypatch, endpoint):
+    _, client, service, _, _ = phone
+
+    def fail_resolve(*args, **kwargs):
+        raise ValueError("internal alias error: diagnostic details")
+
+    monkeypatch.setattr(SymbolAliasResolver, "resolve", fail_resolve)
+    response = await client.get(f"{MOBILE}/{endpoint}", params=PARAMS)
+
+    assert (response.status_code, response.json()) == (422, {"detail": "无法解析溢价指数标的"})
     service.query.assert_not_awaited()
     service.current.assert_not_awaited()

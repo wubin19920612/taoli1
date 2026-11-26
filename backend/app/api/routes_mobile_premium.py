@@ -46,6 +46,10 @@ router.add_api_route(
 )
 
 
+class MobilePremiumIndexCurrentResponse(MobilePremiumIndexCurrent):
+    dex: str | None
+
+
 def _log_upstream(message: str) -> None:
     logger.warning("Mobile premium index upstream: %r", query_utils.redact_upstream(message))
 
@@ -67,6 +71,8 @@ async def _requested_market(
     symbol: str = Query(...),
     dex: str | None = Query(default=None),
 ) -> PremiumIndexMarketQuery:
+    if exchange.strip().lower() == "hyperliquid" and symbol.count(":") > 1:
+        raise HTTPException(422, "Hyperliquid 标的只允许一个 DEX 前缀")
     try:
         return PremiumIndexMarketQuery(exchange=exchange, symbol=symbol, dex=dex)
     except ValidationError as exc:
@@ -76,11 +82,14 @@ async def _requested_market(
 async def _resolved_market(
     request: Request, market: PremiumIndexMarketQuery,
 ) -> tuple[PremiumIndexMarketQuery, ResolvedSymbolAlias]:
-    resolver = await web._symbol_alias_resolver(request)
-    alias = resolver.resolve(
-        exchange=market.exchange, symbol=market.symbol, market_type=MarketType.FUTURE, dex=market.dex,
-    )
-    return market.model_copy(update={"symbol": alias.raw_symbol}), alias
+    try:
+        resolver = await web._symbol_alias_resolver(request)
+        alias = resolver.resolve(
+            exchange=market.exchange, symbol=market.symbol, market_type=MarketType.FUTURE, dex=market.dex,
+        )
+    except ValueError:
+        raise HTTPException(422, "无法解析溢价指数标的") from None
+    return market.model_copy(update={"symbol": alias.raw_symbol, "dex": alias.dex}), alias
 
 
 def _upstream_failure(exchange: str, exc: Exception) -> HTTPException:
@@ -156,15 +165,15 @@ async def query_premium_index(
 async def get_current_premium_index(
     request: Request,
     requested_market: Annotated[PremiumIndexMarketQuery, Depends(_requested_market)],
-) -> MobilePremiumIndexCurrent:
-    async def fetch(service: PremiumIndexQueryService) -> MobilePremiumIndexCurrent:
+) -> MobilePremiumIndexCurrentResponse:
+    async def fetch(service: PremiumIndexQueryService) -> MobilePremiumIndexCurrentResponse:
         market, alias = await _resolved_market(request, requested_market)
         try:
             current = await service.current(market)
         except Exception as exc:  # noqa: BLE001 - the service can propagate raw exchange errors.
             raise _upstream_failure(market.exchange, exc) from None
         aliased = apply_premium_index_current_alias(current, alias=alias)
-        return MobilePremiumIndexCurrent.model_validate(aliased)
+        return MobilePremiumIndexCurrentResponse.model_validate(aliased)
 
     factory = (
         getattr(request.app.state, "premium_index_query_service_factory", None)
