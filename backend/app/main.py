@@ -59,6 +59,7 @@ from app.db.repositories import (
     MobileAlertRepository,
     MobileOpsRepository,
     MobilePinsRepository,
+    MobilePriceWatchRepository,
     MobilePushRepository,
     AnnouncementRepository,
     IndexComponentRepository,
@@ -115,6 +116,7 @@ from app.services.feishu import FeishuConfig, FeishuNotifier
 from app.services.eqn_news import EqnNewsMonitor
 from app.services.fcm import FcmClient
 from app.services.mobile_card_control import MobileCardControl
+from app.services.mobile_price_watch import MobilePriceWatch
 from app.services.mobile_push import MobilePushService
 from app.services.mobile_summary import summary as build_mobile_summary
 from app.services.gate_crossex_hyperliquid import GateCrossExHyperliquidCatalog
@@ -1178,6 +1180,12 @@ def create_app(
                 app.state.hyperliquid_trade_status_service,
             )
         app.state.settings_repo = SettingsRepository(db)
+        # Isolate watch writes from the mobile push repository's schema savepoint.
+        price_watch_db = db if db_path == ":memory:" else await connect_database(db_path)
+        app.state.mobile_price_watch = MobilePriceWatch(
+            MobilePriceWatchRepository(price_watch_db), store,
+            app.state.settings_repo.get_risk_settings, app.state.mobile_push,
+        )
         identity_db = db if db_path == ":memory:" else await connect_database(db_path)
         app.state.market_identity_repo = MarketIdentityRepository(identity_db)
         app.state.market_validation = MarketValidationService(app.state.market_identity_repo, store)
@@ -1254,6 +1262,9 @@ def create_app(
             eqn_news = EqnNewsMonitor(app.state.settings_repo, app.state.feishu_notifier)
             _start_background_task(supervisor, lambda: eqn_news.run(stop_event), name="eqn-news")
             _start_background_task(supervisor, lambda: app.state.mobile_push.run(stop_event), name="mobile-push")
+            _start_background_task(
+                supervisor, lambda: app.state.mobile_price_watch.run(stop_event), name="mobile-price-watch",
+            )
             _start_background_task(
                 supervisor,
                 lambda: app.state.pair_spread_funding_recorder.run(stop_event),
@@ -1509,6 +1520,8 @@ def create_app(
                     await preset_db.close()
                 if attempts_db is not db:
                     await attempts_db.close()
+                if price_watch_db is not db:
+                    await price_watch_db.close()
                 if mobile_db is not db:
                     await mobile_db.close()
                 await app.state.auth_store.close()

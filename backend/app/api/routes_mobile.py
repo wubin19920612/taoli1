@@ -15,6 +15,7 @@ from app.api import (
     routes_mobile_opportunities,
     routes_mobile_pair,
     routes_mobile_premium,
+    routes_mobile_price_watch,
 )
 from app.api.routes_astro import list_astro_pairs
 from app.api.routes_pair_spread import _resolved_leg, _symbol_alias_resolver
@@ -60,6 +61,7 @@ router.include_router(routes_mobile_instruments.router)
 router.include_router(routes_mobile_opportunities.router)
 router.include_router(routes_mobile_pair.router)
 router.include_router(routes_mobile_premium.router)
+router.include_router(routes_mobile_price_watch.router)
 RANGE_TIMEOUT_SECONDS = 60
 
 

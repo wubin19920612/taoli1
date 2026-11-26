@@ -297,6 +297,14 @@ class MobilePushService:
         if any(isinstance(result, Exception) for result in results):
             logger.warning("部分设备的紧急推送发送失败")
 
+    async def queue_price_watch(self, alert_id, title, body):
+        if not self.fcm.enabled:
+            return
+        message = PushMessage("price_watch", title, body, channel="urgent", identity=str(alert_id))
+        for device in await self.repo.scan():
+            if device["kinds"].get("price_watch", True):
+                await self._queue.put(PendingPush(device, message))
+
     def _enqueue(self, pending: PendingPush) -> bool:
         if self._queue.full():
             if pending.from_feishu:

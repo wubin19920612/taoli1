@@ -593,7 +593,7 @@ async def test_session_api_validation_upsert_delete_and_revocation(push_api):
         ).status_code == 200
         (row,) = await service.repo.scan()
         assert row["threshold_pp"] == threshold
-        assert row["kinds"] == KINDS | {"eqn_news": True} | dict.fromkeys(
+        assert row["kinds"] == KINDS | {"eqn_news": True, "price_watch": True} | dict.fromkeys(
             ("announcement", "price", "funding", "auth", "trade_status", "index_component",
              "premium", "spread", "general"),
             False,

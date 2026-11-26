@@ -75,6 +75,7 @@ def _mobile_route(request: Request) -> bool:
     return (request.method, path) in {
         ("POST", "/api/auth/logout"),
         ("POST", "/api/mobile/pins"),
+        ("POST", "/api/mobile/price-watch"),
         ("POST", "/api/mobile/eqn-news/settings"),
         ("POST", "/api/mobile/range-backtest"),
         ("POST", "/api/mobile/push/register"),

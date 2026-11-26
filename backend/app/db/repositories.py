@@ -1433,6 +1433,47 @@ class AnnouncementRepository:
         )
 
 
+class MobilePriceWatchRepository:
+    """The worker and API may use separate connections to the same settings row."""
+
+    def __init__(self, db: aiosqlite.Connection):
+        self.db = db
+        self._ready = False
+
+    async def read(self) -> str | None:
+        async with self.db.execute("SELECT payload FROM app_settings WHERE key='mobile_price_watch'") as cursor:
+            row = await cursor.fetchone()
+        return row["payload"] if row else None
+
+    async def replace(self, previous: str | None, payload: str, events: list[dict]) -> bool:
+        if not self._ready:
+            # A connection-local view makes the config and all its events one SQLite
+            # statement, including when :memory: tests share the business connection.
+            await self.db.execute(
+                "CREATE TEMP VIEW IF NOT EXISTS mobile_price_watch_change(payload, events) AS SELECT NULL, NULL"
+            )
+            await self.db.execute("""
+                CREATE TEMP TRIGGER IF NOT EXISTS apply_mobile_price_watch_change
+                INSTEAD OF INSERT ON mobile_price_watch_change BEGIN
+                    INSERT INTO app_settings(key, payload) VALUES ('mobile_price_watch', NEW.payload)
+                    ON CONFLICT(key) DO UPDATE SET payload=excluded.payload;
+                    INSERT INTO mobile_alert_events(created_at, title, body, symbol, kind, level)
+                    SELECT json_extract(value, '$.created_at'), json_extract(value, '$.title'),
+                           json_extract(value, '$.body'), json_extract(value, '$.symbol'), 'price_watch', 'urgent'
+                    FROM json_each(NEW.events);
+                END
+            """)
+            self._ready = True
+        async with self.db.execute("""
+            INSERT INTO mobile_price_watch_change(payload, events)
+            SELECT ?, ? WHERE (SELECT payload FROM app_settings WHERE key='mobile_price_watch') IS ?
+            RETURNING 1
+        """, (payload, json.dumps(events), previous)) as cursor:
+            changed = await cursor.fetchone() is not None
+        await self.db.commit()
+        return changed
+
+
 class SettingsRepository:
     async def get_eqn_news_cursors(self) -> dict[str, int | None]:
         async with self.db.execute("SELECT payload FROM app_settings WHERE key='eqn_news'") as cursor:

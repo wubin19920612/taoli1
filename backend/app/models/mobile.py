@@ -1,7 +1,8 @@
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
+from uuid import UUID, uuid4
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr, StringConstraints, field_validator, model_validator
 
 from app.models.funding_arbitrage import (
     AdlRiskLevel,
@@ -49,6 +50,7 @@ class PushKinds(BaseModel):
     announcement: bool = False
     eqn_news: bool = True
     price: bool = False
+    price_watch: bool = True
     funding: bool = False
     auth: bool = False
     trade_status: bool = False
@@ -56,6 +58,88 @@ class PushKinds(BaseModel):
     premium: bool = False
     spread: bool = False
     general: bool = False
+
+
+WatchSymbol = Annotated[str, StringConstraints(to_upper=True, pattern=r"^[a-zA-Z0-9]{1,20}$", strict=True)]
+
+
+class PriceWatchAlertInput(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    symbol: WatchSymbol
+    kind: Literal["above", "below", "change"]
+    price: float | None = Field(default=None, gt=0, strict=True, allow_inf_nan=False)
+    change_pct: float | None = Field(default=None, ge=0.1, le=50, strict=True, allow_inf_nan=False)
+    window_minutes: int | None = Field(default=None, ge=1, le=60, strict=True)
+    direction: Literal["up", "down", "both"] = "both"
+    rearm: bool = Field(default=False, strict=True)
+    enabled: bool = Field(default=True, strict=True)
+
+    @model_validator(mode="after")
+    def validate_condition(self):
+        if self.kind == "change":
+            if self.change_pct is None or self.window_minutes is None:
+                raise ValueError("涨跌幅提醒须填写幅度和时长")
+        elif self.price is None:
+            raise ValueError("到价提醒须填写目标价")
+        return self
+
+    def condition(self):
+        return self.symbol, self.kind, self.price, self.change_pct, self.window_minutes, self.direction
+
+
+class PriceWatchAlert(PriceWatchAlertInput):
+    state: Literal["armed", "triggered", "cooldown", "rearm_wait"] = "armed"
+    last_triggered_at: AwareDatetime | None = None
+    last_trigger_price: float | None = None
+    cooldown_until: AwareDatetime | None = None
+
+
+class PriceWatchSymbols(BaseModel):
+    symbols: list[WatchSymbol]
+
+    @field_validator("symbols")
+    @classmethod
+    def unique_symbols(cls, symbols):
+        unique = list(dict.fromkeys(symbols))
+        if len(unique) > 20:
+            raise ValueError("最多关注 20 个币")
+        return unique
+
+
+class PriceWatchUpdate(PriceWatchSymbols):
+    alerts: list[PriceWatchAlertInput] = Field(max_length=50)
+
+    @model_validator(mode="after")
+    def validate_alerts(self):
+        if len({alert.id for alert in self.alerts}) != len(self.alerts):
+            raise ValueError("提醒编号重复")
+        if any(alert.symbol not in self.symbols for alert in self.alerts):
+            raise ValueError("提醒币种须在关注列表中")
+        return self
+
+
+class PriceWatchConfig(PriceWatchUpdate):
+    alerts: list[PriceWatchAlert] = Field(max_length=50)
+
+
+class PriceWatchQuote(BaseModel):
+    symbol: str
+    exchange: str | None = None
+    market_type: Literal["spot"] | None = None
+    price: float | None = None
+    bid: float | None = None
+    ask: float | None = None
+    change_5m_pct: float | None = None
+    change_15m_pct: float | None = None
+    change_1h_pct: float | None = None
+    age_seconds: float | None = None
+    stale: bool = True
+    error: str | None = None
+
+
+class PriceWatchQuotes(BaseModel):
+    observed_at: AwareDatetime
+    quotes: list[PriceWatchQuote]
 
 
 class MobileCardControlSwitchUpdate(BaseModel):
