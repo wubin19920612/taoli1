@@ -111,15 +111,19 @@ async def test_mobile_lookup_matches_web_projection_and_order(phone, web_client,
             {**project(group, ("asset_id", "display_name")), "market_count": len(group["market_ids"])}
             for group in expected["asset_groups"]
         ],
-        "markets": [project(row, MARKET_FIELDS) for row in expected["markets"]],
+        "markets": [
+            {**project(row, MARKET_FIELDS), "error": "该交易所数据异常" if row["error"] else None}
+            for row in expected["markets"]
+        ],
         "spreads": [project(row, SPREAD_FIELDS) for row in expected["spreads"]],
         "spread_total": len(expected["spreads"]),
     }
+    assert expected["markets"][1]["error"] == "行情暂不可用"
     assert len(actual["spreads"]) == 3
     assert [row["raw_symbol"] for row in actual["markets"]] == [
         "BTCUSDT", "BTCUSDT", "xyz:BTC", "BTC-USDT-SWAP",
     ]
-    assert actual["markets"][1]["error"] == "行情暂不可用"
+    assert actual["markets"][1]["error"] == "该交易所数据异常"
     assert actual["markets"][1]["data_status"] == "stale"
     assert actual["markets"][2]["dex"] == "xyz"
 
@@ -342,3 +346,32 @@ async def test_mobile_instruments_mask_internal_errors_and_release_quota(
     assert secret not in caplog.text
     clock.monotonic += interval
     assert (await client.get(path)).status_code == 200
+
+
+async def test_mobile_statistics_masks_errors_and_blank_asset_id_still_conflicts(phone, monkeypatch):
+    app, client, clock, _ = phone
+    seed_markets(app, [
+        market(clock.now, "binance", "BTCUSDT"),
+        market(clock.now, "okx", "BTC-USDT-SWAP", asset_id="other"),
+    ], monkeypatch)
+    result = InstrumentStatisticsResult(
+        symbol="BTCUSDT", observed_at=clock.now,
+        markets={"m1": {"error": "ConnectError: https://internal/secret"}, "m2": {"change_1h_pct": 1.0}},
+        spreads={"s1": {"error": "Traceback secret"}},
+    )
+    service = SimpleNamespace(lookup=AsyncMock(return_value=result))
+    monkeypatch.setattr(app.state, "instrument_statistics_service", service)
+
+    conflict = await client.get(MOBILE_STATS, params={"asset_id": "  "})
+    assert conflict.status_code == 409
+    service.lookup.assert_not_awaited()
+
+    clock.monotonic += 5
+    stats = await client.get(MOBILE_STATS, params={"asset_id": "btc"})
+    assert stats.status_code == 200
+    body = stats.json()
+    assert body["markets"]["m1"]["error"] == "历史数据获取失败"
+    assert body["markets"]["m2"]["error"] is None
+    assert body["markets"]["m2"]["change_1h_pct"] == 1.0
+    assert body["spreads"]["s1"]["error"] == "历史数据获取失败"
+    assert "secret" not in stats.text

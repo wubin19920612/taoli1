@@ -19,6 +19,16 @@ from app.models.mobile import (
 router = APIRouter(dependencies=[Depends(require_session)])
 logger = logging.getLogger(__name__)
 MAX_SPREADS = 200
+MARKET_ERROR = "该交易所数据异常"
+STATS_ERROR = "历史数据获取失败"
+
+
+def _blank_to_none(value: str | None) -> str | None:
+    return (value.strip() or None) if value is not None else None
+
+
+def _mask_errors(items: dict, text: str) -> dict:
+    return {key: item.model_copy(update={"error": text}) if item.error else item for key, item in items.items()}
 
 
 @contextmanager
@@ -50,6 +60,7 @@ async def lookup_mobile_instrument(
     dex: str | None = None,
     asset_id: str | None = None,
 ) -> MobileInstrumentLookup:
+    dex, asset_id = _blank_to_none(dex), _blank_to_none(asset_id)
     with _instrument_query(request):
         result = await web._lookup_instrument(
             symbol, request, dex, include_astro_routes=False, asset_id=asset_id,
@@ -71,7 +82,9 @@ async def lookup_mobile_instrument(
                 for group in result.asset_groups
             ],
             markets=[
-                MobileInstrumentMarket.model_validate(market, from_attributes=True)
+                MobileInstrumentMarket.model_validate(market, from_attributes=True).model_copy(
+                    update={"error": MARKET_ERROR if market.error else None},
+                )
                 for market in result.markets
             ],
             spreads=[
@@ -89,8 +102,13 @@ async def mobile_instrument_statistics(
     dex: str | None = None,
     asset_id: str | None = None,
 ) -> InstrumentStatisticsResult:
+    dex, asset_id = _blank_to_none(dex), _blank_to_none(asset_id)
     with _instrument_query(request, upstream=True):
-        return await web.instrument_statistics(symbol, request, dex=dex, asset_id=asset_id)
+        result = await web.instrument_statistics(symbol, request, dex=dex, asset_id=asset_id)
+        return result.model_copy(update={
+            "markets": _mask_errors(result.markets, STATS_ERROR),
+            "spreads": _mask_errors(result.spreads, STATS_ERROR),
+        })
 
 
 @router.get("/instrument-market-cap/{base}", response_model=InstrumentMarketCapResult)
@@ -100,4 +118,4 @@ async def mobile_instrument_market_cap(
     coin_id: str | None = None,
 ) -> InstrumentMarketCapResult:
     with _instrument_query(request, upstream=True):
-        return await web.instrument_market_cap(base, request, coin_id=coin_id)
+        return await web.instrument_market_cap(base, request, coin_id=_blank_to_none(coin_id))
