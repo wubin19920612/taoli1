@@ -58,6 +58,38 @@ class PushKinds(BaseModel):
     premium: bool = False
     spread: bool = False
     general: bool = False
+    app_update: bool = True
+
+
+MAX_MOBILE_APK_SIZE = 60 * 1024 * 1024
+
+
+class MobileAppRelease(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    version_code: int = Field(gt=0)
+    version_name: str = Field(min_length=1, max_length=32)
+    size: int = Field(gt=0, le=MAX_MOBILE_APK_SIZE)
+    sha256: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
+    notes: str = Field(max_length=2000)
+    published_at: AwareDatetime
+
+    @field_validator("published_at")
+    @classmethod
+    def validate_utc(cls, value: datetime) -> datetime:
+        if value.utcoffset() != timedelta(0):
+            raise ValueError("发布时间必须使用 UTC")
+        return value
+
+
+class MobileAppManifest(MobileAppRelease):
+    file: str
+
+    @model_validator(mode="after")
+    def validate_filename(self):
+        if self.file != f"astro-mobile-{self.version_code}.apk":
+            raise ValueError("APK 文件名与版本号不匹配")
+        return self
 
 
 WatchSymbol = Annotated[str, StringConstraints(to_upper=True, pattern=r"^[a-zA-Z0-9]{1,20}$", strict=True)]

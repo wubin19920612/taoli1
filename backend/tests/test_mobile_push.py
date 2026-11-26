@@ -583,6 +583,7 @@ async def test_session_api_validation_upsert_delete_and_revocation(push_api):
         {"kinds": {"fill": True}},
         {"kinds": KINDS | {"fill": 2}},
         {"kinds": KINDS | {"price": "true"}},
+        {"kinds": KINDS | {"app_update": "true"}},
         {"kinds": KINDS | {"unknown": False}},
     ):
         response = await client.post(REGISTER, json=REGISTRATION | changes)
@@ -593,7 +594,9 @@ async def test_session_api_validation_upsert_delete_and_revocation(push_api):
         ).status_code == 200
         (row,) = await service.repo.scan()
         assert row["threshold_pp"] == threshold
-        assert row["kinds"] == KINDS | {"eqn_news": True, "price_watch": True} | dict.fromkeys(
+        assert row["kinds"] == KINDS | {
+            "eqn_news": True, "price_watch": True, "app_update": True,
+        } | dict.fromkeys(
             ("announcement", "price", "funding", "auth", "trade_status", "index_component",
              "premium", "spread", "general"),
             False,
@@ -604,10 +607,11 @@ async def test_session_api_validation_upsert_delete_and_revocation(push_api):
     }
     assert (await client.request("DELETE", REGISTER, json={"token": "phone"})).status_code == 200
     assert not await service.repo.scan()
-    registration = REGISTRATION | {"kinds": KINDS | {"price": True}}
+    registration = REGISTRATION | {"kinds": KINDS | {"price": True, "app_update": False}}
     assert (await client.post(REGISTER, json=registration)).status_code == 200
     (row,) = await service.repo.scan()
     assert row["kinds"]["price"] is True and row["kinds"]["announcement"] is False
+    assert row["kinds"]["app_update"] is False
     assert (await client.post("/api/auth/logout")).status_code == 200
     await service.scan()
     assert await service.repo.get("phone", row["session_hash"]) is None

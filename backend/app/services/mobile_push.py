@@ -306,6 +306,22 @@ class MobilePushService:
         if any(isinstance(result, Exception) for result in results):
             logger.warning("部分设备的紧急推送发送失败")
 
+    async def send_app_update(self, version_name: str, notes: str) -> int:
+        if not self.fcm.enabled:
+            logger.warning("手机更新推送未启用")
+            return 0
+        message = PushMessage("app_update", f"Astro 有新版本 {version_name}", notes[:80])
+        devices = await self.repo.scan()
+        results = await asyncio.gather(
+            *(self._send(device["token"], message, device)
+              for device in devices if device["kinds"].get("app_update", True)),
+            return_exceptions=True,
+        )
+        sent = sum(result.sent for result in results if not isinstance(result, BaseException))
+        if sent != len(results):
+            logger.warning("手机更新推送有 %d 台设备发送失败", len(results) - sent)
+        return sent
+
     async def price_watch_devices(self):
         if not self.fcm.enabled:
             return []

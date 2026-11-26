@@ -10,6 +10,7 @@ from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
 from app.api import (
+    routes_mobile_app,
     routes_mobile_funding,
     routes_mobile_instruments,
     routes_mobile_opportunities,
@@ -56,6 +57,7 @@ from app.services.mobile_summary import (
 from app.services.pair_spread_query import PairSpreadQueryError, PairSpreadQueryService
 
 router = APIRouter(prefix="/mobile")
+router.include_router(routes_mobile_app.router)
 router.include_router(routes_mobile_funding.router)
 router.include_router(routes_mobile_instruments.router)
 router.include_router(routes_mobile_opportunities.router)
