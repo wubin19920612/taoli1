@@ -107,6 +107,7 @@ class PriceWatchSymbols(BaseModel):
 
 
 class PriceWatchUpdate(PriceWatchSymbols):
+    revision: int = Field(ge=0, strict=True)
     alerts: list[PriceWatchAlertInput] = Field(max_length=50)
 
     @model_validator(mode="after")
@@ -119,6 +120,8 @@ class PriceWatchUpdate(PriceWatchSymbols):
 
 
 class PriceWatchConfig(PriceWatchUpdate):
+    # Settings saved before revisions were introduced start at zero.
+    revision: int = Field(default=0, ge=0, strict=True)
     alerts: list[PriceWatchAlert] = Field(max_length=50)
 
 

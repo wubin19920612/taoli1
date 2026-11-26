@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from app.api.mobile_query_utils import MobileQueryLimits
 from app.core.security import require_session
 from app.models.mobile import PriceWatchConfig, PriceWatchQuotes, PriceWatchSymbols, PriceWatchUpdate
+from app.services.mobile_price_watch import PriceWatchRevisionConflict
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,10 @@ async def get_config(request: Request):
 @router.post("", response_model=PriceWatchConfig)
 async def save_config(payload: PriceWatchUpdate, request: Request):
     _limits(request, "save").start(request.state.auth_session_hash, "save")
-    return await request.app.state.mobile_price_watch.save(payload)
+    try:
+        return await request.app.state.mobile_price_watch.save(payload)
+    except PriceWatchRevisionConflict:
+        raise HTTPException(409, "提醒已在别处更新，请刷新后再保存") from None
 
 
 @router.get("/quotes", response_model=PriceWatchQuotes)

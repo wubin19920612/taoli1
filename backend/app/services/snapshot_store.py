@@ -13,6 +13,8 @@ class SnapshotStore:
         self.published_at: datetime | None = None
         self._markets: list[MarketSnapshot] = []
         self._all_markets: list[MarketSnapshot] | None = None
+        self._spot_index_version = -1
+        self._spot_by_base: dict[str, list[MarketSnapshot]] = {}
         self._opportunities: list[Opportunity] = []
         self._opportunities_version = 0
         self._exchange_errors: dict[str, str] = {}
@@ -35,6 +37,20 @@ class SnapshotStore:
         with self._lock:
             markets = self._all_markets if self._all_markets is not None else self._markets
             return list(markets)
+
+    def spot_markets_for(self, symbols: list[str]) -> list[MarketSnapshot]:
+        if not symbols:
+            return []
+        with self._lock:
+            if self._spot_index_version != self.markets_version:
+                markets = self._all_markets if self._all_markets is not None else self._markets
+                index: dict[str, list[MarketSnapshot]] = {}
+                for market in markets:
+                    if market.market_type == "spot":
+                        index.setdefault(market.base, []).append(market)
+                self._spot_by_base = index
+                self._spot_index_version = self.markets_version
+            return [market for symbol in symbols for market in self._spot_by_base.get(symbol, ())]
 
     def set_opportunities(self, opportunities: list[Opportunity]) -> None:
         with self._lock:

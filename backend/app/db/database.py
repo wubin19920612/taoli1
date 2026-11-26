@@ -2,6 +2,7 @@ import logging
 import operator
 import sqlite3
 from collections import deque
+from contextlib import asynccontextmanager
 
 import aiosqlite
 
@@ -89,13 +90,24 @@ class _SnapshotRecoveringConnection(_MaterializingConnection):
 
 
 async def connect_database(
-    path: str, *, recover_stale_snapshots: bool = False
+    path: str, *, recover_stale_snapshots: bool = False, uri: bool = False,
 ) -> aiosqlite.Connection:
     factory = _SnapshotRecoveringConnection if recover_stale_snapshots else _MaterializingConnection
-    db = await aiosqlite.connect(path, factory=factory)
+    db = await aiosqlite.connect(path, factory=factory, uri=uri)
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA synchronous=NORMAL")
     await db.execute("PRAGMA busy_timeout=5000")
     await db.execute("PRAGMA foreign_keys=ON")
     return db
+
+
+@asynccontextmanager
+async def isolated_write_transaction(db: aiosqlite.Connection):
+    """The caller exclusively owns this connection until its write completes."""
+    try:
+        yield
+        await db.commit()
+    except BaseException:
+        await db.rollback()
+        raise

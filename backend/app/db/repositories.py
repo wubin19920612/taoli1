@@ -5,12 +5,14 @@ import json
 import re
 import time
 import unicodedata
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from urllib.parse import urlsplit
 
 import aiosqlite
 
+from app.db.database import isolated_write_transaction
 from app.models.alert import AlertEvent, AlertRule
 from app.models.account_connection import (
     AccountConnectionExchange,
@@ -1438,40 +1440,32 @@ class MobilePriceWatchRepository:
 
     def __init__(self, db: aiosqlite.Connection):
         self.db = db
-        self._ready = False
 
     async def read(self) -> str | None:
         async with self.db.execute("SELECT payload FROM app_settings WHERE key='mobile_price_watch'") as cursor:
             row = await cursor.fetchone()
         return row["payload"] if row else None
 
-    async def replace(self, previous: str | None, payload: str, events: list[dict]) -> bool:
-        if not self._ready:
-            # A connection-local view makes the config and all its events one SQLite
-            # statement, including when :memory: tests share the business connection.
-            await self.db.execute(
-                "CREATE TEMP VIEW IF NOT EXISTS mobile_price_watch_change(payload, events) AS SELECT NULL, NULL"
-            )
-            await self.db.execute("""
-                CREATE TEMP TRIGGER IF NOT EXISTS apply_mobile_price_watch_change
-                INSTEAD OF INSERT ON mobile_price_watch_change BEGIN
-                    INSERT INTO app_settings(key, payload) VALUES ('mobile_price_watch', NEW.payload)
-                    ON CONFLICT(key) DO UPDATE SET payload=excluded.payload;
-                    INSERT INTO mobile_alert_events(created_at, title, body, symbol, kind, level)
-                    SELECT json_extract(value, '$.created_at'), json_extract(value, '$.title'),
-                           json_extract(value, '$.body'), json_extract(value, '$.symbol'), 'price_watch', 'urgent'
-                    FROM json_each(NEW.events);
-                END
-            """)
-            self._ready = True
+    @asynccontextmanager
+    async def replacing(self, previous: str | None, payload: str, events: list[dict]):
+        """Commit the guarded write only after the caller has accepted the change."""
+        async with isolated_write_transaction(self.db):
+            yield await self._write(previous, payload, events)
+
+    async def _write(self, previous: str | None, payload: str, events: list[dict]) -> bool:
         async with self.db.execute("""
-            INSERT INTO mobile_price_watch_change(payload, events)
-            SELECT ?, ? WHERE (SELECT payload FROM app_settings WHERE key='mobile_price_watch') IS ?
-            RETURNING 1
-        """, (payload, json.dumps(events), previous)) as cursor:
-            changed = await cursor.fetchone() is not None
-        await self.db.commit()
-        return changed
+            INSERT INTO app_settings(key, payload)
+            SELECT 'mobile_price_watch', ? WHERE (SELECT payload FROM app_settings WHERE key='mobile_price_watch') IS ?
+            ON CONFLICT(key) DO UPDATE SET payload=excluded.payload
+        """, (payload, previous)) as cursor:
+            if cursor.rowcount == 0:
+                return False
+        if events:
+            await self.db.executemany("""
+                INSERT INTO mobile_alert_events(created_at, title, body, symbol, kind, level)
+                VALUES (:created_at, :title, :body, :symbol, 'price_watch', 'urgent')
+            """, events)
+        return True
 
 
 class SettingsRepository:

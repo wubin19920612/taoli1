@@ -15,6 +15,7 @@ from app.services.fcm import PushMessage, SendResult
 logger = logging.getLogger(__name__)
 SCAN_INTERVAL = 10
 QUEUE_LIMIT = 200
+PRICE_WATCH_BATCH_LIMIT = 16
 FEISHU_SCAN_LIMIT = 50
 HANDLED_TOKEN_LIMIT = 500
 SEND_CONCURRENCY = 4
@@ -43,6 +44,13 @@ class PendingPush:
     notification: PushMessage | BigSpreadPush
     stale_alarm: StaleAlarm | None = None
     from_feishu: bool = False
+
+
+@dataclass(frozen=True)
+class PriceWatchBatch:
+    devices: list[dict]
+    messages: list[PushMessage]
+    committed: asyncio.Future[bool]
 
 
 def _can_drop_feishu(notification: PushMessage | BigSpreadPush) -> bool:
@@ -173,6 +181,7 @@ class MobilePushService:
         self._pending_spreads: WeakValueDictionary[str, BigSpreadPush] = WeakValueDictionary()
         self._feishu_messages: dict[str, FeishuPush] = {}
         self._queue = PushQueue(maxsize=QUEUE_LIMIT)
+        self._price_watch_queue: asyncio.Queue[PriceWatchBatch] = asyncio.Queue(PRICE_WATCH_BATCH_LIMIT)
         self._send_slots = asyncio.Semaphore(SEND_CONCURRENCY)
 
     def queue_big_spread(self, title, body, symbol):
@@ -297,13 +306,29 @@ class MobilePushService:
         if any(isinstance(result, Exception) for result in results):
             logger.warning("部分设备的紧急推送发送失败")
 
-    async def queue_price_watch(self, alert_id, title, body):
+    async def price_watch_devices(self):
         if not self.fcm.enabled:
+            return []
+        return [d for d in await self.repo.scan() if d["kinds"].get("price_watch", True)]
+
+    def queue_price_watch(self, devices, alerts, committed):
+        if not devices:
             return
-        message = PushMessage("price_watch", title, body, channel="urgent", identity=str(alert_id))
-        for device in await self.repo.scan():
-            if device["kinds"].get("price_watch", True):
-                await self._queue.put(PendingPush(device, message))
+        messages = [PushMessage("price_watch", title, body, channel="urgent", identity=str(alert_id))
+                    for alert_id, title, body in alerts]
+        self._price_watch_queue.put_nowait(PriceWatchBatch(devices, messages, committed))
+
+    async def _send_price_watch(self):
+        while True:
+            batch = await self._price_watch_queue.get()
+            try:
+                if await asyncio.shield(batch.committed):
+                    for message in batch.messages:
+                        for device in batch.devices:
+                            await self._deliver(PendingPush(device, message))
+            finally:
+                self._price_watch_queue.task_done()
+                batch = None
 
     def _enqueue(self, pending: PendingPush) -> bool:
         if self._queue.full():
@@ -333,22 +358,26 @@ class MobilePushService:
         message = PushMessage("stale", "行情数据已恢复", "手机概览数据已更新", identity="summary")
         self._enqueue(PendingPush(device, message))
 
+    async def _deliver(self, pending: PendingPush):
+        try:
+            device = pending.device
+            # A pending notification can outlive a registration or preference change.
+            current = await self.repo.get(device["token"], device["session_hash"])
+            if current is None or current["updated_at"] != device["updated_at"]:
+                return
+            result = await self._send(device["token"], pending.notification, current)
+            if pending.stale_alarm is not None and result.sent:
+                pending.stale_alarm.sent = True
+                if pending.stale_alarm.recovered_device is not None:
+                    self._queue_recovery(pending.stale_alarm.recovered_device)
+        except Exception:  # noqa: BLE001 - never log device details or raw provider errors.
+            logger.warning("手机推送发送任务失败")
+
     async def _send_queued(self):
         while True:
             pending = await self._queue.get()
             try:
-                device = pending.device
-                # A pending notification can outlive a registration or preference change.
-                current = await self.repo.get(device["token"], device["session_hash"])
-                if current is None or current["updated_at"] != device["updated_at"]:
-                    continue
-                result = await self._send(device["token"], pending.notification, current)
-                if pending.stale_alarm is not None and result.sent:
-                    pending.stale_alarm.sent = True
-                    if pending.stale_alarm.recovered_device is not None:
-                        self._queue_recovery(pending.stale_alarm.recovered_device)
-            except Exception:  # noqa: BLE001 - never log device details or raw provider errors.
-                logger.warning("手机推送发送任务失败")
+                await self._deliver(pending)
             finally:
                 self._queue.task_done()
                 # Drop the sender's references before blocking on the empty queue.
@@ -417,6 +446,7 @@ class MobilePushService:
 
     async def run(self, stop_event):
         senders = [asyncio.create_task(self._send_queued()) for _ in range(SEND_CONCURRENCY)]
+        senders.append(asyncio.create_task(self._send_price_watch()))
         try:
             while not stop_event.is_set():
                 start = self.clock()

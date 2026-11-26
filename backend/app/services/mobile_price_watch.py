@@ -6,7 +6,6 @@ from collections import deque
 from datetime import datetime, timedelta
 from decimal import Decimal
 from math import isfinite
-from uuid import UUID
 
 from app.exchanges.base import utc_now
 from app.models.mobile import (
@@ -17,7 +16,12 @@ from app.services.quote_age import quote_age_fields
 logger = logging.getLogger(__name__)
 EXCHANGES = {"binance": "币安", "okx": "OKX", "bybit": "Bybit", "bitget": "Bitget", "gate": "Gate"}
 SAMPLE_INTERVAL = timedelta(seconds=10)
+WINDOW_TOLERANCE = timedelta(seconds=30)
 HOUR = timedelta(hours=1)
+
+
+class PriceWatchRevisionConflict(Exception):
+    """The client edited a configuration that has since changed."""
 
 
 def _config(raw: str | None) -> PriceWatchConfig:
@@ -26,7 +30,7 @@ def _config(raw: str | None) -> PriceWatchConfig:
     return PriceWatchConfig.model_validate_json(raw)
 
 
-def _merge(current: PriceWatchConfig, update: PriceWatchUpdate, initially_triggered: set[UUID]) -> PriceWatchConfig:
+def _merge(current: PriceWatchConfig, update: PriceWatchUpdate) -> PriceWatchConfig:
     previous = {alert.id: alert for alert in current.alerts}
     alerts = []
     for item in update.alerts:
@@ -36,14 +40,12 @@ def _merge(current: PriceWatchConfig, update: PriceWatchUpdate, initially_trigge
         else:
             alert = old.model_copy()
             alert.rearm = item.rearm
-            # A trigger that wins a race with this POST owns the newer enabled=false.
-            just_triggered = old.state == "triggered" and item.id not in initially_triggered
-            if "enabled" in item.model_fields_set and not just_triggered:
+            if "enabled" in item.model_fields_set:
                 alert.enabled = item.enabled
-                if item.enabled and old.state == "triggered":
+                if item.enabled and not old.enabled and old.state == "triggered":
                     alert.state = "armed"
         alerts.append(alert)
-    return PriceWatchConfig(symbols=update.symbols, alerts=alerts)
+    return PriceWatchConfig(symbols=update.symbols, alerts=alerts, revision=current.revision + 1)
 
 
 class PriceHistory:
@@ -59,7 +61,7 @@ class PriceHistory:
         cutoff = now - HOUR
         while len(points) >= 2 and points[1][0] <= cutoff:
             points.popleft()
-        if points and points[0][0] < cutoff - SAMPLE_INTERVAL:
+        if points and points[0][0] < cutoff - WINDOW_TOLERANCE:
             points.popleft()
         if quote.price is not None and not quote.stale and (not points or now - points[-1][0] >= SAMPLE_INTERVAL):
             points.append((now, quote.price))
@@ -68,7 +70,7 @@ class PriceHistory:
         target = now - timedelta(minutes=minutes)
         for stamp, base in reversed(self.points.get(symbol, ())):
             if stamp <= target:
-                if stamp < now - HOUR - SAMPLE_INTERVAL:
+                if stamp < target - WINDOW_TOLERANCE:
                     break
                 # Decimal inputs preserve inclusive thresholds such as 100 -> 100.1.
                 start = Decimal(str(base))
@@ -86,6 +88,9 @@ def _price_text(value):
 
 
 def _evaluate(alert, quote, now, history):
+    if alert.state == "cooldown" and now >= alert.cooldown_until:
+        alert.state = "armed"
+        alert.cooldown_until = None
     price = quote.price
     if not alert.enabled or quote.stale or price is None:
         return None
@@ -97,9 +102,6 @@ def _evaluate(alert, quote, now, history):
         ):
             alert.state = "armed"
         return None
-    if alert.state == "cooldown" and now >= alert.cooldown_until:
-        alert.state = "armed"
-        alert.cooldown_until = None
     if alert.state != "armed":
         return None
 
@@ -138,36 +140,28 @@ class MobilePriceWatch:
         self.clock = clock
         self.history = PriceHistory()
         self.lock = asyncio.Lock()
-        self._fire_revision = 0
-        self._last_fire_revision: dict[UUID, int] = {}
 
     async def get(self):
         async with self.lock:
             return _config(await self.repo.read())
 
     async def save(self, update: PriceWatchUpdate):
-        received_revision = self._fire_revision
         async with self.lock:
             raw = await self.repo.read()
             current = _config(raw)
-            # A full-list save may have waited behind a firing tick on this connection.
-            initially_triggered = {
-                alert.id for alert in current.alerts
-                if alert.state == "triggered" and self._last_fire_revision.get(alert.id, 0) <= received_revision
-            }
-            while True:
-                result = _merge(current, update, initially_triggered)
-                if await self.repo.replace(raw, result.model_dump_json(), []):
-                    self.history.retain(result.symbols)
-                    return result
-                raw = await self.repo.read()
-                current = _config(raw)
+            if current.revision != update.revision:
+                raise PriceWatchRevisionConflict
+            result = _merge(current, update)
+            async with self.repo.replacing(raw, result.model_dump_json(), []) as changed:
+                if not changed:
+                    raise PriceWatchRevisionConflict
+            self.history.retain(result.symbols)
+            return result
 
     def _quotes(self, symbols, now, stale_after):
-        wanted = set(symbols)
         books = {}
-        for market in self.store.get_all_markets():
-            if market.base not in wanted or market.market_type != "spot" or market.exchange not in EXCHANGES:
+        for market in self.store.spot_markets_for(symbols):
+            if market.exchange not in EXCHANGES:
                 continue
             raw = market.raw_symbol.upper().replace("-", "").replace("_", "")
             if (market.quote != "USDT" or raw != market.base + "USDT"
@@ -214,28 +208,35 @@ class MobilePriceWatch:
                     self.history.sample(quote, now)
                 messages = []
                 events = []
+                state_changed = False
                 for alert in config.alerts:
+                    previous_state = alert.state
                     message = _evaluate(alert, quotes[alert.symbol], now, self.history)
+                    if alert.state != previous_state:
+                        state_changed = True
                     if message:
                         messages.append((alert.id, *message))
                         title, body = message
                         events.append({"created_at": now.timestamp(), "title": title, "body": body, "symbol": alert.symbol})
-                payload = config.model_dump_json()
-                if payload == raw:
+                if not state_changed and not messages:
                     return
-                if await self.repo.replace(raw, payload, events):
-                    fired = {alert_id for alert_id, _, _ in messages}
-                    self._fire_revision += 1
-                    self._last_fire_revision = {
-                        a.id: self._fire_revision if a.id in fired else self._last_fire_revision.get(a.id, 0)
-                        for a in config.alerts if a.state == "triggered"
-                    }
-                    break
-        for message in messages:
-            try:
-                await self.push.queue_price_watch(*message)
-            except Exception:
-                logger.warning("币价提醒未能加入推送队列")
+                config.revision += 1
+                devices = await self.push.price_watch_devices() if messages else []
+                committed = asyncio.get_running_loop().create_future()
+                try:
+                    async with self.repo.replacing(raw, config.model_dump_json(), events) as changed:
+                        if not changed:
+                            continue
+                        if messages:
+                            self.push.queue_price_watch(devices, messages, committed)
+                    committed.set_result(True)
+                    return
+                except asyncio.QueueFull:
+                    logger.warning("币价提醒推送队列已满，下轮重试")
+                    return
+                finally:
+                    if not committed.done():
+                        committed.set_result(False)
 
     async def run(self, stop_event):
         loop = asyncio.get_running_loop()

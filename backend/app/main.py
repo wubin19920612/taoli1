@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime, timedelta
 from time import monotonic
 from typing import AsyncIterator, Iterator
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, uuid4, uuid5
 from zoneinfo import ZoneInfo
 
 import aiosqlite
@@ -1107,7 +1107,11 @@ def create_app(
             logger.warning("DASHBOARD_PASSWORD is empty; protected API routes deny access unless explicit non-production auth bypass is enabled")
         db_path = _sqlite_path(app_settings)
         _ensure_database_parent(db_path)
-        db = await connect_database(db_path, recover_stale_snapshots=True)
+        # A named memory database gives the price monitor its own transaction
+        # while keeping its settings and events visible on the business connection.
+        in_memory = db_path == ":memory:"
+        business_path = f"file:radar-{uuid4().hex}?mode=memory&cache=shared" if in_memory else db_path
+        db = await connect_database(business_path, recover_stale_snapshots=True, uri=in_memory)
         await initialize_schema(db)
         app.state.db = db
         app.state.shadow_runtime = ShadowRuntime(app_settings, store)
@@ -1181,7 +1185,7 @@ def create_app(
             )
         app.state.settings_repo = SettingsRepository(db)
         # Isolate watch writes from the mobile push repository's schema savepoint.
-        price_watch_db = db if db_path == ":memory:" else await connect_database(db_path)
+        price_watch_db = await connect_database(business_path, uri=in_memory)
         app.state.mobile_price_watch = MobilePriceWatch(
             MobilePriceWatchRepository(price_watch_db), store,
             app.state.settings_repo.get_risk_settings, app.state.mobile_push,
@@ -1520,8 +1524,7 @@ def create_app(
                     await preset_db.close()
                 if attempts_db is not db:
                     await attempts_db.close()
-                if price_watch_db is not db:
-                    await price_watch_db.close()
+                await price_watch_db.close()
                 if mobile_db is not db:
                     await mobile_db.close()
                 await app.state.auth_store.close()
