@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from app.models.market import MarketType
+from app.models.opportunity import OpportunityType
 from app.models.pair_range_backtest import PairRangeBacktestResult
 from app.models.pair_spread import (
     PairSpreadCurrentSnapshot,
@@ -202,6 +203,36 @@ class MobilePremiumIndexResult(BaseModel):
     current: MobilePremiumIndexCurrent | None
     points: list[MobilePremiumIndexPoint]
     warnings: list[str]
+
+
+class MobileOpportunityItem(BaseModel):
+    id: str
+    type: OpportunityType
+    symbol: str
+    buy_exchange: str
+    buy_market_type: MarketType
+    buy_raw_symbol: str | None
+    buy_dex: str | None
+    sell_exchange: str
+    sell_market_type: MarketType
+    sell_raw_symbol: str | None
+    sell_dex: str | None
+    open_spread_pct: float
+    close_spread_pct: float
+    fee_adjusted_open_pct: float
+    min_volume_24h_usdt: float | None
+    net_funding_hourly_pct: float | None
+    net_funding_next_hourly_pct: float | None
+    risk_labels: list[str]
+    max_age_ms: float | None
+    executable: bool
+    fake_flag: bool
+
+
+class MobileOpportunityList(BaseModel):
+    observed_at: datetime
+    total: int
+    items: list[MobileOpportunityItem]
 
 
 class _OpsInput(BaseModel):
