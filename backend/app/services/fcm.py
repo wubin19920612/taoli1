@@ -30,6 +30,7 @@ class PushMessage:
     card_name: str = ""
     channel: str = "normal"
     identity: str = ""
+    symbol: str = ""
 
     @property
     def tag(self):
@@ -40,7 +41,8 @@ class PushMessage:
             "message": {
                 "token": token,
                 "notification": {"title": self.title, "body": self.body},
-                "data": {"kind": self.kind, "card_id": self.card_id, "card_name": self.card_name},
+                "data": {"kind": self.kind, "card_id": self.card_id, "card_name": self.card_name}
+                | ({"symbol": self.symbol} if self.symbol else {}),
                 "android": {
                     "priority": "high",
                     "notification": {

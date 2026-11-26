@@ -314,8 +314,9 @@ class MobilePushService:
     def queue_price_watch(self, devices, alerts, committed):
         if not devices:
             return
-        messages = [PushMessage("price_watch", title, body, channel="urgent", identity=str(alert_id))
-                    for alert_id, title, body in alerts]
+        messages = [PushMessage("price_watch", title, body, channel="urgent", identity=str(alert_id),
+                                symbol=rest[0] if rest else "")
+                    for alert_id, title, body, *rest in alerts]
         self._price_watch_queue.put_nowait(PriceWatchBatch(devices, messages, committed))
 
     async def _send_price_watch(self):

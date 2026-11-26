@@ -380,6 +380,14 @@ async def test_push_device_preferences_and_legacy_default(mobile_app):
     assert all(call.args[1].kind == "price_watch" and call.args[1].channel == "urgent" for call in calls)
 
 
+def test_price_watch_payload_carries_symbol_and_other_kinds_unchanged():
+    from app.services.fcm import PushMessage
+    data = PushMessage("price_watch", "BTC 上穿 100,000", "", channel="urgent", identity="a", symbol="BTC").payload("t")
+    assert data["message"]["data"] == {"kind": "price_watch", "card_id": "", "card_name": "", "symbol": "BTC"}
+    other = PushMessage("fill", "t", "b", card_id="c", card_name="n").payload("t")["message"]["data"]
+    assert other == {"kind": "fill", "card_id": "c", "card_name": "n"}
+
+
 async def test_full_queue_rolls_back_whole_tick_then_sends_once(watch, mobile_app):
     app = mobile_app[0]
     push = watch.push = app.state.mobile_push

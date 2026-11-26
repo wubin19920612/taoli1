@@ -215,7 +215,7 @@ class MobilePriceWatch:
                     if alert.state != previous_state:
                         state_changed = True
                     if message:
-                        messages.append((alert.id, *message))
+                        messages.append((alert.id, *message, alert.symbol))
                         title, body = message
                         events.append({"created_at": now.timestamp(), "title": title, "body": body, "symbol": alert.symbol})
                 if not state_changed and not messages:
