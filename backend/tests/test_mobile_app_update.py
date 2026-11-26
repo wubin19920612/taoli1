@@ -7,6 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 from pathlib import Path
+from stat import S_IFLNK, S_IMODE
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from zipfile import ZipFile
@@ -41,6 +42,32 @@ def make_apk(path, contents=b"apk", *, entries=("AndroidManifest.xml", "classes.
 
 def release(directory, source, code=18, **kwargs):
     return publish_release(directory, source, version_code=code, version_name=f"0.{code}.0", **kwargs)
+
+
+@pytest.fixture
+def make_symlink(monkeypatch):
+    lstat = Path.lstat
+    surrogate_links = set()
+
+    def link_metadata(path):
+        info = lstat(path)
+        if path in surrogate_links:
+            return os.stat_result((S_IFLNK | S_IMODE(info.st_mode), *info[1:]))
+        return info
+
+    def create(path, target):
+        try:
+            path.symlink_to(target)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) != 1314:
+                raise
+            # Windows without symlink privileges: preserve file access through the alias
+            # and substitute only the symlink metadata returned by lstat.
+            os.link(target, path)
+            surrogate_links.add(path)
+            monkeypatch.setattr(Path, "lstat", link_metadata)
+
+    return create
 
 
 async def add_session(store, token, *, expires_in=3600):
@@ -101,7 +128,7 @@ async def test_mobile_update_session_manifest_and_download(update_api, tmp_path)
     assert apk.headers["content-disposition"] == "attachment; filename=astro-mobile-0.18.0.apk"
 
 
-@pytest.mark.parametrize("state", ["no-manifest", "no-apk", "wrong-size"])
+@pytest.mark.parametrize("state", ["no-manifest", "no-apk", "wrong-size", "directory-apk"])
 async def test_mobile_update_missing_release_returns_404(update_api, tmp_path, state):
     _, client, directory = update_api
     if state != "no-manifest":
@@ -109,12 +136,52 @@ async def test_mobile_update_missing_release_returns_404(update_api, tmp_path, s
         apk = directory / manifest.file
         if state == "no-apk":
             apk.unlink()
+        elif state == "directory-apk":
+            apk.unlink()
+            apk.mkdir()
         else:
             apk.write_bytes(b"truncated")
     for endpoint in ("/latest", "/apk"):
         response = await client.get(ROOT + endpoint, headers=cookie())
         assert response.status_code == 404
         assert response.json() == {"detail": "暂无可用更新"}
+
+
+@pytest.mark.parametrize("name", ["latest.json", "astro-mobile-18.apk"])
+@pytest.mark.parametrize("inside", [False, True])
+async def test_mobile_update_rejects_release_symlinks(update_api, tmp_path, make_symlink, name, inside):
+    _, client, directory = update_api
+    source = make_apk(tmp_path / "input.apk")
+    release(directory, source)
+    artifact = directory / name
+    target = (directory if inside else tmp_path) / "linked-target"
+    contents = artifact.read_bytes()
+    artifact.rename(target)
+    make_symlink(artifact, target)
+
+    for endpoint in ("/latest", "/apk"):
+        response = await client.get(ROOT + endpoint, headers=cookie())
+        assert response.status_code == 404
+        assert response.json() == {"detail": "暂无可用更新"}
+    with pytest.raises(MobileAppPublishError, match="不能使用符号链接"):
+        release(directory, source, 19)
+    assert target.read_bytes() == contents
+    assert artifact.is_symlink()
+
+
+@pytest.mark.parametrize("size", [64 * 1024, 64 * 1024 + 1])
+async def test_mobile_update_manifest_size_limit(update_api, tmp_path, caplog, size):
+    _, client, directory = update_api
+    release(directory, make_apk(tmp_path / "input.apk"))
+    manifest = directory / "latest.json"
+    # JSON whitespace keeps the same manifest valid on both sides of the byte limit.
+    manifest.write_bytes(manifest.read_bytes().ljust(size, b" "))
+
+    for endpoint in ("/latest", "/apk"):
+        response = await client.get(ROOT + endpoint, headers=cookie())
+        assert response.status_code == (200 if size == 64 * 1024 else 404)
+    warnings = [record for record in caplog.records if "latest.json 超过 64 KiB" in record.message]
+    assert len(warnings) == (0 if size == 64 * 1024 else 2)
 
 
 @pytest.mark.parametrize("broken", ["malformed", "io-error"])
@@ -266,6 +333,57 @@ def test_mobile_update_publish_keeps_two_versions_and_rejects_downgrade(tmp_path
     assert {path.name for path in directory.glob("*.apk")} == {forced.file, third.file, unrelated.name}
     assert unrelated.read_bytes() == b"keep"
     assert not list(directory.glob("*.tmp"))
+
+
+@pytest.mark.parametrize("name", ["latest.json.tmp", "astro-mobile-19.apk.tmp", "astro-mobile-19.apk", ".previous.apk"])
+def test_mobile_update_publish_refuses_symlink_artifacts(tmp_path, make_symlink, name):
+    directory = tmp_path / "releases"
+    source = make_apk(tmp_path / "input.apk")
+    current = release(directory, source)
+    target = tmp_path / "outside"
+    target.write_bytes(b"do not change")
+    artifact = directory / name
+    make_symlink(artifact, target)
+
+    with pytest.raises(MobileAppPublishError, match="不能使用符号链接"):
+        release(directory, source, 19)
+    assert target.read_bytes() == b"do not change"
+    assert artifact.is_symlink()
+    assert json.loads((directory / "latest.json").read_bytes())["sha256"] == current.sha256
+
+
+def test_mobile_update_publish_refuses_symlink_input(tmp_path, make_symlink):
+    source = make_apk(tmp_path / "input.apk")
+    linked = tmp_path / "linked.apk"
+    make_symlink(linked, source)
+    directory = tmp_path / "releases"
+
+    with pytest.raises(MobileAppPublishError, match="不能使用符号链接"):
+        release(directory, linked)
+    assert not (directory / "latest.json").exists()
+    assert not list(directory.glob("*.apk*"))
+
+
+def test_mobile_update_publish_cleans_residue_before_version_check(tmp_path):
+    directory = tmp_path / "releases"
+    source = make_apk(tmp_path / "input.apk")
+    live = release(directory, source, 18)
+    keep = {live.file, "astro-mobile-100.apk", "astro-mobile-99.apk", "unrelated.apk", "unrelated.tmp"}
+    discard = {
+        "astro-mobile-17.apk", "astro-mobile-20.apk", "astro-mobile-partial.apk",
+        "astro-mobile-19.apk.tmp", "manual.apk.tmp", "latest.json.tmp",
+    }
+    for name in (keep | discard) - {live.file}:
+        (directory / name).write_bytes(b"residue")
+
+    with pytest.raises(MobileAppPublishError, match="必须递增"):
+        release(directory, source, 18)
+
+    assert {path.name for path in directory.iterdir()} == keep | {"latest.json", ".release.lock"}
+    manifest, apk = open_release(directory)
+    with apk:
+        assert manifest == live
+        assert apk.read() == source.read_bytes()
 
 
 @pytest.mark.parametrize("force,missing", [(False, False), (True, False), (True, True)])
