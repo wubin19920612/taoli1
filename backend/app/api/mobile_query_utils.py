@@ -61,6 +61,7 @@ class MobileQueryLimits:
         label: str,
         log_upstream: Callable[[str], None],
         clock: Callable[[], float] | None = None,
+        min_start_interval_seconds: int = MIN_START_INTERVAL_SECONDS,
     ):
         self._active_queries: set[str] = set()
         self._starts: dict[tuple[str, str], float] = {}
@@ -71,16 +72,18 @@ class MobileQueryLimits:
         self._label = label
         self._log_upstream = log_upstream
         self._clock = clock or monotonic
+        self._min_start_interval_seconds = min_start_interval_seconds
 
     def start(self, session: str, operation: str) -> float:
         now = self._clock()
-        cutoff = now - MIN_START_INTERVAL_SECONDS
+        interval = self._min_start_interval_seconds
+        cutoff = now - interval
         if now >= self._cleanup_at:
             self._starts = {key: start for key, start in self._starts.items() if start > cutoff}
-            self._cleanup_at = now + MIN_START_INTERVAL_SECONDS
+            self._cleanup_at = now + interval
         key = (session, operation)
         if self._starts.get(key, cutoff) > cutoff:
-            raise HTTPException(429, "请求过于频繁，请至少间隔 3 秒")
+            raise HTTPException(429, f"请求过于频繁，请至少间隔 {interval} 秒")
         self._starts[key] = now
         return now
 

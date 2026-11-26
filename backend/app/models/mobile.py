@@ -235,6 +235,76 @@ class MobileOpportunityList(BaseModel):
     items: list[MobileOpportunityItem]
 
 
+class MobileInstrumentAssetGroup(BaseModel):
+    asset_id: str | None
+    display_name: str
+    market_count: int
+
+
+class MobileInstrumentMarket(BaseModel):
+    market_id: str | None
+    exchange: str
+    market_type: MarketType
+    raw_symbol: str
+    dex: str | None
+    bid: float
+    ask: float
+    volume_24h_usdt: float | None
+    funding_rate_pct: float | None
+    funding_next_rate_pct: float | None
+    funding_interval_hours: int | None
+    funding_next_time: datetime | None
+    mark_price: float | None
+    index_price: float | None
+    data_status: Literal["live", "stale"]
+    age_seconds: float
+    error: str | None
+    is_estimated: bool
+    asset_name: str | None
+
+
+class MobileInstrumentSpread(BaseModel):
+    id: str
+    opportunity_type: OpportunityType | None
+    buy_exchange: str
+    buy_market_type: MarketType
+    buy_raw_symbol: str
+    buy_dex: str | None
+    sell_exchange: str
+    sell_market_type: MarketType
+    sell_raw_symbol: str
+    sell_dex: str | None
+    buy_ask: float
+    sell_bid: float
+    executable_spread_pct: float
+    close_spread_pct: float
+    mid_spread_pct: float
+    buy_volume_24h_usdt: float | None
+    sell_volume_24h_usdt: float | None
+    buy_funding_rate_pct: float | None
+    sell_funding_rate_pct: float | None
+    buy_funding_interval_hours: int | None
+    sell_funding_interval_hours: int | None
+    astro_supported: bool
+    astro_blocker: str | None
+    reference_only: bool
+    validation_reasons: list[str]
+
+
+class MobileInstrumentLookup(BaseModel):
+    query: str
+    symbol: str
+    base: str
+    observed_at: datetime | None
+    exchange_count: int
+    market_count: int
+    identity_ambiguous: bool
+    asset_groups: list[MobileInstrumentAssetGroup]
+    markets: list[MobileInstrumentMarket]
+    spreads: list[MobileInstrumentSpread]
+    spread_total: int
+
+
 class _OpsInput(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
