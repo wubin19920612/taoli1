@@ -223,29 +223,161 @@ async def test_eqn_feishu_deadline_falls_back_to_phone(monkeypatch):
     notifier.mobile_push.queue_feishu.assert_called_once_with("eqn_news", text, text, urgent=False)
 
 
-async def test_eqn_bounded_queue_drops_oldest_and_warns_once_during_overflow(mobile_app, caplog):
+async def test_eqn_bounded_queue_preserves_old_messages_and_retries_when_full(mobile_app, caplog):
     app, _ = mobile_app
     repo = app.state.settings_repo
     await subscribe(repo, "main")
     notifier = FeishuNotifier(FeishuConfig(webhook_url=""))
     notifier.record_mobile_text = AsyncMock()
     monitor = EqnNewsMonitor(repo, notifier)
-    batches = [page(*(article(i, "main") for i in range(start, start + 20)))
-               for start in range(1, 241, 20)]
-    async with feed(page(), *batches) as (client, _):
-        for _ in range(len(batches) + 1):
+    assert monitor._pending.maxsize == 200
+    monitor._pending = asyncio.Queue(maxsize=4)
+    waiting_batch = page(article(6, "main"), tag="waiting")
+    async with feed(
+        page(), page(article(1, "main"), article(2, "main")),
+        page(*(article(i, "main") for i in (3, 4, 5)), tag="accepted"),
+        waiting_batch, waiting_batch, waiting_batch,
+    ) as (client, requests):
+        for _ in range(5):
             await monitor.poll_once(client)
-    assert await repo.get_eqn_news_cursors() == {"main": 240}
-    assert monitor._pending.qsize() == 200
-    assert caplog.text.count("队列已满") == 1
-    notifier.record_mobile_text.assert_not_awaited()
+        assert await repo.get_eqn_news_cursors() == {"main": 5}
+        assert monitor.etag == "accepted"
+        assert monitor._pending.qsize() == 4
+        assert caplog.text.count("队列已满") == 1
+        assert "丢弃新批次中最旧的 1 条" in caplog.text
+        notifier.record_mobile_text.assert_not_awaited()
+        await drain(monitor)
+        await monitor.poll_once(client)
+        assert requests[-1].headers["If-None-Match"] == "accepted"
+        assert await repo.get_eqn_news_cursors() == {"main": 6}
     await drain(monitor)
     assert [call.args[0].splitlines()[0] for call in notifier.record_mobile_text.await_args_list] == [
-        f"【方程式·方程式新闻】{i}" for i in range(41, 241)
+        f"【方程式·方程式新闻】{i}" for i in (1, 2, 4, 5, 6)
     ]
 
 
-async def test_eqn_poll_continues_during_delivery_and_run_cancels_both(mobile_app, monkeypatch):
+async def test_eqn_rejected_cursor_claim_leaves_queued_messages_intact(mobile_app, monkeypatch, caplog):
+    app, _ = mobile_app
+    repo = app.state.settings_repo
+    await subscribe(repo, "main")
+    notifier = FeishuNotifier(FeishuConfig(webhook_url=""))
+    notifier.record_mobile_text = AsyncMock()
+    monitor = EqnNewsMonitor(repo, notifier)
+    monitor._pending = asyncio.Queue(maxsize=2)
+    async with feed(page(), page(article(1, "main"), tag="accepted"),
+                    page(article(2, "main"), article(3, "main"), tag="rejected")) as (client, _):
+        await monitor.poll_once(client)
+        await monitor.poll_once(client)
+        reject = AsyncMock(return_value=False)
+        monkeypatch.setattr(repo, "replace_eqn_news_cursors", reject)
+        await monitor.poll_once(client)
+    reject.assert_awaited_once_with({"main": 1}, {"main": 3})
+    assert await repo.get_eqn_news_cursors() == {"main": 1}
+    assert monitor.etag == "accepted"
+    assert "队列已满" not in caplog.text
+    await drain(monitor)
+    notifier.record_mobile_text.assert_awaited_once_with("【方程式·方程式新闻】1\nhttps://example.org/1")
+
+
+async def test_eqn_overflow_warning_resets_below_half_without_emptying(caplog):
+    repo = Mock(replace_eqn_news_cursors=AsyncMock(return_value=True))
+    monitor = EqnNewsMonitor(repo, None)
+    monitor._pending = asyncio.Queue(maxsize=4)
+    halfway, below_half, resume = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    release = asyncio.Event()
+
+    async def deliver(text):
+        if text == "2":
+            halfway.set()
+            await resume.wait()
+        if text == "3":
+            below_half.set()
+            await release.wait()
+
+    monitor._deliver = deliver
+    assert await monitor._claim_batch({"main": 0}, {"main": 4}, ["1", "2", "3", "4"])
+    assert not await monitor._claim_batch({"main": 4}, {"main": 5}, ["5"])
+    worker = asyncio.create_task(monitor._deliver_pending())
+    try:
+        await asyncio.wait_for(halfway.wait(), 2)
+        assert monitor._pending.qsize() == 2 and monitor._overflow_warned
+        resume.set()
+        await asyncio.wait_for(below_half.wait(), 2)
+        assert monitor._pending.qsize() == 1 and not monitor._overflow_warned
+        assert await monitor._claim_batch({"main": 4}, {"main": 8}, ["5", "6", "7", "8"])
+        assert caplog.text.count("队列已满") == 2
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+
+
+async def test_eqn_normal_shutdown_drains_pending_and_inflight_delivery():
+    stop = asyncio.Event()
+    delivering, release = asyncio.Event(), asyncio.Event()
+    delivered = []
+    monitor = EqnNewsMonitor(None, None)
+
+    async def poll(stop_event):
+        for text in ("1", "2"):
+            monitor._pending.put_nowait(text)
+        await stop_event.wait()
+
+    async def deliver(text):
+        delivering.set()
+        await release.wait()
+        delivered.append(text)
+
+    monitor._poll = poll
+    monitor._deliver = deliver
+    runner = asyncio.create_task(monitor.run(stop))
+    try:
+        await asyncio.wait_for(delivering.wait(), 2)
+        stop.set()
+        await asyncio.sleep(0)
+        assert not runner.done()
+    finally:
+        release.set()
+        stop.set()
+        await asyncio.wait_for(runner, 2)
+    assert delivered == ["1", "2"]
+    assert monitor._pending.empty()
+
+
+async def test_eqn_shutdown_finishes_in_progress_cursor_claim_and_delivers():
+    claiming, release = asyncio.Event(), asyncio.Event()
+
+    async def claim(previous, updated):
+        claiming.set()
+        await release.wait()
+        return True
+
+    repo = Mock(get_eqn_news_cursors=AsyncMock(return_value={"main": 0}),
+                replace_eqn_news_cursors=AsyncMock(side_effect=claim))
+    notifier = FeishuNotifier(FeishuConfig(webhook_url=""))
+    notifier.record_mobile_text = AsyncMock()
+    monitor = EqnNewsMonitor(repo, notifier)
+
+    async with feed(page(article(1, "main"))) as (client, _):
+        async def poll(stop_event):
+            await monitor.poll_once(client)
+
+        monitor._poll = poll
+        runner = asyncio.create_task(monitor.run(asyncio.Event()))
+        try:
+            await asyncio.wait_for(claiming.wait(), 2)
+            runner.cancel()
+            await asyncio.sleep(0)
+            assert not runner.done()
+            notifier.record_mobile_text.assert_not_awaited()
+        finally:
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(runner, 2)
+    repo.replace_eqn_news_cursors.assert_awaited_once_with({"main": 0}, {"main": 1})
+    notifier.record_mobile_text.assert_awaited_once_with("【方程式·方程式新闻】1\nhttps://example.org/1")
+
+
+async def test_eqn_poll_continues_during_delivery_and_run_cancels_both(mobile_app, monkeypatch, caplog):
     app, _ = mobile_app
     repo = app.state.settings_repo
     await subscribe(repo, "main")
@@ -277,6 +409,8 @@ async def test_eqn_poll_continues_during_delivery_and_run_cancels_both(mobile_ap
     client = httpx.AsyncClient(transport=httpx.MockTransport(dispatch))
     monkeypatch.setattr(eqn_news.httpx, "AsyncClient", lambda **kwargs: client)
     monkeypatch.setattr(eqn_news, "POLL_SECONDS", 0)
+    assert eqn_news.DRAIN_TIMEOUT_SECONDS == 5
+    monkeypatch.setattr(eqn_news, "DRAIN_TIMEOUT_SECONDS", 0.05)
     monitor = EqnNewsMonitor(repo, notifier)
     runner = asyncio.create_task(monitor.run(asyncio.Event()))
     try:
@@ -288,6 +422,7 @@ async def test_eqn_poll_continues_during_delivery_and_run_cancels_both(mobile_ap
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(runner, 1)
     assert send_cancelled.is_set() and fetch_cancelled.is_set()
+    assert "投递超过关闭期限" in caplog.text
 
 
 async def test_eqn_fetch_failures_are_summarized_and_reset_on_recovery(monkeypatch, caplog):

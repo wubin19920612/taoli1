@@ -18,6 +18,7 @@ NEWS_URL = "https://api.eqn.news/public/v1/news"
 POLL_SECONDS = 10
 SEND_LIMIT = 20
 DELIVERY_TIMEOUT_SECONDS = 10
+DRAIN_TIMEOUT_SECONDS = 5
 FAILURE_REPORT_SECONDS = 600
 
 
@@ -47,17 +48,18 @@ def _articles(payload) -> dict[int, dict]:
 
 
 class EqnNewsMonitor:
-    """Deliver at most once. Enqueue a batch, then advance the persisted cursors.
+    """Deliver at most once. Claim the batch before making it available for delivery.
 
-    Delivery waits for the cursor claim to succeed. A crash after the claim can
-    lose queued or in-flight news. Overflow drops the oldest queued articles.
+    A crash after the claim can lose queued or in-flight news. Overflow only
+    drops older articles from the incoming batch when there is room to claim it.
     """
 
     def __init__(self, repo: SettingsRepository, notifier: FeishuNotifier):
         self.repo = repo
         self.notifier = notifier
         self.etag: str | None = None
-        self._pending: asyncio.Queue[tuple[str, asyncio.Future[bool]]] = asyncio.Queue(maxsize=200)
+        self._pending: asyncio.Queue[str] = asyncio.Queue(maxsize=200)
+        self._claim_lock = asyncio.Lock()
         self._overflow_warned = False
         self._failures: dict[str, tuple[float, int]] = {}
 
@@ -87,16 +89,35 @@ class EqnNewsMonitor:
 
     async def _deliver_pending(self) -> None:
         while True:
-            text, claimed = await self._pending.get()
-            if self._pending.empty():
+            text = await self._pending.get()
+            if self._pending.qsize() * 2 < self._pending.maxsize:
                 self._overflow_warned = False
             try:
-                if await asyncio.shield(claimed):
-                    await self._deliver(text)
+                await self._deliver(text)
             except Exception as exc:
                 logger.warning("方程式新闻投递失败 (%s)", type(exc).__name__)
             finally:
                 self._pending.task_done()
+
+    async def _claim_batch(
+        self, cursors: dict[str, int | None], updated: dict[str, int], messages: list[str],
+    ) -> bool:
+        async with self._claim_lock:
+            if messages and self._pending.full():
+                if not self._overflow_warned:
+                    logger.warning("方程式新闻投递队列已满，本轮暂缓提交 %s 条", len(messages))
+                    self._overflow_warned = True
+                return False
+            if not await self.repo.replace_eqn_news_cursors(cursors, updated):
+                return False
+            free = self._pending.maxsize - self._pending.qsize()
+            dropped = max(0, len(messages) - free)
+            for text in messages[dropped:]:
+                self._pending.put_nowait(text)
+            if dropped and not self._overflow_warned:
+                logger.warning("方程式新闻投递队列已满，丢弃新批次中最旧的 %s 条", dropped)
+                self._overflow_warned = True
+            return True
 
     async def poll_once(self, client: httpx.AsyncClient) -> float | None:
         """Return the required backoff after a rate-limited response."""
@@ -134,22 +155,13 @@ class EqnNewsMonitor:
             logger.warning("方程式新闻单轮超过 %s 条，丢弃较早的 %s 条", SEND_LIMIT, len(messages) - SEND_LIMIT)
         updated = {key: max(latest, last or 0) for key, last in cursors.items()}
         if updated != cursors:
-            claimed = asyncio.get_running_loop().create_future()
-            dropped = 0
-            for text in messages[-SEND_LIMIT:]:
-                if self._pending.full():
-                    self._pending.get_nowait()
-                    self._pending.task_done()
-                    dropped += 1
-                self._pending.put_nowait((text, claimed))
-            if dropped and not self._overflow_warned:
-                logger.warning("方程式新闻投递队列已满，丢弃最旧的 %s 条", dropped)
-                self._overflow_warned = True
-            accepted = False
+            # Complete the cursor claim and enqueue together if shutdown interrupts polling.
+            claim = asyncio.create_task(self._claim_batch(cursors, updated, messages[-SEND_LIMIT:]))
             try:
-                accepted = await self.repo.replace_eqn_news_cursors(cursors, updated)
-            finally:
-                claimed.set_result(accepted)
+                accepted = await asyncio.shield(claim)
+            except asyncio.CancelledError:
+                await claim
+                raise
             if not accepted:
                 return None
         self.etag = response.headers.get("etag")
@@ -162,7 +174,13 @@ class EqnNewsMonitor:
             try:
                 await self._poll(stop_event)
             finally:
-                delivery.cancel()
+                try:
+                    async with asyncio.timeout(DRAIN_TIMEOUT_SECONDS):
+                        await self._pending.join()
+                except TimeoutError:
+                    logger.warning("方程式新闻投递超过关闭期限，取消未完成投递")
+                finally:
+                    delivery.cancel()
 
     async def _poll(self, stop_event: asyncio.Event) -> None:
         async with httpx.AsyncClient(timeout=8) as client:

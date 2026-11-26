@@ -46,6 +46,7 @@ from app.api import (
     routes_market_identities,
     routes_mobile,
     routes_mobile_admin,
+    routes_mobile_pair,
     routes_trade_availability,
     stream,
 )
@@ -1466,7 +1467,7 @@ def create_app(
             restore_gc()
             stop_event.set()
             loop_stall_watchdog.stop()
-            await supervisor.stop()
+            await asyncio.gather(supervisor.stop(), routes_mobile_pair.stop_cleanup_tasks(app))
             try:
                 # Both process deadlines begin together; Gate consumes no extra
                 # sequential time from shadow's existing six-second budget.

@@ -5,13 +5,12 @@ from asyncio import wait
 from collections.abc import Callable, Coroutine
 from contextlib import contextmanager
 from datetime import datetime
-from functools import partial
 from itertools import groupby
 from operator import attrgetter
 from time import monotonic
 from typing import Any, Literal, TypeVar
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from pydantic import ValidationError
 
 from app.api import routes_pair_spread as web
@@ -27,11 +26,12 @@ from app.models.mobile import (
     MobilePairSpreadStats,
 )
 from app.models.pair_spread import (
-    HYPERLIQUID_MAIN_DEX,
     PAIR_SPREAD_INTERVAL_OPTIONS,
     PAIR_SPREAD_MAX_INTERVAL_SECONDS,
     PAIR_SPREAD_MIN_HOURS,
     PAIR_SPREAD_MIN_INTERVAL_SECONDS,
+    PairSpreadFundingPoint,
+    PairSpreadLegQuery,
     PairSpreadPoint,
     PairSpreadPreset,
     PairSpreadQueryResult,
@@ -52,6 +52,7 @@ router = APIRouter(prefix="/pair-spread", dependencies=[Depends(require_session)
 logger = logging.getLogger(__name__)
 QUERY_TIMEOUT_SECONDS = 60
 CLOSE_TIMEOUT_SECONDS = 10
+CLEANUP_SHUTDOWN_SECONDS = 5
 MAX_UPSTREAM_TASKS = 32
 MIN_START_INTERVAL_SECONDS = 3
 MAX_POINTS = 800
@@ -120,8 +121,26 @@ async def _close_service(service: PairSpreadQueryService) -> None:
         try:
             async with asyncio.timeout(CLOSE_TIMEOUT_SECONDS):
                 await close()
-        except (Exception, asyncio.CancelledError) as exc:
+        except Exception as exc:
             _log_upstream(f"清理交易所连接失败: {type(exc).__name__}: {exc}")
+
+
+async def _cleanup_upstream(service: PairSpreadQueryService, upstream: asyncio.Task) -> None:
+    try:
+        if not upstream.done():
+            await asyncio.gather(upstream, return_exceptions=True)
+    finally:
+        await _close_service(service)
+
+
+async def stop_cleanup_tasks(app: FastAPI) -> None:
+    tasks = set(getattr(app.state, "mobile_pair_spread_cleanup_tasks", ()))
+    if tasks:
+        for task in tasks:
+            task.cancel()
+        _, pending = await asyncio.wait(tasks, timeout=CLEANUP_SHUTDOWN_SECONDS)
+        if pending:
+            logger.warning("应用关闭时仍有 %s 个手机价差查询清理任务未完成", len(pending))
 
 
 async def _wait_for_disconnect(request: Request) -> None:
@@ -131,11 +150,12 @@ async def _wait_for_disconnect(request: Request) -> None:
 
 
 class _PairSpreadLimits:
-    def __init__(self):
+    def __init__(self, cleanup_tasks: set[asyncio.Task]):
         self._active_queries: set[str] = set()
         self._starts: dict[tuple[str, str], float] = {}
         self._cleanup_at = 0.0
         self._upstream_tasks: set[asyncio.Task] = set()
+        self._cleanup_tasks = cleanup_tasks
 
     def start(self, session: str, operation: str) -> float:
         now = monotonic()
@@ -160,14 +180,27 @@ class _PairSpreadLimits:
         finally:
             self._active_queries.remove(session)
 
-    def _finish_upstream(self, service: PairSpreadQueryService, task: asyncio.Task) -> None:
-        # Retrieve late errors even when the caller has already returned a 504.
-        if not task.cancelled():
-            task.exception()
+    def _start_cleanup(self, service: PairSpreadQueryService, task: asyncio.Task) -> None:
         self._upstream_tasks.remove(task)
-        cleanup = asyncio.create_task(_close_service(service))
+        cleanup = asyncio.create_task(_cleanup_upstream(service, task))
         self._upstream_tasks.add(cleanup)
-        cleanup.add_done_callback(self._upstream_tasks.discard)
+        self._cleanup_tasks.add(cleanup)
+
+        def expire() -> None:
+            if not cleanup.done():
+                self._upstream_tasks.discard(cleanup)
+                logger.warning("手机价差查询清理超过 %s 秒，释放查询名额", CLOSE_TIMEOUT_SECONDS)
+
+        # A slow cancellation may outlive the admission deadline. Keep the
+        # cleanup registered so it can close the service or be cancelled at shutdown.
+        deadline = asyncio.get_running_loop().call_later(CLOSE_TIMEOUT_SECONDS, expire)
+
+        def finished(done: asyncio.Task) -> None:
+            deadline.cancel()
+            self._upstream_tasks.discard(done)
+            self._cleanup_tasks.discard(done)
+
+        cleanup.add_done_callback(finished)
 
     async def run_upstream(
         self,
@@ -176,14 +209,20 @@ class _PairSpreadLimits:
         started: float,
         operation: Callable[[PairSpreadQueryService], Coroutine[Any, Any, _Result]],
     ) -> _Result:
-        # Count running and cancelled operations until their cleanup finishes.
+        # Count running operations and cleanups within their admission deadline.
         if len(self._upstream_tasks) >= MAX_UPSTREAM_TASKS:
             raise HTTPException(503, "交易所查询繁忙，请稍后重试")
         factory = getattr(request.app.state, "pair_spread_query_service_factory", None) or PairSpreadQueryService
         service = factory()
         task = asyncio.create_task(operation(service))
         self._upstream_tasks.add(task)
-        task.add_done_callback(partial(self._finish_upstream, service))
+
+        def retrieve_error(done: asyncio.Task) -> None:
+            # The request may have already returned a 504 or disconnected.
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(retrieve_error)
         key = (request.state.auth_session_hash, name)
         disconnected = asyncio.create_task(_wait_for_disconnect(request))
         try:
@@ -204,6 +243,7 @@ class _PairSpreadLimits:
         finally:
             if not task.done():
                 task.cancel()
+            self._start_cleanup(service, task)
             if not disconnected.done():
                 disconnected.cancel()
                 await asyncio.gather(disconnected, return_exceptions=True)
@@ -213,7 +253,8 @@ def _limits(request: Request) -> _PairSpreadLimits:
     state = request.app.state
     limits = getattr(state, "mobile_pair_spread_limits", None)
     if limits is None:
-        state.mobile_pair_spread_limits = limits = _PairSpreadLimits()
+        state.mobile_pair_spread_cleanup_tasks = set()
+        state.mobile_pair_spread_limits = limits = _PairSpreadLimits(state.mobile_pair_spread_cleanup_tasks)
     return limits
 
 
@@ -258,25 +299,15 @@ def _downsample(points: list[PairSpreadPoint]) -> list[PairSpreadPoint]:
     return [selected[at] for at in sorted(selected)]
 
 
-def _funding_history(result: PairSpreadQueryResult) -> list[MobilePairSpreadFundingPoint]:
-    leg_names: tuple[Literal["leg1"], Literal["leg2"]] = ("leg1", "leg2")
-    legs: dict[tuple[str, str | None, str], Literal["leg1", "leg2"]] = {}
-    for name, leg in zip(leg_names, (result.leg1, result.leg2), strict=True):
-        if leg.market_type == MarketType.FUTURE:
-            dex = (leg.dex or HYPERLIQUID_MAIN_DEX) if leg.exchange == "hyperliquid" else leg.dex
-            legs.setdefault((leg.exchange, dex, leg.symbol), name)
-    history = []
-    for point in reversed(sorted(result.funding_history, key=attrgetter("funding_time"))):
-        dex = (point.dex or HYPERLIQUID_MAIN_DEX) if point.exchange == "hyperliquid" else point.dex
-        leg = legs.get((point.exchange, dex, point.symbol))
-        if leg is not None:
-            history.append(MobilePairSpreadFundingPoint(
-                funding_time=point.funding_time, leg=leg, funding_rate_pct=point.funding_rate_pct,
-            ))
-            if len(history) == MAX_FUNDING_HISTORY:
-                break
-    history.reverse()
-    return history
+def _funding_history(
+    funding: dict[Literal["leg1", "leg2"], list[PairSpreadFundingPoint]],
+) -> list[MobilePairSpreadFundingPoint]:
+    tagged = [(leg, point) for leg, points in funding.items() for point in points]
+    tagged.sort(key=lambda entry: entry[1].funding_time)
+    return [
+        MobilePairSpreadFundingPoint(funding_time=point.funding_time, leg=leg, funding_rate_pct=point.funding_rate_pct)
+        for leg, point in tagged[-MAX_FUNDING_HISTORY:]
+    ]
 
 
 def _mobile_stats(stats: PairSpreadValueStats) -> MobilePairSpreadStats:
@@ -354,6 +385,23 @@ async def query_pair_spread(
             )
         except ValidationError as exc:
             raise HTTPException(422, str(exc)) from exc
+
+        # The service merges and sorts the two histories before returning. Capture
+        # them at the fetch boundary, where each request leg is still distinct.
+        funding: dict[Literal["leg1", "leg2"], list[PairSpreadFundingPoint]] = {"leg1": [], "leg2": []}
+        fetch_funding = service._fetch_funding_with_warning
+
+        async def collect_funding(
+            leg: PairSpreadLegQuery, start: datetime, end: datetime, warnings: list[str],
+        ) -> list[PairSpreadFundingPoint]:
+            points = await fetch_funding(leg, start, end, warnings)
+            if leg is leg1:
+                funding["leg1"].extend(points)
+            elif leg is leg2:
+                funding["leg2"].extend(points)
+            return points
+
+        service._fetch_funding_with_warning = collect_funding
         try:
             result = await service.query(
                 leg1, leg2, hours=hours, interval_minutes=interval_minutes,
@@ -363,11 +411,12 @@ async def query_pair_spread(
         except PairSpreadQueryError as exc:
             _log_upstream(str(exc))
             raise _upstream_failure(leg1.exchange, leg2.exchange) from None
-        funding_history = _funding_history(result)
+        finally:
+            service._fetch_funding_with_warning = fetch_funding
         display_result = apply_pair_spread_symbol_aliases(
             result.model_copy(update={"funding_history": []}), leg1_alias=alias1, leg2_alias=alias2,
         )
-        return _mobile_result(display_result, funding_history)
+        return _mobile_result(display_result, _funding_history(funding))
 
     limits = _limits(request)
     with limits.query(request.state.auth_session_hash) as started:
