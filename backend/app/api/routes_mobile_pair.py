@@ -1,11 +1,8 @@
 import asyncio
 import logging
-import re
 from asyncio import wait
 from collections.abc import Callable, Coroutine
-from contextlib import contextmanager
 from datetime import datetime
-from itertools import groupby
 from operator import attrgetter
 from time import monotonic
 from typing import Any, Literal, TypeVar
@@ -13,7 +10,13 @@ from typing import Any, Literal, TypeVar
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from pydantic import ValidationError
 
+from app.api import mobile_query_utils as query_utils
 from app.api import routes_pair_spread as web
+from app.api.mobile_query_utils import (
+    CLOSE_TIMEOUT_SECONDS,
+    MAX_UPSTREAM_TASKS,
+    QUERY_TIMEOUT_SECONDS,
+)
 from app.core.security import require_session
 from app.exchanges.base import utc_now
 from app.models.market import MarketType
@@ -43,6 +46,8 @@ from app.services.pair_spread_query import (
     REALTIME_CACHE_RESTART_WARNING,
     PairSpreadQueryError,
     PairSpreadQueryService,
+)
+from app.services.pair_spread_query import (
     _scale_current_leg as scale_leg_by_divisor,
 )
 from app.services.symbol_aliases import _scale_current_leg as scale_leg_for_alias
@@ -50,24 +55,10 @@ from app.services.symbol_aliases import apply_pair_spread_symbol_aliases
 
 router = APIRouter(prefix="/pair-spread", dependencies=[Depends(require_session)])
 logger = logging.getLogger(__name__)
-QUERY_TIMEOUT_SECONDS = 60
-CLOSE_TIMEOUT_SECONDS = 10
 CLEANUP_SHUTDOWN_SECONDS = 5
-MAX_UPSTREAM_TASKS = 32
-MIN_START_INTERVAL_SECONDS = 3
-MAX_POINTS = 800
 MAX_FUNDING_HISTORY = 200
 _Result = TypeVar("_Result")
 
-_SENSITIVE_UPSTREAM_TEXT = re.compile(
-    r"""(?ix)
-    -----BEGIN\s+[^\r\n-]*PRIVATE\s+KEY-----[\s\S]*
-    |(?:[a-z][a-z0-9+.-]*://|(?<!\w)/[^/\s]|\?)[^\s'"<>]*
-    |\b(?:bearer|basic)\s+[^\s,;'"<>]+
-    |\b(?:[\w-]*(?:key|token|secret|signature|password|passphrase|cookie|authorization|webhook)|sig)
-        ['"]?\s*[:=][\s\S]*
-    """
-)
 _SAFE_WARNINGS = {
     REALTIME_CACHE_MISS_WARNING,
     REALTIME_CACHE_RESTART_WARNING,
@@ -92,7 +83,7 @@ router.add_api_route(
 
 def _log_upstream(message: str) -> None:
     # Log diagnostics without URLs, credential fields or multiline log injection.
-    logger.warning("Mobile pair spread upstream: %r", _SENSITIVE_UPSTREAM_TEXT.sub("[已隐藏]", message)[:1000])
+    logger.warning("Mobile pair spread upstream: %r", query_utils.redact_upstream(message))
 
 
 def _mobile_warnings(warnings: list[str]) -> list[str]:
@@ -115,92 +106,25 @@ def _upstream_failure(*exchanges: str) -> HTTPException:
     return HTTPException(502, f"交易所数据获取失败（{names}）")
 
 
-async def _close_service(service: PairSpreadQueryService) -> None:
-    close = getattr(service, "aclose", None)
-    if close is not None:
-        try:
-            async with asyncio.timeout(CLOSE_TIMEOUT_SECONDS):
-                await close()
-        except Exception as exc:
-            _log_upstream(f"清理交易所连接失败: {type(exc).__name__}: {exc}")
-
-
-async def _cleanup_upstream(service: PairSpreadQueryService, upstream: asyncio.Task) -> None:
-    try:
-        if not upstream.done():
-            await asyncio.gather(upstream, return_exceptions=True)
-    finally:
-        await _close_service(service)
-
-
 async def stop_cleanup_tasks(app: FastAPI) -> None:
-    tasks = set(getattr(app.state, "mobile_pair_spread_cleanup_tasks", ()))
-    if tasks:
-        for task in tasks:
-            task.cancel()
-        _, pending = await asyncio.wait(tasks, timeout=CLEANUP_SHUTDOWN_SECONDS)
-        if pending:
-            logger.warning("应用关闭时仍有 %s 个手机价差查询清理任务未完成", len(pending))
+    await asyncio.gather(
+        query_utils.stop_cleanup_tasks(
+            getattr(app.state, "mobile_pair_spread_cleanup_tasks", ()),
+            timeout=CLEANUP_SHUTDOWN_SECONDS, logger=logger, label="价差查询",
+        ),
+        query_utils.stop_cleanup_tasks(
+            getattr(app.state, "mobile_premium_index_cleanup_tasks", ()),
+            timeout=CLEANUP_SHUTDOWN_SECONDS, logger=logger, label="溢价指数查询",
+        ),
+    )
 
 
-async def _wait_for_disconnect(request: Request) -> None:
-    # Both endpoints are GETs with no request body consumed by the handler.
-    while (await request.receive())["type"] != "http.disconnect":
-        pass
-
-
-class _PairSpreadLimits:
+class _PairSpreadLimits(query_utils.MobileQueryLimits):
     def __init__(self, cleanup_tasks: set[asyncio.Task]):
-        self._active_queries: set[str] = set()
-        self._starts: dict[tuple[str, str], float] = {}
-        self._cleanup_at = 0.0
-        self._upstream_tasks: set[asyncio.Task] = set()
-        self._cleanup_tasks = cleanup_tasks
-
-    def start(self, session: str, operation: str) -> float:
-        now = monotonic()
-        cutoff = now - MIN_START_INTERVAL_SECONDS
-        if now >= self._cleanup_at:
-            self._starts = {key: start for key, start in self._starts.items() if start > cutoff}
-            self._cleanup_at = now + MIN_START_INTERVAL_SECONDS
-        key = (session, operation)
-        if self._starts.get(key, cutoff) > cutoff:
-            raise HTTPException(429, "请求过于频繁，请至少间隔 3 秒")
-        self._starts[key] = now
-        return now
-
-    @contextmanager
-    def query(self, session: str):
-        if session in self._active_queries:
-            raise HTTPException(429, "上一个查询还在进行")
-        started = self.start(session, "query")
-        self._active_queries.add(session)
-        try:
-            yield started
-        finally:
-            self._active_queries.remove(session)
-
-    def _start_cleanup(self, service: PairSpreadQueryService, task: asyncio.Task) -> None:
-        self._upstream_tasks.remove(task)
-        cleanup = asyncio.create_task(_cleanup_upstream(service, task))
-        self._upstream_tasks.add(cleanup)
-        self._cleanup_tasks.add(cleanup)
-
-        def expire() -> None:
-            if not cleanup.done():
-                self._upstream_tasks.discard(cleanup)
-                logger.warning("手机价差查询清理超过 %s 秒，释放查询名额", CLOSE_TIMEOUT_SECONDS)
-
-        # A slow cancellation may outlive the admission deadline. Keep the
-        # cleanup registered so it can close the service or be cancelled at shutdown.
-        deadline = asyncio.get_running_loop().call_later(CLOSE_TIMEOUT_SECONDS, expire)
-
-        def finished(done: asyncio.Task) -> None:
-            deadline.cancel()
-            self._upstream_tasks.discard(done)
-            self._cleanup_tasks.discard(done)
-
-        cleanup.add_done_callback(finished)
+        super().__init__(
+            cleanup_tasks, logger=logger, label="价差查询", log_upstream=_log_upstream,
+            clock=lambda: monotonic(),
+        )
 
     async def run_upstream(
         self,
@@ -209,44 +133,12 @@ class _PairSpreadLimits:
         started: float,
         operation: Callable[[PairSpreadQueryService], Coroutine[Any, Any, _Result]],
     ) -> _Result:
-        # Count running operations and cleanups within their admission deadline.
-        if len(self._upstream_tasks) >= MAX_UPSTREAM_TASKS:
-            raise HTTPException(503, "交易所查询繁忙，请稍后重试")
         factory = getattr(request.app.state, "pair_spread_query_service_factory", None) or PairSpreadQueryService
-        service = factory()
-        task = asyncio.create_task(operation(service))
-        self._upstream_tasks.add(task)
-
-        def retrieve_error(done: asyncio.Task) -> None:
-            # The request may have already returned a 504 or disconnected.
-            if not done.cancelled():
-                done.exception()
-
-        task.add_done_callback(retrieve_error)
-        key = (request.state.auth_session_hash, name)
-        disconnected = asyncio.create_task(_wait_for_disconnect(request))
-        try:
-            done, _ = await wait({task, disconnected}, timeout=QUERY_TIMEOUT_SECONDS,
-                                 return_when=asyncio.FIRST_COMPLETED)
-            if disconnected in done:
-                disconnected.result()
-                if self._starts.get(key) == started:
-                    self._starts.pop(key)
-                raise HTTPException(499, "客户端已断开连接")
-            if task not in done:
-                raise HTTPException(504, "查询超时，可缩短时长或加大周期")
-            return task.result()
-        except asyncio.CancelledError:
-            if self._starts.get(key) == started:
-                self._starts.pop(key)
-            raise
-        finally:
-            if not task.done():
-                task.cancel()
-            self._start_cleanup(service, task)
-            if not disconnected.done():
-                disconnected.cancel()
-                await asyncio.gather(disconnected, return_exceptions=True)
+        return await self.run(
+            request, name, started, factory, operation, wait_for=wait,
+            query_timeout=QUERY_TIMEOUT_SECONDS, close_timeout=CLOSE_TIMEOUT_SECONDS,
+            max_upstream_tasks=MAX_UPSTREAM_TASKS,
+        )
 
 
 def _limits(request: Request) -> _PairSpreadLimits:
@@ -259,44 +151,7 @@ def _limits(request: Request) -> _PairSpreadLimits:
 
 
 def _downsample(points: list[PairSpreadPoint]) -> list[PairSpreadPoint]:
-    if not points:
-        return []
-    timestamp = attrgetter("bucket_at")
-    spread = attrgetter("spread_pct")
-
-    def magnitude(point: PairSpreadPoint) -> float:
-        return abs(point.spread_pct)
-
-    points = sorted(points, key=timestamp)
-    if len(points) <= MAX_POINTS:
-        selected = {at: max(group, key=magnitude) for at, group in groupby(points, key=timestamp)}
-    else:
-        first, last = points[0], points[-1]
-        start = first.bucket_at
-        span = max((last.bucket_at - start).total_seconds(), 1e-6)
-        # Reserve slots for both endpoints and both global extrema.
-        bucket_count = (MAX_POINTS - 4) // 2
-
-        def bucket(point: PairSpreadPoint) -> int:
-            elapsed = (point.bucket_at - start).total_seconds()
-            return min(bucket_count - 1, int(elapsed / span * bucket_count))
-
-        selected = {first.bucket_at: first, last.bucket_at: last}
-        for _, group in groupby(points, key=bucket):
-            members = list(group)
-            extrema = (min(members, key=spread), max(members, key=spread))
-            for point in sorted(extrema, key=magnitude):
-                selected[point.bucket_at] = point
-
-    # Prefer distinct timestamps for tied extrema. If both can only be represented
-    # at one timestamp, keep the larger absolute spread.
-    low = min(points, key=spread)
-    high = max(points, key=lambda point: (point.spread_pct, point.bucket_at != low.bucket_at))
-    if low.bucket_at == high.bucket_at:
-        low = min(points, key=lambda point: (point.spread_pct, point.bucket_at == high.bucket_at))
-    for point in sorted((low, high), key=magnitude):
-        selected[point.bucket_at] = point
-    return [selected[at] for at in sorted(selected)]
+    return query_utils.downsample(points, timestamp=attrgetter("bucket_at"), value=attrgetter("spread_pct"))
 
 
 def _funding_history(

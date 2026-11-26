@@ -162,6 +162,48 @@ class MobilePairSpreadCurrent(BaseModel):
     spread_pct: float
 
 
+class MobilePremiumIndexPoint(BaseModel):
+    t: datetime
+    pct: float
+    mark: float | None
+    index: float | None
+
+
+class MobilePremiumIndexStats(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    min: float | None
+    max: float | None
+    mean: float | None
+    current: float | None
+
+
+class MobilePremiumIndexCurrent(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    mark_price: float | None
+    index_price: float | None
+    premium_pct: float | None
+    funding_rate_pct: float | None
+    funding_next_rate_pct: float | None
+    funding_next_time: datetime | None
+    funding_interval_hours: float | None
+
+
+class MobilePremiumIndexResult(BaseModel):
+    exchange: str
+    symbol: str
+    dex: str | None
+    hours: int
+    interval_minutes: int
+    observed_at: datetime
+    raw_point_count: int
+    premium_pct: MobilePremiumIndexStats
+    current: MobilePremiumIndexCurrent | None
+    points: list[MobilePremiumIndexPoint]
+    warnings: list[str]
+
+
 class _OpsInput(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
