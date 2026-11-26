@@ -223,20 +223,29 @@ class MobilePriceWatch:
                 config.revision += 1
                 devices = await self.push.price_watch_devices() if messages else []
                 committed = asyncio.get_running_loop().create_future()
+
+                async def commit(raw=raw, config=config, devices=devices, messages=messages,
+                                 events=events, committed=committed) -> bool:
+                    # Owns the batch outcome so cancelling tick() mid-commit cannot drop a committed push.
+                    try:
+                        async with self.repo.replacing(raw, config.model_dump_json(), events) as changed:
+                            if not changed:
+                                return False
+                            if messages:
+                                self.push.queue_price_watch(devices, messages, committed)
+                        committed.set_result(True)
+                        return True
+                    finally:
+                        if not committed.done():
+                            committed.set_result(False)
+
                 try:
-                    async with self.repo.replacing(raw, config.model_dump_json(), events) as changed:
-                        if not changed:
-                            continue
-                        if messages:
-                            self.push.queue_price_watch(devices, messages, committed)
-                    committed.set_result(True)
+                    if not await asyncio.shield(commit()):
+                        continue
                     return
                 except asyncio.QueueFull:
                     logger.warning("币价提醒推送队列已满，下轮重试")
                     return
-                finally:
-                    if not committed.done():
-                        committed.set_result(False)
 
     async def run(self, stop_event):
         loop = asyncio.get_running_loop()

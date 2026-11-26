@@ -433,6 +433,39 @@ async def test_commit_failure_discards_queued_push(watch, mobile_app, monkeypatc
         await asyncio.gather(sender, return_exceptions=True)
 
 
+async def test_cancel_during_commit_still_sends_committed_push_once(watch, mobile_app, monkeypatch):
+    app = mobile_app[0]
+    push = watch.push = app.state.mobile_push
+    registered_devices(push)
+    await watch.save(update(dict(symbol="BTC", kind="above", price=10)))
+    entered, release = asyncio.Event(), asyncio.Event()
+    real_commit = watch.repo.db.commit
+
+    async def slow_commit():
+        entered.set()
+        await release.wait()
+        await real_commit()
+
+    sender = asyncio.create_task(push._send_price_watch())
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(watch.repo.db, "commit", slow_commit)
+            tick = asyncio.create_task(sample(watch, 0, 11))
+            await asyncio.wait_for(entered.wait(), timeout=2)
+            tick.cancel()  # e.g. shutdown cancels the monitor task mid-commit
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await tick
+            await asyncio.sleep(0.05)
+        await asyncio.wait_for(push._price_watch_queue.join(), timeout=2)
+    finally:
+        sender.cancel()
+        await asyncio.gather(sender, return_exceptions=True)
+    assert (await watch.get()).alerts[0].state == "triggered"
+    assert len(await app.state.mobile_alert_repo.list(0, 10)) == 1
+    assert push.fcm.send.await_count == 2
+
+
 async def test_no_short_window_change_after_forty_minute_gap(watch):
     await watch.save(update(dict(symbol="BTC", kind="change", change_pct=1, window_minutes=1)))
     await sample(watch, 0, 100)
