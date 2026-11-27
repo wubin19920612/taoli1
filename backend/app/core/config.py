@@ -103,6 +103,7 @@ class Settings:
     astro_ca_bundle: str = ""
     astro_dry_run_only: bool = True
     mobile_card_control_enabled: bool = False
+    mobile_max_leverage: int = 10
     astro_alert_auto_create: bool = False
     astro_manual_card_create: bool = False
     astro_default_max_trade_usdt: float = 10.0
@@ -387,6 +388,7 @@ def get_settings() -> Settings:
         astro_ca_bundle=os.getenv("ASTRO_CA_BUNDLE", "").strip(),
         astro_dry_run_only=bool_env("ASTRO_DRY_RUN_ONLY", True),
         mobile_card_control_enabled=bool_env("MOBILE_CARD_CONTROL_ENABLED", False),
+        mobile_max_leverage=int(os.getenv("MOBILE_MAX_LEVERAGE", "10")),
         astro_alert_auto_create=bool_env("ASTRO_ALERT_AUTO_CREATE", False),
         astro_manual_card_create=bool_env("ASTRO_MANUAL_CARD_CREATE", False),
         astro_default_max_trade_usdt=float(os.getenv("ASTRO_DEFAULT_MAX_TRADE_USDT", "10")),

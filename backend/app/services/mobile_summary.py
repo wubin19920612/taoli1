@@ -4,6 +4,7 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from functools import cache
 from math import isfinite
 from time import monotonic
@@ -50,6 +51,15 @@ def number(value):
     return parsed if isfinite(parsed) else None
 
 
+def decimal_number(value):
+    if number(value) is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except InvalidOperation:
+        return None
+
+
 def malformed(value):
     # Astro uses "Infinity" as a "never close" sentinel; only unparsable values or NaN are malformed.
     if value in (None, "") or number(value) is not None:
@@ -88,6 +98,17 @@ def condition(pair, field):
     if ratio_mode(pair):
         return spread_pct(value, reference(pair)) if positive(value) else None
     return value * 100 if value is not None else None
+
+
+CONDITION_FIELDS = {"open_condition_pct": "openPosition", "close_condition_pct": "closePosition"}
+AMOUNT_FIELDS = {"max_trade_usdt": "maxTradeUSDT", "min_notional": "minNotional", "max_notional": "maxNotional"}
+
+
+def card_amounts(pair):
+    values = {key: number(pair.get(field)) for key, field in AMOUNT_FIELDS.items()}
+    leverage = decimal_number(pair.get("leverage"))
+    values["leverage"] = int(leverage) if leverage is not None and leverage == leverage.to_integral_value() else None
+    return values
 
 
 @dataclass(frozen=True)
@@ -293,6 +314,7 @@ def build_card(pair, legs, lookup, now, stale_after):
         close_spread_now=close_now,
         open_condition=open_condition,
         close_condition=close_condition,
+        **card_amounts(pair),
         open_auto=open_auto,
         close_auto=close_auto,
         gap_to_open=difference(open_now, open_condition) if open_auto else None,

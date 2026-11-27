@@ -2,7 +2,18 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr, StringConstraints, field_validator, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    FiniteFloat,
+    SecretStr,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
+from pydantic_core import PydanticCustomError
 
 from app.models.funding_arbitrage import (
     AdlRiskLevel,
@@ -537,6 +548,30 @@ class CardControlUpdate(_OpsInput):
     expected: bool
 
 
+CardParam = Literal[
+    "open_condition_pct", "close_condition_pct", "max_trade_usdt", "leverage", "min_notional", "max_notional",
+]
+CARD_PARAM_LABELS: dict[CardParam, str] = {
+    "open_condition_pct": "开仓条件", "close_condition_pct": "清仓条件", "max_trade_usdt": "单次下单",
+    "leverage": "杠杆", "min_notional": "最小持仓", "max_notional": "最大持仓",
+}
+
+
+class CardParamsUpdate(_OpsInput):
+    card_id: CardId
+    changes: dict[CardParam, int | FiniteFloat] = Field(min_length=1)
+    expected: dict[CardParam, int | FiniteFloat | None]
+
+    @model_validator(mode="after")
+    def require_expected(self):
+        for field in self.changes:
+            if field not in self.expected:
+                raise PydanticCustomError(
+                    "missing_card_expected", "{label}缺少预期值", {"label": CARD_PARAM_LABELS[field]},
+                )
+        return self
+
+
 class MobileCard(BaseModel):
     id: str | None = None
     pinned_at: float | None = None
@@ -559,6 +594,10 @@ class MobileCard(BaseModel):
     close_spread_now: float | None = None
     open_condition: float | None
     close_condition: float | None
+    max_trade_usdt: float | None = None
+    leverage: int | None = None
+    min_notional: float | None = None
+    max_notional: float | None = None
     open_auto: bool
     close_auto: bool
     gap_to_open: float | None = None
@@ -583,6 +622,13 @@ class MobileCard(BaseModel):
     next_funding_at_b: datetime | None
     metric_error: str
     quote_age_s: float | None
+
+
+class CardParamsResult(BaseModel):
+    ok: Literal[True] = True
+    card_id: CardId
+    changed: list[CardParam]
+    card: MobileCard
 
 
 class MobileSummary(BaseModel):

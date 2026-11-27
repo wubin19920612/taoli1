@@ -22,9 +22,12 @@ from app.api.routes_astro import list_astro_pairs
 from app.api.routes_pair_spread import _resolved_leg, _symbol_alias_resolver
 from app.core.security import browser_label, client_ip, require_session
 from app.models.mobile import (
+    CARD_PARAM_LABELS,
     EQN_NEWS_CHANNELS,
     CardControlUpdate,
     CardHistory,
+    CardParamsResult,
+    CardParamsUpdate,
     CardPinUpdate,
     DeviceBinding,
     DeviceProof,
@@ -166,6 +169,22 @@ class _CardControlRoute(_MobileInputRoute):
     validation_message = "手机改卡参数无效，请检查输入"
 
     def invalid_input(self, request, exc):
+        if request.url.path == "/api/mobile/cards/params":
+            error = exc.errors()[0]
+            if error["type"] == "missing_card_expected":
+                return HTTPException(422, error["msg"])
+            path = error["loc"][1:]
+            if path and path[0] in ("changes", "expected"):
+                group = "修改项" if path[0] == "changes" else "预期值"
+                if len(path) > 1:
+                    label = CARD_PARAM_LABELS.get(path[1])
+                    if label:
+                        return HTTPException(422, f"{label}的{group}必须是有限数字")
+                    return HTTPException(422, f"{group}含有不支持的字段")
+                return HTTPException(422, "请至少提供一个修改项" if group == "修改项" else "请提供预期值对象")
+            if path == ("card_id",):
+                return HTTPException(422, "卡片编号无效")
+            return HTTPException(422, "改卡请求字段或格式无效")
         if request.url.path == "/api/mobile/ops/unlock" and isinstance(exc.body, dict):
             challenge_id = exc.body.get("challenge_id")
             if isinstance(challenge_id, str) and hasattr(request.state, "auth_session_hash"):
@@ -240,6 +259,11 @@ async def update_ops_settings(payload: UnlockSettings, request: Request):
 @controls.post("/cards/control")
 async def control_card(payload: CardControlUpdate, request: Request):
     return await request.app.state.mobile_card_control.control(request.state.auth_session_hash, payload)
+
+
+@controls.post("/cards/params", response_model=CardParamsResult)
+async def update_card_params(payload: CardParamsUpdate, request: Request):
+    return await request.app.state.mobile_card_control.update_params(request, request.state.auth_session_hash, payload)
 
 
 router.include_router(controls)

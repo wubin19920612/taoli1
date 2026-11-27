@@ -1,4 +1,4 @@
-"""Session-scoped authorization and single-field writes to live Astro cards."""
+"""Session-scoped authorization and serialized writes to live Astro cards."""
 
 import asyncio
 import base64
@@ -7,8 +7,10 @@ import secrets
 import sqlite3
 import time
 from collections import deque
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
@@ -17,8 +19,27 @@ from fastapi import HTTPException
 from starlette.datastructures import State
 
 from app.db.repositories import MobileOpsRepository
-from app.models.mobile import CardControlUpdate, DeviceBinding, DeviceProof, UnlockCode
+from app.models.mobile import (
+    CARD_PARAM_LABELS,
+    CardControlUpdate,
+    CardParamsResult,
+    CardParamsUpdate,
+    DeviceBinding,
+    DeviceProof,
+    UnlockCode,
+)
 from app.services.astro_client import AstroClientError
+from app.services.mobile_summary import (
+    AMOUNT_FIELDS,
+    CONDITION_FIELDS,
+    card_amounts,
+    condition,
+    decimal_number,
+    number,
+    positive,
+    ratio_mode,
+    summary,
+)
 
 logger = logging.getLogger(__name__)
 card_update_logger = logging.getLogger("astro_card_update")
@@ -28,6 +49,9 @@ FIELDS = {
     "disable_close": ("disableClose", "禁止清仓"),
 }
 CONFLICT = "卡片已变化，请刷新"
+CONDITION_TOLERANCE = Decimal("1e-6")
+AMOUNT_TOLERANCE = Decimal("1e-9")
+PARAM_FIELDS = {**CONDITION_FIELDS, **AMOUNT_FIELDS, "leverage": "leverage"}
 
 
 @dataclass(frozen=True)
@@ -71,6 +95,111 @@ async def _latest_pair(client, card_id: str) -> dict:
     if len(pairs) != 1 or not isinstance(pairs[0].get("name"), str) or not pairs[0]["name"].strip():
         raise HTTPException(409, CONFLICT)
     return pairs[0]
+
+
+def _compact_number(value) -> str:
+    fixed = format(Decimal(str(value)), "f")
+    return fixed.rstrip("0").rstrip(".") if "." in fixed else fixed
+
+
+def _param_values(pair: dict) -> dict:
+    return {key: condition(pair, field) for key, field in CONDITION_FIELDS.items()} | card_amounts(pair)
+
+
+def _param_matches(key, current, requested) -> bool:
+    if current is None or requested is None:
+        return current is requested
+    tolerance = CONDITION_TOLERANCE if key in CONDITION_FIELDS else AMOUNT_TOLERANCE
+    return abs(Decimal(str(current)) - Decimal(str(requested))) <= tolerance
+
+
+def _encode_param(pair, key, value, max_leverage) -> str:
+    label = CARD_PARAM_LABELS[key]
+    if key in CONDITION_FIELDS:
+        if not -50 <= value <= 50:
+            raise HTTPException(422, f"{label}必须在 -50% 至 50% 之间")
+        pct = Decimal(str(value))
+        if ratio_mode(pair):
+            ref = positive(pair.get("regressionValue"))
+            if ref is None:
+                raise HTTPException(422, "比值卡缺少基准，请在网页改")
+            raw = Decimal(str(ref)) * (200 - pct) / (200 + pct)
+        else:
+            raw = pct / 100
+        field = CONDITION_FIELDS[key]
+        encoded = _compact_number(raw)
+        if not _param_matches(key, condition(dict(pair, **{field: encoded}), field), value):
+            raise HTTPException(422, f"{label}换算误差过大，请在网页改")
+        return encoded
+    if key == "leverage":
+        if not 1 <= value <= max_leverage or int(value) != value:
+            raise HTTPException(422, f"杠杆必须是 1 至 {max_leverage} 的整数")
+        return str(int(value))
+    if number(value) is None:
+        raise HTTPException(422, f"{label}必须是有限数字")
+    return _compact_number(value)
+
+
+def _validate_final_params(pair, changes):
+    opening, closing = (changes[key] if key in changes else condition(pair, CONDITION_FIELDS[key])
+                        for key in ("open_condition_pct", "close_condition_pct"))
+    if (opening is not None and abs(opening) < 100 and closing is not None and abs(closing) < 100
+            and opening <= closing):
+        raise HTTPException(422, "开仓条件必须大于清仓条件")
+    amounts = {key: decimal_number(changes.get(key, pair.get(field))) for key, field in AMOUNT_FIELDS.items()}
+    for key, value in amounts.items():
+        if value is not None and value <= 0:
+            raise HTTPException(422, f"{CARD_PARAM_LABELS[key]}必须大于 0")
+    maximum = amounts["max_notional"]
+    for key in ("min_notional", "max_trade_usdt"):
+        if maximum is not None and amounts[key] is not None and amounts[key] > maximum:
+            raise HTTPException(422, f"{CARD_PARAM_LABELS[key]}不能大于最大持仓")
+
+
+def _prepare_params(pair: dict, change: CardParamsUpdate, max_leverage: int):
+    current = _param_values(pair)
+    if any(not _param_matches(key, current[key], old) for key, old in change.expected.items()):
+        raise HTTPException(409, CONFLICT)
+    updates, changed = {}, []
+    for key, value in change.changes.items():
+        field = PARAM_FIELDS[key]
+        encoded = _encode_param(pair, key, value, max_leverage)
+        if key in CONDITION_FIELDS:
+            unchanged = _param_matches(key, current[key], value)
+        else:
+            unchanged = current[key] is not None and Decimal(encoded) in (
+                Decimal(str(current[key])), decimal_number(pair.get(field)),
+            )
+        if not unchanged:
+            updates[field] = encoded
+            changed.append(key)
+    updated = dict(pair, **updates)
+    _validate_final_params(pair, change.changes)
+    _validate_final_params(updated, {})
+    return current, updated, changed
+
+
+def _notice_percent(value):
+    if value is None:
+        return "不自动"
+    whole, fraction = f"{value:.6f}".split(".")
+    return f"{whole}.{fraction.rstrip('0').ljust(2, '0')}%"
+
+
+def _param_notice(current, changes, changed):
+    audit, parts = [], []
+    for key in changed:
+        old, new = current[key], changes[key]
+        before = _compact_number(old) if old is not None else "null"
+        after = _compact_number(new)
+        audit.append(f"{key}:{before}→{after}")
+        if key in CONDITION_FIELDS:
+            transition = f"{_notice_percent(old)} → {_notice_percent(new)}"
+        else:
+            unit = "倍" if key == "leverage" else "U"
+            transition = f"{before if old is not None else '未设置'} → {after} {unit}"
+        parts.append(f"{CARD_PARAM_LABELS[key]} {transition}")
+    return ",".join(audit), "；".join(parts) + "（手机）"
 
 
 class MobileCardControl:
@@ -232,63 +361,92 @@ class MobileCardControl:
             raise HTTPException(429, f"每分钟最多操作{limit}次，请稍后再试")
         attempts.append(now)
 
-    def _control_method(self, session: str, change: CardControlUpdate) -> str:
-        if change.field == "disable_open" and change.expected is False and change.value is True:
+    def _control_method(self, session: str, change: CardControlUpdate | CardParamsUpdate) -> str:
+        if (isinstance(change, CardControlUpdate) and change.field == "disable_open"
+                and change.expected is False and change.value is True):
             return "免解锁"
         return self.require_unlock(session)
 
-    async def _record_change(self, name: str, change: CardControlUpdate, label: str, method: str):
-        card_update_logger.info(
-            "astro_card_update pair=%s field=%s before=%s after=%s auth=%s",
-            name, change.field, change.expected, change.value, method,
-        )
-        on, off = ("运行", "暂停") if change.field == "status" else ("开", "关")
-        transition = f"{off}→{on}" if change.value else f"{on}→{off}"
-        title = f"手机修改：{name} {label} {transition}"
-        body = f"验证方式：{method}"
+    async def _record_change(self, card_id: str, name: str, title: str, body: str) -> bool:
         try:
             await self.state.mobile_alert_repo.record(
                 kind="card_control", title=title, body=body, level="urgent", card_name=name,
             )
         except (sqlite3.Error, ValueError):  # aiosqlite raises ValueError for a closed connection.
-            logger.error("手机改卡成功，提醒记录写入失败 card_id=%s", change.card_id)
-            return title, body, False
-        return title, body, True
+            logger.error("手机改卡成功，提醒记录写入失败 card_id=%s", card_id)
+            return False
+        return True
 
-    async def control(self, session: str, change: CardControlUpdate) -> dict:
+    async def _write_method(self, session, change):
+        if not await self.control_enabled():
+            raise HTTPException(503, "手机改卡未启用")
+        return self._control_method(session, change)
+
+    @asynccontextmanager
+    async def _locked_card(self, session: str, change: CardControlUpdate | CardParamsUpdate):
         self._admit_attempt(self._attempts, session, 20)
         self._control_method(session, change)
         client, service = self.state.astro_client, self.state.astro_alert_service
         if service is None or not hasattr(service, "pair_lock"):
             raise HTTPException(503, "Astro 卡片锁未就绪")
-        field, label = FIELDS[change.field]
-        result = {"ok": True, "card_id": change.card_id, "field": change.field, "value": change.value}
         try:
             # The request has only the ID. Discover its lock name, then discard that snapshot.
             name = (await _latest_pair(client, change.card_id))["name"]
             async with service.pair_lock(name):
                 pair = await _latest_pair(client, change.card_id)
-                if not await self.control_enabled():
-                    raise HTTPException(503, "手机改卡未启用")
-                method = self._control_method(session, change)
-                # Identity comparison also rejects absent and non-boolean upstream values.
-                if pair["name"] != name or pair.get(field) is not change.expected:
+                method = await self._write_method(session, change)
+                if pair["name"] != name:
                     raise HTTPException(409, CONFLICT)
-                if change.expected is change.value:
-                    return dict(result, changed=False)
-                await client.update_pair(dict(pair, **{field: change.value}))
-                title, body, recorded = await self._record_change(name, change, label, method)
+                yield client, pair, method
         except AstroClientError as exc:
             logger.warning("Astro 拒绝修改（HTTP %s）: %s", exc.status_code, exc.message)
             raise HTTPException(exc.status_code, f"Astro 拒绝修改（HTTP {exc.status_code}）") from None
 
+    async def _notify_change(self, card_id, name, title, body, recorded):
         # FCM may take seconds. Release the shared Astro write lock before sending.
         try:
             await self.state.mobile_push.send_urgent(
-                kind="card_control", title=title, body=body, card_id=change.card_id, card_name=name,
+                kind="card_control", title=title, body=body, card_id=card_id, card_name=name,
             )
         except Exception:  # noqa: BLE001 - a notification failure must preserve the confirmed write.
-            logger.warning("手机改卡成功，紧急推送失败 card_id=%s", change.card_id)
+            logger.warning("手机改卡成功，紧急推送失败 card_id=%s", card_id)
         if not recorded:
             raise HTTPException(503, "卡片已修改，提醒记录写入失败，请刷新")
+
+    async def control(self, session: str, change: CardControlUpdate) -> dict:
+        field, label = FIELDS[change.field]
+        result = {"ok": True, "card_id": change.card_id, "field": change.field, "value": change.value}
+        async with self._locked_card(session, change) as (client, pair, method):
+            if pair.get(field) is not change.expected:
+                raise HTTPException(409, CONFLICT)
+            if change.expected is change.value:
+                return dict(result, changed=False)
+            await client.update_pair(dict(pair, **{field: change.value}))
+            name = pair["name"]
+            card_update_logger.info(
+                "astro_card_update pair=%s field=%s before=%s after=%s auth=%s",
+                name, change.field, change.expected, change.value, method,
+            )
+            on, off = ("运行", "暂停") if change.field == "status" else ("开", "关")
+            transition = f"{off}→{on}" if change.value else f"{on}→{off}"
+            title, body = f"手机修改：{name} {label} {transition}", f"验证方式：{method}"
+            recorded = await self._record_change(change.card_id, name, title, body)
+        await self._notify_change(change.card_id, name, title, body, recorded)
         return dict(result, changed=True)
+
+    async def update_params(self, request, session: str, change: CardParamsUpdate) -> CardParamsResult:
+        async with self._locked_card(session, change) as (client, pair, _):
+            current, updated, changed = _prepare_params(pair, change, self.state.settings.mobile_max_leverage)
+            card, = (await summary(request, [updated])).cards
+            result = CardParamsResult(card_id=change.card_id, changed=changed, card=card)
+            method = await self._write_method(session, change)
+            if not changed:
+                return result
+            name = pair["name"]
+            title = f"{name} 参数已修改"
+            audit, body = _param_notice(current, change.changes, changed)
+            await client.update_pair(updated)
+            card_update_logger.info("astro_card_params pair=%s changes=%s auth=%s", " ".join(name.splitlines()), audit, method)
+            recorded = await self._record_change(change.card_id, name, title, body)
+        await self._notify_change(change.card_id, name, title, body, recorded)
+        return result

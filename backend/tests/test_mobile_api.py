@@ -501,3 +501,20 @@ async def test_malformed_cards_leave_summary_available(mobile_app):
     assert cards[0]["metric_error"] == "未找到 Gate 永续实时行情"
     assert all(card["metric_error"] == "卡片数据格式异常" for card in cards[1:])
     assert cards[2]["name"] == "" and cards[3]["open_condition"] is None
+
+
+async def test_summary_card_amounts_and_leverage(mobile_app):
+    app, client = mobile_app
+    pair = {"name": "BTC", "type": "FF", "buyEx": "gate", "sellEx": "binance"}
+    app.state.astro_client.list_pairs_cached.return_value = [
+        dict(pair, id="valid", maxTradeUSDT="10.25", leverage="3.0", minNotional=5, maxNotional="1e3"),
+        dict(pair, id="invalid", maxTradeUSDT=True, leverage="2.5", minNotional="NaN", maxNotional="Infinity"),
+        dict(pair, id="fraction", leverage="2.0000000000000001"),
+        dict(pair, id="missing"),
+    ]
+    response = await client.get("/api/mobile/summary", headers={"X-Api-Token": "a" * 64})
+    assert response.status_code == 200
+    fields = ("max_trade_usdt", "leverage", "min_notional", "max_notional")
+    assert {card["id"]: tuple(card[key] for key in fields) for card in response.json()["cards"]} == {
+        "valid": (10.25, 3, 5, 1000), "invalid": (None,) * 4, "fraction": (None,) * 4, "missing": (None,) * 4,
+    }
