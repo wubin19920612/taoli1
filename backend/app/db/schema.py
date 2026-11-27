@@ -111,6 +111,16 @@ async def _ensure_oil_news_columns(db: aiosqlite.Connection) -> None:
         await db.execute(f"ALTER TABLE oil_news_items ADD COLUMN {name} {ddl}")
 
 
+async def _ensure_mobile_inbox_session_hash(db: aiosqlite.Connection) -> None:
+    async with db.execute("PRAGMA table_info(mobile_inbox_items)") as cursor:
+        columns = {row[1] for row in await cursor.fetchall()}
+    if "session_hash" not in columns:
+        await db.execute("ALTER TABLE mobile_inbox_items ADD COLUMN session_hash TEXT NOT NULL DEFAULT ''")
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mobile_inbox_session_created_at ON mobile_inbox_items(session_hash, created_at)",
+    )
+
+
 async def initialize_schema(db: aiosqlite.Connection) -> None:
     await db.executescript(
         """
@@ -145,6 +155,20 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
         CREATE TABLE IF NOT EXISTS mobile_card_pins (
             card_id TEXT PRIMARY KEY NOT NULL,
             pinned_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS mobile_inbox_items (
+            id TEXT PRIMARY KEY NOT NULL,
+            client_id TEXT UNIQUE NOT NULL,
+            session_hash TEXT NOT NULL,
+            created_at INTEGER UNIQUE NOT NULL,
+            text TEXT,
+            note TEXT,
+            source_app TEXT,
+            images TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'researched', 'dropped')),
+            result TEXT,
+            synced_at INTEGER,
+            files_purged_at INTEGER
         );
         CREATE TABLE IF NOT EXISTS mobile_ops_devices (
             device_id TEXT PRIMARY KEY, public_key TEXT NOT NULL, label TEXT NOT NULL,
@@ -749,6 +773,7 @@ async def initialize_schema(db: aiosqlite.Connection) -> None:
     await _ensure_second_level_sample_columns(db)
     await _ensure_pair_spread_funding_columns(db)
     await _ensure_oil_news_columns(db)
+    await _ensure_mobile_inbox_session_hash(db)
     await _migrate_alert_rule_excluded_labels(db)
     from app.db.retired_squeeze_schema import initialize_squeeze_schema
 

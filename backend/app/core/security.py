@@ -1,5 +1,6 @@
 import hmac
 import ipaddress
+import re
 import time
 
 from fastapi import HTTPException, Request
@@ -68,10 +69,16 @@ def browser_label(request: Request) -> str:
     return f"{browser} / {platform}"
 
 
+_INBOX_ITEM_PATH = re.compile(r"/api/mobile/inbox/[0-9a-fA-F-]{36}")
+
+
 def _mobile_route(request: Request) -> bool:
     path = request.url.path
     if request.method == "GET":
         return path.startswith("/api/mobile/") or path == "/api/health" or path.startswith("/api/health/")
+    # P25 share inbox: low-risk personal notes, no trading effect.
+    if request.method == "DELETE" and _INBOX_ITEM_PATH.fullmatch(path):
+        return True
     return (request.method, path) in {
         ("POST", "/api/auth/logout"),
         ("POST", "/api/mobile/pins"),
@@ -89,6 +96,7 @@ def _mobile_route(request: Request) -> bool:
         ("POST", "/api/mobile/ops/kill"),
         ("POST", "/api/mobile/cards/control"),
         ("POST", "/api/mobile/cards/params"),
+        ("POST", "/api/mobile/inbox"),
     }
 
 

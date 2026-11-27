@@ -1,12 +1,17 @@
 import asyncio
 import sqlite3
 from collections import deque
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
+from datetime import datetime
+from pathlib import Path as FilePath
 from time import monotonic
 from typing import Literal
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from anyio import open_file
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Path, Query, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
 from pydantic import ValidationError
 
@@ -44,9 +49,11 @@ from app.models.mobile import (
     UnlockCode,
     UnlockSettings,
 )
+from app.models.mobile_inbox import MAX_IMAGES, InboxItem
 from app.models.pair_range_backtest import PairRangeBacktestRequest
 from app.models.pair_spread import PairSpreadLegQuery
 from app.models.settings import FeeSettings
+from app.services.mobile_inbox import CHUNK_SIZE, INVALID_FORM, InboxError
 from app.services.mobile_summary import (
     condition,
     legs_for,
@@ -144,6 +151,82 @@ async def update_pin(payload: CardPinUpdate, request: Request) -> dict[str, dict
 
 
 router.include_router(pins)
+
+
+class _InboxRoute(_MobileInputRoute):
+    validation_message = INVALID_FORM
+
+    def get_route_handler(self):
+        handle = super().get_route_handler()
+
+        async def handle_request(request):
+            try:
+                return await handle(request)
+            except InboxError as exc:
+                raise HTTPException(exc.status, str(exc)) from None
+
+        return handle_request
+
+
+@asynccontextmanager
+async def _inbox_lifespan(app: FastAPI):
+    await app.state.mobile_inbox.cleanup_startup()
+    yield
+
+
+class _InboxImageResponse(Response):
+    def __init__(self, path: FilePath, media_type: str):
+        super().__init__(media_type=media_type)
+        self.path = path
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            source = await open_file(self.path, "rb")
+        except (FileNotFoundError, NotADirectoryError, IsADirectoryError):
+            response = JSONResponse({"detail": "收件箱图片已清理"}, status_code=410)
+            await response(scope, receive, send)
+            return
+
+        async def chunks():
+            while chunk := await source.read(CHUNK_SIZE):
+                yield chunk
+
+        async with source:
+            response = StreamingResponse(chunks(), media_type=self.media_type,
+                                         headers={"X-Content-Type-Options": "nosniff"})
+            await response(scope, receive, send)
+
+
+inbox = APIRouter(prefix="/inbox", dependencies=[Depends(require_session)], route_class=_InboxRoute,
+                  lifespan=_inbox_lifespan)
+
+
+@inbox.post("")
+async def create_inbox_item(request: Request) -> InboxItem:
+    return await request.app.state.mobile_inbox.receive(
+        request.headers.get("content-type", ""), request.stream(), request.state.auth_session_hash,
+    )
+
+
+@inbox.get("")
+async def list_inbox_items(request: Request, limit: int = Query(50, ge=1, le=200),
+                           before: datetime | None = None) -> list[InboxItem]:
+    return await request.app.state.mobile_inbox.list_items(limit, before)
+
+
+@inbox.get("/{item_id}/images/{number}")
+async def get_inbox_image(request: Request, item_id: UUID, number: int = Path(ge=1, le=MAX_IMAGES)):
+    path, media_type = await request.app.state.mobile_inbox.image(item_id, number)
+    return _InboxImageResponse(path, media_type)
+
+
+@inbox.delete("/{item_id}")
+async def delete_inbox_item(request: Request, item_id: UUID) -> dict[str, bool]:
+    await request.app.state.mobile_inbox.delete(item_id)
+    return {"ok": True}
+
+
+router.include_router(inbox)
 
 eqn_news = APIRouter(prefix="/eqn-news", dependencies=[Depends(require_session)])
 

@@ -114,6 +114,7 @@ from app.services.collector import MarketCollector, default_exchange_adapters, r
 from app.services.data_filters import filter_opportunities
 from app.services.feishu import FeishuConfig, FeishuNotifier
 from app.services.eqn_news import EqnNewsMonitor
+from app.services.mobile_inbox import MobileInbox
 from app.services.fcm import FcmClient
 from app.services.mobile_card_control import MobileCardControl
 from app.services.mobile_price_watch import MobilePriceWatch
@@ -1132,6 +1133,9 @@ def create_app(
             mobile_db.row_factory = aiosqlite.Row
         app.state.mobile_alert_repo = MobileAlertRepository(mobile_db)
         app.state.mobile_pins_repo = MobilePinsRepository(mobile_db)
+        inbox_db = await aiosqlite.connect(business_path, isolation_level=None, uri=in_memory)
+        inbox_db.row_factory = aiosqlite.Row
+        app.state.mobile_inbox = MobileInbox(inbox_db, app_settings.mobile_inbox_dir)
         app.state.mobile_push_repo = MobilePushRepository(
             mobile_db, app.state.auth_store.db if db_path == ":memory:" else None,
         )
@@ -1527,6 +1531,7 @@ def create_app(
                 await price_watch_db.close()
                 if mobile_db is not db:
                     await mobile_db.close()
+                await inbox_db.close()
                 await app.state.auth_store.close()
                 await db.close()
 

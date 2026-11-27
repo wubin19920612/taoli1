@@ -68,6 +68,7 @@ class Settings:
     feishu_webhook_url: str = ""
     fcm_service_account_json_b64: str = field(default="", repr=False)
     mobile_app_dir: str = "/data/mobile-app"
+    mobile_inbox_dir: str = "/data/mobile-inbox"
     feishu_secret: str = ""
     feishu_app_id: str = ""
     feishu_app_secret: str = ""
@@ -345,6 +346,7 @@ def get_settings() -> Settings:
         feishu_webhook_url=os.getenv("FEISHU_WEBHOOK_URL", ""),
         fcm_service_account_json_b64=os.getenv("FCM_SERVICE_ACCOUNT_JSON_B64", "").strip(),
         mobile_app_dir=os.getenv("MOBILE_APP_DIR", Settings.mobile_app_dir),
+        mobile_inbox_dir=os.getenv("MOBILE_INBOX_DIR", Settings.mobile_inbox_dir),
         feishu_secret=os.getenv("FEISHU_SECRET", ""),
         feishu_app_id=os.getenv("FEISHU_APP_ID", "").strip(),
         feishu_app_secret=os.getenv("FEISHU_APP_SECRET", "").strip(),
