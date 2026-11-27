@@ -150,10 +150,10 @@ def _validate_final_params(pair, changes):
     for key, value in amounts.items():
         if value is not None and value <= 0:
             raise HTTPException(422, f"{CARD_PARAM_LABELS[key]}必须大于 0")
-    maximum = amounts["max_notional"]
-    for key in ("min_notional", "max_trade_usdt"):
-        if maximum is not None and amounts[key] is not None and amounts[key] > maximum:
-            raise HTTPException(422, f"{CARD_PARAM_LABELS[key]}不能大于最大持仓")
+    # 单次下单金额大于最大持仓在 Astro 里是常态（默认 20000，按剩余额度截断），不校验
+    maximum, minimum = amounts["max_notional"], amounts["min_notional"]
+    if maximum is not None and minimum is not None and minimum > maximum:
+        raise HTTPException(422, f"{CARD_PARAM_LABELS['min_notional']}不能大于最大持仓")
 
 
 def _prepare_params(pair: dict, change: CardParamsUpdate, max_leverage: int):

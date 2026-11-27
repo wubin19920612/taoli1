@@ -80,7 +80,7 @@ async def test_validates_all_fields_and_final_relationships_before_any_write(unl
         ({"close_condition_pct": 50.1}, "清仓条件"), ({"leverage": 1.5}, "杠杆"),
         ({"leverage": 0}, "杠杆"), ({"leverage": 11}, "杠杆"),
         ({"min_notional": 0}, "最小持仓"), ({"max_trade_usdt": -1}, "单次下单"),
-        ({"min_notional": 61}, "最小持仓"), ({"max_trade_usdt": 61}, "单次下单"),
+        ({"min_notional": 61}, "最小持仓"),
         ({"max_notional": 8}, "最大持仓"),
         ({"max_notional": 90, "min_notional": 91, "leverage": 5}, "最小持仓"),
     ]:
@@ -281,7 +281,7 @@ async def test_amount_order_uses_exact_stored_limit_not_rounded_display_float(un
     app, client = unlocked
     astro = app.state.astro_client
     astro.list_pairs.return_value = [dict(CARD, maxNotional="9007199254740995")]
-    response = await client.post(PARAMS, json=payload({"max_trade_usdt": 9007199254740996}))
+    response = await client.post(PARAMS, json=payload({"min_notional": 9007199254740996}))
     assert response.status_code == 422 and "最大持仓" in response.json()["detail"]
     astro.update_pair.assert_not_awaited()
 
@@ -341,3 +341,16 @@ async def test_concurrent_edits_with_same_expected_only_commit_once(unlocked):
     assert str(next(response for response in responses if response.status_code == 200).json()["card"]["leverage"]) == latest[0]["leverage"]
     astro.update_pair.assert_awaited_once()
     app.state.mobile_push.send_urgent.assert_awaited_once()
+
+
+async def test_max_trade_above_max_notional_is_allowed(unlocked):
+    app, client = unlocked
+    big = dict(CARD, maxTradeUSDT="20000")
+    app.state.astro_client.list_pairs.side_effect = None
+    app.state.astro_client.list_pairs.return_value = [big]
+    response = await client.post(PARAMS, json={"card_id": CARD["id"], "changes": {"open_condition_pct": 2.3},
+                                               "expected": {"open_condition_pct": 2.55}})
+    assert response.status_code == 200, response.text
+    response = await client.post(PARAMS, json={"card_id": CARD["id"], "changes": {"max_trade_usdt": 61},
+                                               "expected": {"max_trade_usdt": 20000}})
+    assert response.status_code == 200, response.text
