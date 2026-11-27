@@ -213,6 +213,34 @@ async def test_old_db_preserves_rule_events_and_sessions(tmp_path):
         await db.close()
 
 
+async def test_alert_groups_filter_before_limit(mobile_app):
+    app, client = mobile_app
+    repo = app.state.mobile_alert_repo
+    alert_kinds = ["spread", "funding", "price", "general", "big_spread"]
+    event_kinds = alert_kinds + ["announcement", "eqn_news"] * 75
+    await repo.db.executemany(
+        "INSERT INTO mobile_alert_events (created_at, kind, title, body, level) VALUES (?, ?, ?, ?, ?)",
+        [(timestamp, kind, kind, kind, "normal") for timestamp, kind in enumerate(event_kinds, 1)],
+    )
+    await repo.db.commit()
+    client.headers["X-Api-Token"] = "a" * 64
+    path = "/api/mobile/alerts"
+
+    default = await client.get(path)
+    alerts = await client.get(path, params={"group": "alerts"})
+    news = await client.get(path, params={"group": "news"})
+    all_events = await client.get(path, params={"group": "all", "limit": 200})
+    assert default.status_code == alerts.status_code == news.status_code == all_events.status_code == 200
+    assert default.json() == alerts.json()
+    assert [event["kind"] for event in alerts.json()] == alert_kinds[::-1]
+    assert [event["kind"] for event in news.json()] == ["eqn_news", "announcement"] * 50
+    assert [event["kind"] for event in all_events.json()] == event_kinds[::-1]
+
+    recent_news = await client.get(path, params={"group": "news", "since": 154})
+    assert [event["kind"] for event in recent_news.json()] == ["eqn_news"]
+    assert (await client.get(path, params={"group": "invalid"})).status_code == 422
+
+
 @pytest.mark.parametrize("prefix, identifier", [("", "ANTH-ANTHROPIC"), ("by-id/", "Card-A")])
 async def test_history_uses_exact_route_and_labels_candle_estimates(mobile_app, prefix, identifier):
     app, client = mobile_app

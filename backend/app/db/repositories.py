@@ -557,11 +557,16 @@ class MobileAlertRepository:
         )
         await self.db.commit()
 
-    async def list(self, since: float, limit: int):
-        async with self.db.execute(
-            "SELECT * FROM mobile_alert_events WHERE created_at > ? ORDER BY created_at DESC, id DESC LIMIT ?",
-            (since, limit),
-        ) as cursor:
+    async def list(self, since: float, limit: int, *, group: str = "all"):
+        news_alert_kinds = ("announcement", "eqn_news")
+        sql = "SELECT * FROM mobile_alert_events WHERE created_at > ?"
+        params = (since,)
+        if group != "all":
+            membership = "IN" if group == "news" else "NOT IN"
+            sql += f" AND kind {membership} (?, ?)"
+            params += news_alert_kinds
+        sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
+        async with self.db.execute(sql, (*params, limit)) as cursor:
             return [dict(row) for row in await cursor.fetchall()]
 
     async def prune(self, now: datetime):

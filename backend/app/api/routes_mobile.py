@@ -3,6 +3,7 @@ import sqlite3
 from collections import deque
 from contextlib import contextmanager
 from time import monotonic
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -442,5 +443,6 @@ async def alerts(
     request: Request,
     since: float = Query(0, ge=0, allow_inf_nan=False),
     limit: int = Query(100, ge=1, le=200),
+    group: Literal["alerts", "news", "all"] = "alerts",
 ):
-    return await request.app.state.mobile_alert_repo.list(since, limit)
+    return await request.app.state.mobile_alert_repo.list(since, limit, group=group)

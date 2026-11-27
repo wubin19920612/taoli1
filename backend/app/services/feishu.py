@@ -20,23 +20,47 @@ from app.services.big_spread_alert import BIG_SPREAD_RULE_ID
 logger = logging.getLogger(__name__)
 
 
-def _event_text(text: str, secrets: tuple[str, ...]) -> str:
-    # Redact signed URLs, credential headers and echoed configuration from
-    # the copy used for the mobile alert journal and push.
-    text = re.sub(r"https?://[^\s<>]+", "[链接]", text, flags=re.IGNORECASE)
+def _event_text(text: str, secrets: tuple[str, ...], *, keep_links: bool = False) -> str:
+    from urllib.parse import unquote_plus
+
+    def redact_query_parameter(match: re.Match[str]) -> str:
+        name = unquote_plus(match[2])
+        credential_name = (
+            r"(?:^|[_.-])(?:sig|sign(?:ature)?|token|(?:api|access|private)?key|secret|"
+            r"auth(?:orization)?|password|passphrase|credentials?|session(?:id)?|cookie)(?:$|[_.-])"
+        )
+        camel_separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name)
+        if re.search(credential_name, name, re.IGNORECASE) or re.search(
+            credential_name, camel_separated, re.IGNORECASE,
+        ):
+            return f"{match[1]}{match[2]}=[已隐藏]"
+        return match[0]
+
+    def redact_match(match: re.Match[str]) -> str:
+        url = match["url"]
+        if url is None:
+            return f"{match['cookie'] or match['credential']}[已隐藏]"
+        if any(secret.startswith(("http://", "https://")) and secret in url for secret in secrets):
+            return "[已隐藏]"
+        url = re.sub(r"(?i)^(https?://)[^/?#@]+@", r"\1", url)
+        before_fragment, fragment_separator, fragment = url.partition("#")
+        base, query_separator, query = before_fragment.partition("?")
+        query = re.sub(r"(^|[&;])([^&;=]+)=[^&;]*", redact_query_parameter, query)
+        return f"{base}{query_separator}{query}{fragment_separator}{fragment}"
+
+    # Keep public news links and redact credentials in the mobile copy.
+    if not keep_links:
+        text = re.sub(r"https?://[^\s<>]+", "[链接]", text, flags=re.IGNORECASE)
     text = re.sub(r"-----BEGIN [\w ]*PRIVATE KEY-----.*?(?:-----END [\w ]*PRIVATE KEY-----|$)",
                   "[已隐藏]", text, flags=re.DOTALL)
     text = re.sub(r"(?i)\b(Bearer|Basic)\s+[^\s,;]+", r"\1 [已隐藏]", text)
-    # A Cookie header can contain several credentials separated by semicolons.
     text = re.sub(
-        r"""(?i)(\b(?:set-cookie|cookie)["']?[ \t]*[:=][ \t]*)[^\r\n]+""",
-        r"\1[已隐藏]", text,
-    )
-    text = re.sub(
-        r"""(?ix)(?<![\w-])(["']?(?:[\w-]*(?:token|secret|password|passphrase|api[_-]?key|access[_-]?key|private[_-]?key)"""
+        r"""(?ix)(?P<url>https?://[^\s<>"']+)"""
+        r"""|(?P<cookie>\b(?:set-cookie|cookie)["']?[ \t]*[:=][ \t]*)[^\r\n]+"""
+        r"""|(?<![\w-])(?P<credential>["']?(?:[\w-]*(?:token|secret|password|passphrase|api[_-]?key|access[_-]?key|private[_-]?key)"""
         r"""|ok-access-[\w-]+|sign(?:ature)?|authorization|taoli1_session)["']?\s*[:=]\s*)"""
         r"""(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}]+)""",
-        r"\1[已隐藏]", text,
+        redact_match, text,
     )
     text = re.sub(r"(?i)(?<![a-z0-9])(?:0x)?[a-f0-9]{64}(?![a-z0-9])", "[已隐藏]", text)
     for secret in secrets:
@@ -75,7 +99,7 @@ class FeishuNotifier:
     async def _record(self, text: str, *, kind, symbol, level):
         try:
             secrets = (self.config.webhook_url, self.config.secret, self.config.app_secret)
-            body = _event_text(text, secrets)[:2000]
+            body = _event_text(text, secrets)
             title = next((line.strip() for line in body.splitlines() if line.strip()), "提醒")[:160]
             if kind is None and title.startswith("【方程式·"):
                 kind = "eqn_news"
@@ -91,6 +115,15 @@ class FeishuNotifier:
                     ("指数成分", "index_component"), ("溢价", "premium"),
                     ("资金费", "funding"),
                 ) if word in title), "general")
+            if kind in ("announcement", "eqn_news"):
+                body = _event_text(text, secrets, keep_links=True)
+            if kind == "announcement":
+                exchange = re.match(r"^\[([^\]]+)\]", title)
+                headline = re.search(r"^[ \t]*标题[ \t]*[:：][ \t]*(\S[^\r\n]*)", body, re.MULTILINE)
+                if exchange and headline:
+                    exchange_label = exchange[1].removesuffix("（eqn.news）")
+                    title = f"[{exchange_label}] {headline[1].rstrip()}"[:160]
+            body = body[:2000]
             if self.event_repo is not None:
                 try:
                     await asyncio.wait_for(self.event_repo.record(

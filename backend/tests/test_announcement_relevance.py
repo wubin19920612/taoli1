@@ -102,6 +102,7 @@ def test_arbitrage_relevant_announcement_retained(title):
 @pytest.mark.parametrize("title", [
     "Gate Live Stream Carnival Phase 28: Watch Live and Join the Daily Reward Spins",
     "Gate Futures Points Airdrop #168: Claim 0.018 QQQG & 100 USDT",
+    "Perp Comeback Rewards: Return to Trading and Earn Up to 86 USDT",
     "Candybomb 嘉年华（第13期）：交易瓜分 60,000 USDT！",
     "Bitget spot copy trade now supports rMSBI/USDT",
     "Binance Alpha Trading Competition: Trade LAB (LAB) and Share $200K Worth of Rewards (2026-11-12)",

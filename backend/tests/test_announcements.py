@@ -36,6 +36,19 @@ from app.services.announcements import (
 BASE_TIME = datetime(2026, 5, 30, 8, 0, tzinfo=UTC)
 
 
+@pytest.mark.parametrize(("kind", "heading"), [
+    (AnnouncementKind.OTHER, "公告"),
+    (AnnouncementKind.LISTING, "上币公告"),
+    (AnnouncementKind.DELISTING, "下币公告"),
+    (AnnouncementKind.LAUNCHPOOL, "Launchpool公告"),
+])
+def test_announcement_alert_heading_and_localized_title(kind, heading):
+    row = announcement(exchange="gate", kind=kind).model_copy(update={"title_zh": "测试公告"})
+    message = build_announcement_alert_message(row)
+    assert message.splitlines()[0] == f"[GATE] {heading}"
+    assert "标题: 测试公告" in message.splitlines()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("enabled,alert_exchanges,expected", [
     (True, [], "sent"), (False, [], "muted"), (False, ["okx"], "sent"),

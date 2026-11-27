@@ -1119,7 +1119,10 @@ def build_announcement_alert_message(announcement: ExchangeAnnouncement) -> str:
         AnnouncementKind.OTHER: "公告",
     }[announcement.kind]
     lines = [
-        f"[{announcement.exchange.upper()}{'（eqn.news）' if announcement.source == 'eqn' else ''}] {kind_label}公告",
+        (
+            f"[{announcement.exchange.upper()}{'（eqn.news）' if announcement.source == 'eqn' else ''}] "
+            f"{kind_label}{'' if announcement.kind == AnnouncementKind.OTHER else '公告'}"
+        ),
         f"{'监测时间' if announcement.exchange == 'hyperliquid' else '公告时间'}: {_display_time(announcement.published_at)} UTC+8",
     ]
     delay_minutes = int(max(0, (

@@ -367,6 +367,7 @@ class FakeFeishuWebhookClient:
     [
         ("[BINANCE] 上币公告", "announcement"),
         ("[OKX] 上币快到时间提醒", "announcement"),
+        ("【方程式·方程式新闻】消息", "eqn_news"),
         ("[Phone price alert] BTC 资金费率提醒", "price"),
         ("【价格提醒】BTCUSDT", "price"),
         ("【资金费率提醒】BTCUSDT", "funding"),
@@ -387,7 +388,7 @@ async def test_send_text_records_category_and_queues_redacted_copy(title, kind):
     notifier.event_repo = SimpleNamespace(record=AsyncMock())
     notifier.mobile_push = SimpleNamespace(queue_feishu=Mock())
     message = f"{title}\n链接: https://test.invalid/signed"
-    redacted = f"{title}\n链接: [链接]"
+    redacted = message if kind in ("announcement", "eqn_news") else f"{title}\n链接: [链接]"
 
     await notifier.send_text(message)
     await notifier.aclose()
@@ -397,6 +398,42 @@ async def test_send_text_records_category_and_queues_redacted_copy(title, kind):
         kind=kind, title=title, body=redacted, symbol=None, level="normal",
     )
     notifier.mobile_push.queue_feishu.assert_called_once_with(kind, title, redacted, urgent=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("heading", "kind", "title"), [
+    ("[GATE] 公告", "announcement", "[GATE] " + "测试公告" * 50),
+    ("[BINANCE（eqn.news）] 上币公告", "announcement", "[BINANCE] " + "测试公告" * 50),
+    ("【方程式·方程式新闻】消息", "eqn_news", "【方程式·方程式新闻】消息"),
+])
+async def test_news_journal_and_push_preserve_public_link_and_hide_credentials(heading, kind, title):
+    webhook_url = "https://test.invalid/hook?token=private-webhook"
+    client = FakeFeishuWebhookClient({"code": 0})
+    notifier = FeishuNotifier(FeishuConfig(webhook_url=webhook_url, app_secret="private-app"), client)
+    notifier.event_repo = SimpleNamespace(record=AsyncMock())
+    notifier.mobile_push = SimpleNamespace(queue_feishu=Mock())
+    article = (
+        "https://test.invalid/article?lang=zh&sign=private-sign&Signature=private-sig"
+        "&%74oken=private-token&key=private-key&secret=private-secret&auth=private-auth"
+        "&X-Amz-Signature=private-amz&apiKey=private-api&from=mobile#article"
+    )
+    expected_article = (
+        "https://test.invalid/article?lang=zh&sign=[已隐藏]&Signature=[已隐藏]"
+        "&%74oken=[已隐藏]&key=[已隐藏]&secret=[已隐藏]&auth=[已隐藏]"
+        "&X-Amz-Signature=[已隐藏]&apiKey=[已隐藏]&from=mobile#article"
+    )
+    content = f"{heading}\n标题: {'测试公告' * 50}\n链接: "
+    message = f"{content}{article}\n{webhook_url}\nprivate-app"
+    expected_body = f"{content}{expected_article}\n[已隐藏]\n[已隐藏]"
+
+    await notifier.send_text(message)
+    await notifier.aclose()
+
+    assert client.requests[0][1]["content"]["text"] == message
+    notifier.event_repo.record.assert_awaited_once_with(
+        kind=kind, title=title[:160], body=expected_body, symbol=None, level="normal",
+    )
+    notifier.mobile_push.queue_feishu.assert_called_once_with(kind, title[:160], expected_body, urgent=False)
 
 
 @pytest.mark.asyncio
