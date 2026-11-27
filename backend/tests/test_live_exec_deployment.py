@@ -51,7 +51,7 @@ def test_8443_origin_through_repository_proxy_configuration(context, origin, sta
         assert directive in ("$host", "$http_host")
         host = host.split(":")[0] if directive == "$host" else host
     # All API locations must preserve the same public authority.
-    assert re.findall(r"proxy_set_header\s+Host\s+(\S+)\s*;", inner) == ["$http_host", "$http_host"]
+    assert re.findall(r"proxy_set_header\s+Host\s+(\S+)\s*;", inner) == ["$http_host"] * 3
     assert "--no-proxy-headers" in docker_command()
     client = TestClient(app, base_url="http://backend:8000", headers={
         **session_headers("secret"), "Host": host, "Origin": origin, "X-Live-Exec-CSRF": "1",

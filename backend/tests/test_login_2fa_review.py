@@ -115,7 +115,7 @@ def test_double_proxy_chain_overwrites_client_xff(actual, forged):
     # Bind this offline header-chain model to both checked-in nginx configurations.
     host = (ROOT / "deploy/nginx-https.conf.example").read_text(encoding="utf-8")
     frontend = (ROOT / "frontend/nginx.conf").read_text(encoding="utf-8")
-    for config, count in ((host, 1), (frontend, 2)):
+    for config, count in ((host, 1), (frontend, 3)):
         values = re.findall(r"proxy_set_header\s+X-Forwarded-For\s+([^;]+);", config)
         assert values == ["$remote_addr"] * count
         assert "$proxy_add_x_forwarded_for" not in config
